@@ -9,6 +9,6 @@
     "format:check": "prettier --check 'desktop/src/**/*.{html,ts,tsx}'"
   },
   "devDependencies": {
-    "prettier": "^3.8"
+    "prettier": "^3.9"
   }
 }
