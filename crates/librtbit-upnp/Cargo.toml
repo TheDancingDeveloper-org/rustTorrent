@@ -24,7 +24,7 @@ url = { version = "2", default-features = false }
 network-interface = "2"
 httparse = "1"
 bstr = "1"
-quick-xml = { version = "0.41", features = ["serialize"] }
+quick-xml = { version = "0.42", features = ["serialize"] }
 librqbit-dualstack-sockets = "0.7"
 socket2 = "0.6"
 
