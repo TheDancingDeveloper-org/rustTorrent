@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: [self-hosted, node-b, linux, x64]
+    runs-on: [self-hosted]
     env:
       CARGO_BUILD_JOBS: 1
     steps:
