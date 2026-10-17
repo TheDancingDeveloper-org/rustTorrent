@@ -143,6 +143,9 @@ impl JsonSessionPersistenceStore {
             bail!("storages other than FilesystemStorageFactory are not supported");
         }
 
+        // Read the torrent and store it under one lock. Otherwise two updates can read
+        // before they lock and store in the reverse order, and the older state wins.
+        let mut db_content = self.db_content.write().await;
         let policy = PolicyFlags::read(torrent.shared());
         let st = SerializedTorrent {
             trackers: torrent
@@ -201,7 +204,9 @@ impl JsonSessionPersistenceStore {
             }
         }
 
-        self.db_content.write().await.torrents.insert(id, st);
+        db_content.torrents.insert(id, st);
+        // flush() takes the same lock, so release it first.
+        drop(db_content);
         self.flush().await?;
 
         Ok(())
