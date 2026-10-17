@@ -5,11 +5,11 @@ rusttorrent.dev website. The historical Forgejo/Woodpecker path is retired.
 
 ## Versioning
 
-The current beta release is `0.1.0-beta.3`.
+The current pre-release is `0.1.0-rc.1`.
 
 - Crate version: `crates/rtbit/Cargo.toml`
-- Release tag: `v0.1.0-beta.3`
-- Docker tag: `ghcr.io/thedancingdeveloper-org/rusttorrent:v0.1.0-beta.3`
+- Release tag: `v0.1.0-rc.1`
+- Docker tag: `ghcr.io/thedancingdeveloper-org/rusttorrent:v0.1.0-rc.1`
 
 ## Branching model
 
@@ -21,11 +21,11 @@ Promotion flow: **`dev` → `main` → cut release (`v*` tag) → prod.**
 - **`main`** is the promoted, pre-release branch. Promote `dev → main` by PR.
   Pushing `main` runs CI and publishes `…:staging` (+ `sha-<commit>`) and
   deploys the website. `main` is protected and its version stays at the current
-  beta until a release is cut.
+  pre-release until a release is cut.
 - **`v*` tag** (cut from `main`) is the release lever. A pre-release tag
   (`-alpha`/`-beta`/`-rc`) publishes the image as `…:<tag>` and `…:beta` and a
   GitHub pre-release. A stable tag publishes `…:<tag>` and `…:latest`. Both
-  publish the binaries to the download host and the GitHub release (+ `sha-<commit>`).
+  publish the binaries (+ `.deb`) to the download host and the GitHub release (+ `sha-<commit>`).
   The soak-then-promote flow is in [RELEASING.md](../RELEASING.md).
 
 Nothing auto-deploys the running prod service from these workflows; publication

@@ -26,7 +26,7 @@ fail() {
 run_publish() {
   local version="$1"
   shift
-  sed "s/^version=\"0.1.0\"\$/version=\"$version\"/" "$publish" >"$work/publish.sh"
+  sed "s/^version=\"[^\"]*\"\$/version=\"$version\"/" "$publish" >"$work/publish.sh"
   grep -q "^version=\"$version\"\$" "$work/publish.sh" || fail "could not set version to $version"
   : >"$CARGO_LOG"
   bash "$work/publish.sh" "$@"
