@@ -104,13 +104,24 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   // Overflow menu for the utility icons below sm
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
+  const closeMore = useCallback((returnFocus: boolean) => {
+    setMoreOpen(false);
+    if (returnFocus) moreButtonRef.current?.focus();
+  }, []);
   useEffect(() => {
     if (!moreOpen) return;
+    // Move focus into the menu when it opens
+    moreMenuRef.current
+      ?.querySelector<HTMLElement>('[role="menuitem"]')
+      ?.focus();
     const onPointerDown = (e: PointerEvent) => {
-      if (!moreRef.current?.contains(e.target as Node)) setMoreOpen(false);
+      if (!moreRef.current?.contains(e.target as Node)) closeMore(false);
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMoreOpen(false);
+      if (e.key === "Escape") closeMore(true);
+      else if (e.key === "Tab") closeMore(false);
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -118,7 +129,35 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [moreOpen]);
+  }, [moreOpen, closeMore]);
+
+  // Arrow, Home and End keys move between menu items
+  const onMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const items = Array.from(
+      e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    );
+    if (items.length === 0) return;
+    const current = items.indexOf(document.activeElement as HTMLElement);
+    let next: number;
+    switch (e.key) {
+      case "ArrowDown":
+        next = (current + 1) % items.length;
+        break;
+      case "ArrowUp":
+        next = (current - 1 + items.length) % items.length;
+        break;
+      case "Home":
+        next = 0;
+        break;
+      case "End":
+        next = items.length - 1;
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    items[next].focus();
+  };
 
   const handleLogout = async () => {
     if (refreshToken) {
@@ -431,10 +470,11 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         </div>
         <div ref={moreRef} className="relative sm:hidden">
           <button
+            ref={moreButtonRef}
             onClick={() => setMoreOpen((open) => !open)}
             className={toolbarIcon}
-            title="More actions"
-            aria-label="More actions"
+            title="More options"
+            aria-label="More options"
             aria-haspopup="menu"
             aria-expanded={moreOpen}
           >
@@ -442,7 +482,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </button>
           {moreOpen && (
             <div
+              ref={moreMenuRef}
               role="menu"
+              aria-label="Toolbar options"
+              onKeyDown={onMenuKeyDown}
               className="absolute right-0 top-full mt-1 z-20 flex flex-col min-w-40 p-1 bg-surface-raised border border-divider rounded-lg shadow-lg"
             >
               {showBuiltInConfigButton && (
