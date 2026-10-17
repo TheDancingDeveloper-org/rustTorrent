@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   retention:
-    uses: TheDancingDeveloper-org/github-policy/.github/workflows/ghcr-retention-reusable.yml@main
+    uses: TheDancingDeveloper-org/github-policy/.github/workflows/ghcr-retention-reusable.yml@48b48161921f236d0086231f8f28ccc8fa8c5cef # main
     with:
       packages: "rusttorrent"
       apply: ${{ inputs.apply || false }}

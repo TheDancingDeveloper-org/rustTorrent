@@ -13,4 +13,4 @@ on:
 
 jobs:
   runner-policy:
-    uses: TheDancingDeveloper-org/github-policy/.github/workflows/runner-policy-reusable.yml@main
+    uses: TheDancingDeveloper-org/github-policy/.github/workflows/runner-policy-reusable.yml@48b48161921f236d0086231f8f28ccc8fa8c5cef # main
