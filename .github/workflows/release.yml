@@ -74,6 +74,14 @@ jobs:
           cp target/x86_64-pc-windows-gnu/release-github/rtbit.exe "release-artifacts/rtbit-$tag-windows-x86_64.exe"
           cp target/release-github/rtbit_amd64.deb "release-artifacts/rtbit-$tag-amd64.deb"
           cp target/release-github/rtbit-x86_64.rpm "release-artifacts/rtbit-$tag-x86_64.rpm"
+          # Vendored crates for the offline Flatpak build. cargo vendor prints
+          # the source-replacement config, which goes beside vendor/ so that
+          # extracting at the repository root gives a working tree.
+          vendor_stage=$(mktemp -d)
+          mkdir -p "$vendor_stage/.cargo"
+          cargo vendor --locked vendor > "$vendor_stage/.cargo/config.toml"
+          mv vendor "$vendor_stage/vendor"
+          tar --owner=0 --group=0 --numeric-owner -C "$vendor_stage" -cJf "release-artifacts/rtbit-$tag-vendor.tar.xz" .
           (cd release-artifacts && sha256sum rtbit-*) > "release-artifacts/SHA256SUMS-$tag.txt"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -138,6 +146,16 @@ jobs:
           tag="${{ inputs.tag || github.ref_name }}"
           test -n "$tag"
           packaging/scripts/verify-release.sh "$tag" release-artifacts
+      - name: Render Flatpak manifest and metainfo
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          packaging/scripts/render-flatpak.sh "$tag" release-artifacts rendered/flatpak
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: channel-flatpak
+          path: rendered/flatpak/
+          if-no-files-found: error
 
   publish:
     needs: [build, sign, channels]
