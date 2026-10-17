@@ -172,7 +172,7 @@ jobs:
         shell: bash
         run: |
           tag="${{ steps.artifacts.outputs.tag }}"
-          notes="RELEASE_NOTES_${tag}.md"
+          notes="docs/releases/${tag}.md"
           # A checked-in notes file is used verbatim; a tag without one (such
           # as a promoted stable release) gets GitHub-generated notes.
           if test -f "$notes"; then

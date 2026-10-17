@@ -1,9 +1,8 @@
 [package]
 name = "rtbit-desktop"
 edition = "2024"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 description = "rtbit torrent client"
-authors = ["Igor Katson igor.katson@gmail.com"]
 license = ""
 repository = ""
 

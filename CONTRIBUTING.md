@@ -10,7 +10,7 @@ that your contribution is licensed under the same terms.
   and `main` must be up to date with its required checks.
 - A `v*` tag cut from `main` is a release. It publishes the binaries, `.deb`
   packages, checksums and the production container image. See
-  [documentation/ReleaseProcess.md](documentation/ReleaseProcess.md).
+  [docs/ReleaseProcess.md](docs/ReleaseProcess.md).
 
 ## Building and testing
 
@@ -38,7 +38,7 @@ Playwright browser suite, and the deterministic mock tracker used by the tests.
 
 - User-facing documentation lives in `README.md`. Keep it accurate for the
   current release; release-specific detail belongs in `CHANGELOG.md` and the
-  `RELEASE_NOTES_<tag>.md` files.
+  `docs/releases/<tag>.md` files.
 - Add a `CHANGELOG.md` entry under **Unreleased** for any user-visible change.
 - Architecture and design notes live under `docs/`.
 

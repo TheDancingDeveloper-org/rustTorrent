@@ -14,10 +14,8 @@ Each document records:
 
 > **Architecture note.** rustTorrent's binary is `crates/rtbit` (≈1.2k lines of
 > web-server / qBittorrent-API-v2 compat wiring). The engine, HTTP API, WebUI,
-> DHT, and protocol code live in the workspace-sibling crates under
-> `../libs/librtbit*`, wired in for dev builds via `[patch.forgejo]` in
-> `Cargo.toml`. CI strips `[patch]` and pulls published versions from the Forgejo
-> Cargo registry. **`librtbit` is also consumed by StackArr**, so any lib change
+> DHT, and protocol code live in the workspace crates under `crates/librtbit*`,
+> built from this repository. **`librtbit` is also consumed by StackArr**, so any lib change
 > must follow the publish + version-bump workflow in the root `AGENTS.md`
 > ("Lib Change Workflow") and be checked against the App→Lib dependency matrix.
 

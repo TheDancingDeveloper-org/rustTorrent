@@ -18,7 +18,7 @@ cargo install tauri-cli
 
 ## How to build GUI
 
-* From the rustTorrent repo root, go to `../libs/librtbit/webui`
+* From the rustTorrent repo root, go to `crates/librtbit/webui`
   
   ```
   npm install

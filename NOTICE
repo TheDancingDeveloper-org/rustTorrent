@@ -1,4 +1,5 @@
 rustTorrent
+Copyright rustTorrent contributors
 Licensed under the Apache License, Version 2.0. See LICENSE.
 
 rustTorrent is a hard fork of rqbit.
@@ -8,7 +9,7 @@ rustTorrent is a hard fork of rqbit.
   Licensed under the Apache License, Version 2.0
 
 The original copyright and license notice above is retained as required by the
-Apache License, Version 2.0. Modifications and additions made in this
-repository are the work of their respective authors and are recorded in the git
-history. The imported librtbit-* crates are described in
+Apache License, Version 2.0. The modifications and additions in this repository
+are copyright the rustTorrent contributors; the individual changes are recorded
+in the git history. The imported librtbit-* crates are described in
 docs/FORK_PROVENANCE.md.

@@ -255,7 +255,7 @@ const numericCell = `w-20 ${cellBase} text-right text-secondary whitespace-nowra
 
 ## Indexarr Integration
 
-Optional torrent index browsing powered by an external Indexarr instance. Controlled by `RTBIT_INDEXARR_ENABLED`, `RTBIT_INDEXARR_URL`, `RTBIT_INDEXARR_API_KEY` env vars. See `documentation/IndexarrRustTorrentIntegration.md` in the repo root for the full integration design.
+Optional torrent index browsing powered by an external Indexarr instance. Controlled by `RTBIT_INDEXARR_ENABLED`, `RTBIT_INDEXARR_URL`, `RTBIT_INDEXARR_API_KEY` env vars. See `docs/IndexarrRustTorrentIntegration.md` in the repo root for the full integration design.
 
 ### Page Navigation
 - `uiStore.currentPage`: `"torrents" | "indexarr"` — controls which page is shown
