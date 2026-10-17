@@ -1,0 +1,136 @@
+name: Promote pre-release to stable
+
+# Promote a soaked pre-release (a vX.Y.Z-{alpha,beta,rc}.N tag published by
+# container.yml and release.yml) to the stable channel. The container image is
+# copied by DIGEST: the exact bytes that soaked become :vX.Y.Z and :latest,
+# never a fresh rebuild. The stable tag is then created on the same commit and
+# release.yml builds the standalone binaries from it.
+#
+# Manual only. There is no automatic promotion.
+
+on:
+  workflow_dispatch:
+    inputs:
+      beta_tag:
+        description: 'Pre-release tag to promote (e.g. v0.1.0-rc.1)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rusttorrent-release-promote
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: [self-hosted]
+    outputs:
+      beta_tag: ${{ steps.v.outputs.beta_tag }}
+      stable_tag: ${{ steps.v.outputs.stable_tag }}
+      sha: ${{ steps.v.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Validate the pre-release tag and resolve the stable version
+        id: v
+        env:
+          # Passed through the environment, never interpolated into the script,
+          # so the dispatch input cannot inject shell.
+          BETA_INPUT: ${{ inputs.beta_tag }}
+        run: |
+          beta="$BETA_INPUT"
+          case "$beta" in
+            v[0-9]*-alpha*|v[0-9]*-beta*|v[0-9]*-rc*) ;;
+            *) echo "not a pre-release tag: $beta" >&2; exit 1 ;;
+          esac
+          git fetch --no-tags origin main
+          git fetch origin "refs/tags/$beta:refs/tags/$beta"
+          sha=$(git rev-parse "refs/tags/$beta^{commit}")
+          git merge-base --is-ancestor "$sha" origin/main \
+            || { echo "$beta is not reachable from main" >&2; exit 1; }
+          # Strip the first -suffix: v0.1.0-rc.1 -> v0.1.0
+          stable="${beta%%-*}"
+          case "$stable" in v[0-9]*) ;; *) echo "bad stable version: $stable" >&2; exit 1 ;; esac
+          {
+            echo "beta_tag=$beta"
+            echo "stable_tag=$stable"
+            echo "sha=$sha"
+          } >> "$GITHUB_OUTPUT"
+          printf 'promoting %s -> %s (%s)\n' "$beta" "$stable" "$sha"
+
+  promote-image:
+    needs: resolve
+    permissions:
+      contents: read
+      packages: write
+    runs-on: [self-hosted, docker, publish]
+    env:
+      BETA: ${{ needs.resolve.outputs.beta_tag }}
+      STABLE: ${{ needs.resolve.outputs.stable_tag }}
+      SKOPEO_IMAGE: quay.io/skopeo/stable:v1.19@sha256:77e6c8901f6976bdfa87b8b14c40b96de754794c492d8ed295f77fba1454a4ab
+    steps:
+      - name: Digest-copy the soaked pre-release image to :vX.Y.Z and :latest
+        env:
+          GH_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          docker run --rm --entrypoint sh \
+            -e GH_TOKEN -e GITHUB_ACTOR -e BETA -e STABLE \
+            "$SKOPEO_IMAGE" -ec '
+              image=ghcr.io/thedancingdeveloper-org/rusttorrent
+              creds="$GITHUB_ACTOR:$GH_TOKEN"
+              # The exact soaked digest is the single source for every copy.
+              digest=$(skopeo inspect --creds "$creds" --format "{{.Digest}}" "docker://$image:$BETA")
+              test -n "$digest"
+              src="docker://$image@$digest"
+              for ref in "$image:$STABLE" "$image:latest"; do
+                skopeo copy --multi-arch all --src-creds "$creds" --dest-creds "$creds" \
+                  "$src" "docker://$ref"
+                got=$(skopeo inspect --creds "$creds" --format "{{.Digest}}" "docker://$ref")
+                test "$got" = "$digest"
+                printf "copied %s (%s)\n" "$ref" "$got"
+              done
+              printf "promoted soaked digest %s to %s + latest\n" "$digest" "$STABLE"
+            '
+
+  tag-stable:
+    # Runs after the image is promoted so a stable tag never points at a commit
+    # whose image was not published. A tag pushed with the workflow token does
+    # not trigger container.yml or release.yml, so the image stays the copied
+    # soaked artifact; release.yml is called explicitly below.
+    needs: [resolve, promote-image]
+    permissions:
+      contents: write
+    runs-on: [self-hosted]
+    env:
+      STABLE: ${{ needs.resolve.outputs.stable_tag }}
+      SHA: ${{ needs.resolve.outputs.sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Create the stable tag on the soaked commit (idempotent)
+        run: |
+          # ls-remote prints the peeled commit last for an annotated tag.
+          existing=$(git ls-remote --tags "https://github.com/$GITHUB_REPOSITORY" "refs/tags/$STABLE" | tail -n1 | cut -f1)
+          if [ -n "$existing" ]; then
+            test "$existing" = "$SHA" || { echo "$STABLE already exists at $existing, not $SHA" >&2; exit 1; }
+            echo "$STABLE already points at $SHA"
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$STABLE" -f sha="$SHA" >/dev/null
+            echo "created $STABLE at $SHA"
+          fi
+
+  release:
+    # Builds the standalone binaries from the soaked commit, signs them, and
+    # publishes the stable GitHub release (generated notes unless a
+    # RELEASE_NOTES_<stable>.md file is checked in at that commit).
+    needs: [resolve, tag-stable]
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.resolve.outputs.stable_tag }}
+    secrets: inherit
