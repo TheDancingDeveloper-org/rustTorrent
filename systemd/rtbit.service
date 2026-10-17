@@ -7,7 +7,7 @@ Requires=rtbit.socket
 [Service]
 Type=simple
 EnvironmentFile=-%E/rtbit/rtbit.conf
-ExecStart=/usr/local/bin/rtbit server start %h/Downloads
+ExecStart=rtbit server start %h/Downloads
 Restart=on-failure
 RestartSec=5
 # Gives the shutdown path time to flush session persistence before SIGKILL.

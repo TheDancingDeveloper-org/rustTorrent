@@ -11,7 +11,9 @@ socket-activated on `127.0.0.1:3030`. They do not install a system-wide service.
 
 ## 1. Install the binary
 
-The unit runs the binary at `/usr/local/bin/rtbit`. Build it and copy it there:
+The unit runs `rtbit` by name, and systemd finds it in `/usr/local/bin` or `/usr/bin`.
+The deb and rpm packages install it to `/usr/bin` and ship this unit. For a manual
+install, build it and copy it to `/usr/local/bin`:
 
 ```sh
 cargo build --release -p rtbit
