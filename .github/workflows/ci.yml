@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   rust:
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'self-hosted' }}
+    runs-on: [self-hosted]
     env:
       CARGO_BUILD_JOBS: 1
     steps:
@@ -39,7 +39,7 @@ jobs:
       - run: cargo build --profile release-github -p rtbit --no-default-features --features default-tls
 
   webui:
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'self-hosted' }}
+    runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -57,7 +57,7 @@ jobs:
         run: npm run build
 
   gui-e2e:
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'self-hosted' }}
+    runs-on: [self-hosted]
     needs: webui
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -74,7 +74,7 @@ jobs:
         run: npm run test:e2e
 
   website:
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'self-hosted' }}
+    runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: ci/tasks/website-check
