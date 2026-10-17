@@ -27,6 +27,7 @@ export interface AuthStore {
   ) => void;
   clearTokens: () => void;
   expireSession: () => void;
+  clearSessionExpired: () => void;
   getAccessToken: () => string | null;
 }
 
@@ -76,6 +77,9 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     get().clearTokens();
     if (hadSession) set({ sessionExpired: true });
   },
+
+  // Called once the login page has shown the expiry notice
+  clearSessionExpired: () => set({ sessionExpired: false }),
 
   getAccessToken: () => {
     const { accessToken, tokenExpiry } = get();
