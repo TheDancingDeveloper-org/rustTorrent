@@ -6,6 +6,7 @@ mod scheduler;
 mod types;
 
 pub use on_complete::{CompletedTorrent, OnCompleteHook};
+pub(crate) use scheduler::PolicyFlags;
 pub use scheduler::ShareLimits;
 pub use types::{
     AddTorrent, AddTorrentOptions, AddTorrentResponse, ListOnlyResponse, SessionOptions,
@@ -560,9 +561,21 @@ impl Session {
                                 Some(st) => {
                                     let (id, st) = st?;
                                     let span = add_torrent_span(st.info_hash());
+                                    let policy = st.policy_flags();
                                     let (add_torrent, mut opts) = st.into_add_torrent()?;
                                     opts.preferred_id = Some(id);
                                     let fut = session.add_torrent(add_torrent, Some(opts));
+                                    // Restored torrents come back paused. Reapply the
+                                    // policy flags so queued and held torrents rejoin the
+                                    // policy pass. The pass starts after this loop, so it
+                                    // cannot see a restored torrent before its flags.
+                                    let fut = async move {
+                                        let resp = fut.await?;
+                                        if let AddTorrentResponse::Added(_, handle) = &resp {
+                                            policy.store(handle.shared());
+                                        }
+                                        Ok::<_, anyhow::Error>(resp)
+                                    };
                                     let fut = fut.instrument(span);
                                     futs.push(fut);
                                 },
@@ -1003,6 +1016,7 @@ impl Session {
                 share_limits: RwLock::new(ShareLimits::default()),
                 queued: std::sync::atomic::AtomicBool::new(false),
                 held_for_disk: std::sync::atomic::AtomicBool::new(false),
+                share_paused: std::sync::atomic::AtomicBool::new(false),
             });
 
             let initializing = Arc::new(TorrentStateInitializing::new(
@@ -1160,28 +1174,14 @@ impl Session {
     pub async fn pause(&self, handle: &ManagedTorrentHandle) -> anyhow::Result<()> {
         // A user pause takes the torrent out of the queue and off the disk guard's
         // hands; it stays paused until the user resumes it.
-        handle
-            .shared()
-            .queued
-            .store(false, std::sync::atomic::Ordering::Relaxed);
-        handle
-            .shared()
-            .held_for_disk
-            .store(false, std::sync::atomic::Ordering::Relaxed);
+        PolicyFlags::default().store(handle.shared());
         handle.pause()?;
         self.try_update_persistence_metadata(handle).await;
         Ok(())
     }
 
     pub async fn unpause(self: &Arc<Self>, handle: &ManagedTorrentHandle) -> anyhow::Result<()> {
-        handle
-            .shared()
-            .queued
-            .store(false, std::sync::atomic::Ordering::Relaxed);
-        handle
-            .shared()
-            .held_for_disk
-            .store(false, std::sync::atomic::Ordering::Relaxed);
+        PolicyFlags::default().store(handle.shared());
         let peer_rx = self.make_peer_rx_managed_torrent(handle, true);
         handle.start(peer_rx, false)?;
         self.try_update_persistence_metadata(handle).await;

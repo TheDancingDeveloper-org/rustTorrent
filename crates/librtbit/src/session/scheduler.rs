@@ -14,9 +14,68 @@ use std::{
 use tracing::{debug, debug_span, info, warn};
 
 use super::{ManagedTorrentHandle, Session, TorrentId};
+use crate::torrent_state::ManagedTorrentShared;
 
 /// How often the policy pass runs.
 const POLICY_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Why the policy pass paused a torrent. Stored as flags on the torrent so the
+/// pass knows what it may resume, and persisted so the reason survives a restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PolicyPause {
+    /// Moved back into a queue to make room for another torrent.
+    Queued,
+    /// Held by the low-disk guard until free space recovers.
+    DiskHold,
+    /// Reached a share limit.
+    ShareLimit,
+}
+
+/// The policy state kept on a torrent, as stored in the shared state and in
+/// session persistence.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PolicyFlags {
+    pub queued: bool,
+    pub held_for_disk: bool,
+    pub share_paused: bool,
+}
+
+impl PolicyFlags {
+    pub(crate) fn read(shared: &ManagedTorrentShared) -> Self {
+        Self {
+            queued: shared.queued.load(Ordering::Relaxed),
+            held_for_disk: shared.held_for_disk.load(Ordering::Relaxed),
+            share_paused: shared.share_paused.load(Ordering::Relaxed),
+        }
+    }
+
+    pub(crate) fn store(self, shared: &ManagedTorrentShared) {
+        shared.queued.store(self.queued, Ordering::Relaxed);
+        shared
+            .held_for_disk
+            .store(self.held_for_disk, Ordering::Relaxed);
+        shared
+            .share_paused
+            .store(self.share_paused, Ordering::Relaxed);
+    }
+
+    pub(crate) fn for_pause(reason: PolicyPause) -> Self {
+        match reason {
+            PolicyPause::Queued => Self {
+                queued: true,
+                ..Default::default()
+            },
+            PolicyPause::DiskHold => Self {
+                held_for_disk: true,
+                ..Default::default()
+            },
+            PolicyPause::ShareLimit => Self {
+                share_paused: true,
+                ..Default::default()
+            },
+        }
+    }
+}
 
 /// Per-torrent limits after which a seeding torrent is paused. Either limit
 /// alone is enough; `None` disables that limit.
@@ -214,13 +273,12 @@ impl Session {
 
     /// Pause a torrent on the session's behalf and record why, so the policy
     /// pass knows whether it may resume it or should leave it alone.
-    async fn policy_pause(&self, handle: &ManagedTorrentHandle, queued: bool, held: bool) {
+    async fn policy_pause(&self, handle: &ManagedTorrentHandle, reason: PolicyPause) {
         if let Err(e) = handle.pause() {
             debug!(id = handle.id(), "policy pause skipped: {e:#}");
             return;
         }
-        handle.shared().queued.store(queued, Ordering::Relaxed);
-        handle.shared().held_for_disk.store(held, Ordering::Relaxed);
+        PolicyFlags::for_pause(reason).store(handle.shared());
         self.try_update_persistence_metadata(handle).await;
     }
 
@@ -274,7 +332,7 @@ impl Session {
                     seeding_secs,
                 ) {
                     info!(id, ?reason, "share limit reached, pausing torrent");
-                    self.policy_pause(handle, false, false).await;
+                    self.policy_pause(handle, PolicyPause::ShareLimit).await;
                     continue;
                 }
             }
@@ -313,17 +371,13 @@ impl Session {
                             id = handle.id(),
                             free, min_free, "low disk space, holding download"
                         );
-                        self.policy_pause(handle, false, true).await;
+                        self.policy_pause(handle, PolicyPause::DiskHold).await;
                     }
                     DiskAction::Release => {
                         info!(
                             id = handle.id(),
                             free, "disk space recovered, resuming download"
                         );
-                        handle
-                            .shared()
-                            .held_for_disk
-                            .store(false, Ordering::Relaxed);
                         if let Err(e) = self.unpause(handle).await {
                             warn!(id = handle.id(), "error resuming held download: {e:#}");
                         }
@@ -339,7 +393,7 @@ impl Session {
             for id in plan.demote {
                 if let Some(handle) = by_id.get(&id) {
                     debug!(id, "queue full, moving torrent back to the queue");
-                    self.policy_pause(handle, true, false).await;
+                    self.policy_pause(handle, PolicyPause::Queued).await;
                 }
             }
             for id in plan.promote {

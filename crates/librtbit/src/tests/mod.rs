@@ -3,5 +3,6 @@ mod e2e;
 mod e2e_another_local_client;
 mod e2e_stream;
 mod mock_tracker;
+mod policy_pass;
 mod read_only_storage;
 pub mod test_util;
