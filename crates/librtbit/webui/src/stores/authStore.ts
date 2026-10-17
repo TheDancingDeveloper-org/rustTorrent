@@ -16,6 +16,8 @@ export interface AuthStore {
   accessToken: string | null;
   refreshToken: string | null;
   tokenExpiry: number | null;
+  // True after the server rejected a session that was held, until a new login
+  sessionExpired: boolean;
 
   setState: (state: AuthState) => void;
   setTokens: (
@@ -24,6 +26,7 @@ export interface AuthStore {
     expiresIn: number,
   ) => void;
   clearTokens: () => void;
+  expireSession: () => void;
   getAccessToken: () => string | null;
 }
 
@@ -35,6 +38,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     const v = localStorage.getItem(TOKEN_EXPIRY_KEY);
     return v ? parseInt(v, 10) : null;
   })(),
+  sessionExpired: false,
 
   setState: (state) => set({ state }),
 
@@ -43,7 +47,13 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     localStorage.setItem(TOKEN_KEY, accessToken);
     localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
     localStorage.setItem(TOKEN_EXPIRY_KEY, tokenExpiry.toString());
-    set({ accessToken, refreshToken, tokenExpiry, state: "authenticated" });
+    set({
+      accessToken,
+      refreshToken,
+      tokenExpiry,
+      state: "authenticated",
+      sessionExpired: false,
+    });
   },
 
   clearTokens: () => {
@@ -56,6 +66,15 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       tokenExpiry: null,
       state: "login_required",
     });
+  },
+
+  // Drops the tokens because the server no longer accepts them. Unlike a
+  // logout, this records that the user was signed in and got kicked out.
+  expireSession: () => {
+    const { accessToken, refreshToken } = get();
+    const hadSession = accessToken !== null || refreshToken !== null;
+    get().clearTokens();
+    if (hadSession) set({ sessionExpired: true });
   },
 
   getAccessToken: () => {

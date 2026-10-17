@@ -26,6 +26,11 @@ import { useIsLargeScreen } from "./hooks/useIsLargeScreen";
 import { useListOnlyUpload } from "./hooks/useListOnlyUpload";
 import { useIndexarrStore } from "./stores/indexarrStore";
 import { CurrentPage, useUIStore } from "./stores/uiStore";
+import { useToastStore } from "./stores/toastStore";
+import { ToastViewport } from "./components/Toast";
+import { Button } from "./components/buttons/Button";
+import { extractTorrentLink } from "./helper/magnetLink";
+import { retryDelayMs } from "./helper/retryBackoff";
 
 export interface ErrorWithLabel {
   text: string;
@@ -38,12 +43,31 @@ export interface ContextType {
 }
 
 type PendingUpload =
-  { type: "single"; file: File } | { type: "multi"; files: File[] } | null;
+  | { type: "single"; file: File }
+  | { type: "multi"; files: File[] }
+  | { type: "link"; link: string }
+  | null;
 
 const isEngineUnreachable = (e: ApiErrorDetails): boolean =>
   e.status === undefined
     ? e.text === "network error"
     : e.status === 404 || e.status >= 500;
+
+// Shown over the last known torrent list while the engine cannot be reached
+const ConnectionLostBanner = (props: { onRetry: () => void }) => (
+  <div
+    role="status"
+    aria-live="polite"
+    className="absolute top-2 inset-x-2 z-40 flex items-center gap-3 rounded-md border border-error bg-surface shadow-lg px-3 py-2 text-sm"
+  >
+    <p className="flex-1 min-w-0 text-error">
+      Connection to rustTorrent lost. Showing the last known data; retrying…
+    </p>
+    <Button variant="primary" onClick={props.onRetry}>
+      Retry
+    </Button>
+  </div>
+);
 
 export const RtbitWebUI = (props: {
   title: string;
@@ -52,6 +76,7 @@ export const RtbitWebUI = (props: {
 }) => {
   const [logsOpened, setLogsOpened] = useState<boolean>(false);
   const setOtherError = useErrorStore((state) => state.setOtherError);
+  const pushToast = useToastStore((state) => state.pushToast);
 
   const API = useContext(APIContext);
 
@@ -71,11 +96,15 @@ export const RtbitWebUI = (props: {
   const setRefreshTorrents = useTorrentStore(
     (state) => state.setRefreshTorrents,
   );
+  // A boolean selector, so the shell does not re-render on every list update
+  const hasTorrentData = useTorrentStore((state) => state.torrents !== null);
 
   // The engine is unreachable when the request got no response, or the server
   // answered 404 or 5xx. Other failures keep the normal error alert.
   const [engineUnreachable, setEngineUnreachable] =
     useState<ApiErrorDetails | null>(null);
+  // Consecutive refreshes that could not reach the engine; sets the retry backoff
+  const unreachableCountRef = useRef(0);
 
   const refreshTorrents = useCallback(async (): Promise<number> => {
     setTorrentsLoading(true);
@@ -84,6 +113,10 @@ export const RtbitWebUI = (props: {
       setTorrents(response.torrents);
       setOtherError(null);
       setEngineUnreachable(null);
+      if (unreachableCountRef.current > 0) {
+        pushToast("success", "Connection to rustTorrent restored");
+        unreachableCountRef.current = 0;
+      }
 
       // Determine polling interval based on torrent states
       // Fast poll (1s) if any torrent is live/initializing, slow poll (5s) otherwise
@@ -93,17 +126,20 @@ export const RtbitWebUI = (props: {
       return hasActiveTorrents ? 1000 : 5000;
     } catch (e) {
       const details = e as ApiErrorDetails;
+      let delay = 5000;
       if (isEngineUnreachable(details)) {
+        unreachableCountRef.current++;
+        delay = retryDelayMs(unreachableCountRef.current);
         setEngineUnreachable(details);
       } else {
         setOtherError({ text: "Error refreshing torrents", details });
       }
       console.error(e);
-      return 5000;
+      return delay;
     } finally {
       setTorrentsLoading(false);
     }
-  }, [API, setTorrents, setTorrentsLoading, setOtherError]);
+  }, [API, setTorrents, setTorrentsLoading, setOtherError, pushToast]);
 
   const setStats = useStatsStore((state) => state.setStats);
 
@@ -139,11 +175,63 @@ export const RtbitWebUI = (props: {
 
   const [pendingUpload, setPendingUpload] = useState<PendingUpload>(null);
 
-  // When a single file is pending, list its files via the list_only API
-  const singleUploadFile =
-    pendingUpload?.type === "single" ? pendingUpload.file : null;
+  // When a single file or link is pending, list its files via the list_only API
+  const singleUploadSource =
+    pendingUpload?.type === "single"
+      ? pendingUpload.file
+      : pendingUpload?.type === "link"
+        ? pendingUpload.link
+        : null;
   const { listTorrentResponse, listTorrentLoading, listTorrentError } =
-    useListOnlyUpload(singleUploadFile);
+    useListOnlyUpload(singleUploadSource);
+
+  // Pasting a magnet link or a .torrent URL anywhere starts the add flow. Text
+  // typed into a field is left alone, so pasting still works there.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      if (
+        e.target instanceof Element &&
+        e.target.closest("input, textarea, [contenteditable='true']")
+      ) {
+        return;
+      }
+      const link = extractTorrentLink(e.clipboardData?.getData("text") ?? "");
+      if (!link) return;
+      e.preventDefault();
+      setPendingUpload({ type: "link", link });
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
+
+  // A magnet link opened from outside the page arrives as ?magnet=…, and the
+  // page registers itself as the magnet handler so the browser can send them.
+  useEffect(() => {
+    const magnet = new URLSearchParams(window.location.search).get("magnet");
+    if (magnet !== null) {
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + window.location.hash,
+      );
+      const link = extractTorrentLink(magnet);
+      if (link) {
+        setPendingUpload({ type: "link", link });
+      } else {
+        pushToast("error", "That magnet link is not valid");
+      }
+    }
+
+    try {
+      navigator.registerProtocolHandler?.(
+        "magnet",
+        `${window.location.origin}${window.location.pathname}?magnet=%s`,
+      );
+    } catch {
+      // Refused on insecure origins or when the browser declines; paste and
+      // drop still work without it
+    }
+  }, [pushToast]);
 
   const clearSingleUpload = () => setPendingUpload(null);
 
@@ -170,24 +258,48 @@ export const RtbitWebUI = (props: {
     e.stopPropagation();
   }, []);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounterRef.current = 0;
-    setIsDragging(false);
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounterRef.current = 0;
+      setIsDragging(false);
 
-    const files = Array.from(e.dataTransfer.files).filter((f) =>
-      f.name.endsWith(".torrent"),
-    );
+      const droppedFiles = Array.from(e.dataTransfer.files);
+      const files = droppedFiles.filter((f) => f.name.endsWith(".torrent"));
 
-    if (files.length === 0) return;
+      if (files.length === 0) {
+        // Dragged text or a link: a magnet or a .torrent URL starts the add flow
+        const link = extractTorrentLink(
+          e.dataTransfer.getData("text/uri-list") ||
+            e.dataTransfer.getData("text/plain"),
+        );
+        if (link) {
+          setPendingUpload({ type: "link", link });
+        } else if (droppedFiles.length > 0) {
+          pushToast("error", "Only .torrent files can be added");
+        } else {
+          pushToast("info", "Drop a .torrent file or a magnet link to add it");
+        }
+        return;
+      }
 
-    if (files.length === 1) {
-      setPendingUpload({ type: "single", file: files[0] });
-    } else {
-      setPendingUpload({ type: "multi", files });
-    }
-  }, []);
+      const skipped = droppedFiles.length - files.length;
+      if (skipped > 0) {
+        pushToast(
+          "info",
+          `Skipped ${skipped} ${skipped === 1 ? "file" : "files"} that ${skipped === 1 ? "is" : "are"} not .torrent`,
+        );
+      }
+
+      if (files.length === 1) {
+        setPendingUpload({ type: "single", file: files[0] });
+      } else {
+        setPendingUpload({ type: "multi", files });
+      }
+    },
+    [pushToast],
+  );
 
   // Handler for FileInput multi-file selection (via Toolbar)
   const handleMultiFileSelect = useCallback((files: File[]) => {
@@ -258,14 +370,19 @@ export const RtbitWebUI = (props: {
           onDragOver={handleDragOver}
           onDrop={handleDrop}
         >
-          {engineUnreachable ? (
+          {engineUnreachable && !hasTorrentData ? (
             <EngineUnreachable
               apiBase={apiBase}
               details={engineUnreachable}
               onRetry={() => void refreshTorrents()}
             />
           ) : (
-            <RootContent />
+            <>
+              {engineUnreachable && (
+                <ConnectionLostBanner onRetry={() => void refreshTorrents()} />
+              )}
+              <RootContent />
+            </>
           )}
           {isDragging && (
             <div className="absolute inset-0 z-50 flex items-center justify-center bg-surface/90">
@@ -338,14 +455,15 @@ export const RtbitWebUI = (props: {
 
       <LogStreamModal show={logsOpened} onClose={() => setLogsOpened(false)} />
       <AlertModal />
+      <ToastViewport />
 
-      {pendingUpload?.type === "single" && (
+      {singleUploadSource !== null && (
         <FileSelectionModal
           onHide={clearSingleUpload}
           listTorrentResponse={listTorrentResponse}
           listTorrentError={listTorrentError}
           listTorrentLoading={listTorrentLoading}
-          data={pendingUpload.file}
+          data={singleUploadSource}
         />
       )}
 
