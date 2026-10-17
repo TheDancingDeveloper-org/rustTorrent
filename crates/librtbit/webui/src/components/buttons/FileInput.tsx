@@ -85,8 +85,11 @@ export const FileInput = ({
         resetData={reset}
         className={`group ${className}`}
       >
-        <CgFileAdd className="text-blue-500 group-hover:text-white dark:text-white" />
-        <div>Upload .torrent File</div>
+        <CgFileAdd className="text-primary group-hover:text-on-primary" />
+        <div className="whitespace-nowrap">
+          <span className="hidden sm:inline">Upload .torrent File</span>
+          <span className="sm:hidden">Upload</span>
+        </div>
       </UploadButton>
     </>
   );

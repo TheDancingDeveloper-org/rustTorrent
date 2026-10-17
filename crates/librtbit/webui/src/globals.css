@@ -18,7 +18,7 @@
   /* Text */
   --color-text: theme(colors.slate.900);
   --color-secondary: theme(colors.slate.500);
-  --color-tertiary: theme(colors.slate.400);
+  --color-tertiary: theme(colors.slate.500);
 
   /* Borders / Dividers */
   --color-border: theme(colors.slate.200);
@@ -36,6 +36,7 @@
   --color-primary-hover: theme(colors.orange.700);
   --color-primary-bg: theme(colors.orange.600);
   --color-primary-bg-hover: theme(colors.orange.700);
+  --color-on-primary: theme(colors.white);
 
   /* Accent used for active downloads (progress bars, speed numbers) */
   --color-accent-download: theme(colors.blue.600);
@@ -63,7 +64,7 @@
   /* Text */
   --color-text: theme(colors.slate.100);
   --color-secondary: theme(colors.slate.400);
-  --color-tertiary: theme(colors.slate.500);
+  --color-tertiary: theme(colors.slate.400);
 
   /* Borders / Dividers */
   --color-border: theme(colors.slate.700);
@@ -81,6 +82,7 @@
   --color-primary-hover: theme(colors.orange.300);
   --color-primary-bg: theme(colors.orange.500);
   --color-primary-bg-hover: theme(colors.orange.400);
+  --color-on-primary: theme(colors.white);
 
   /* Accent used for active downloads (progress bars, speed numbers) */
   --color-accent-download: theme(colors.blue.400);
@@ -113,6 +115,7 @@
   --color-primary-hover: var(--color-primary-hover);
   --color-primary-bg: var(--color-primary-bg);
   --color-primary-bg-hover: var(--color-primary-bg-hover);
+  --color-on-primary: var(--color-on-primary);
   --color-success: var(--color-success);
   --color-success-bg: var(--color-success-bg);
   --color-warning: var(--color-warning);
@@ -127,6 +130,23 @@
   --border-color-divider: var(--border-color-divider);
   --border-color-divider-strong: var(--border-color-divider-strong);
   --border-color-transparent: transparent;
+}
+
+/*
+ * Shared primitives
+ * -----------------
+ * focus-ring: visible keyboard focus for inputs and icon buttons.
+ * touch-target: at least 44px hit area on coarse pointers (touch screens).
+ */
+@utility focus-ring {
+  @apply outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-1 ring-offset-surface;
+}
+
+@utility touch-target {
+  @media (pointer: coarse) {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 
 /* Base styles */

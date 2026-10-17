@@ -73,24 +73,44 @@ export const TorrentActions: React.FC<{
   };
 
   return (
-    <div className="flex w-full justify-center gap-1 sm:gap-2 dark:text-slate-300">
+    <div className="flex w-full justify-center gap-1 sm:gap-2">
       {canUnpause && (
-        <IconButton onClick={unpause} disabled={disabled}>
-          <FaPlay className="hover:text-green-600" />
+        <IconButton
+          label="Resume"
+          color="success"
+          onClick={unpause}
+          disabled={disabled}
+        >
+          <FaPlay />
         </IconButton>
       )}
       {canPause && (
-        <IconButton onClick={pause} disabled={disabled}>
-          <FaPause className="hover:text-amber-500" />
+        <IconButton
+          label="Pause"
+          color="secondary"
+          onClick={pause}
+          disabled={disabled}
+        >
+          <FaPause />
         </IconButton>
       )}
       {canConfigure && (
-        <IconButton onClick={() => openDetailsModal(id)} disabled={disabled}>
-          <FaCog className="hover:text-green-600" />
+        <IconButton
+          label="Torrent settings"
+          color="secondary"
+          onClick={() => openDetailsModal(id)}
+          disabled={disabled}
+        >
+          <FaCog />
         </IconButton>
       )}
-      <IconButton onClick={startDeleting} disabled={disabled}>
-        <FaTrash className="hover:text-red-500" />
+      <IconButton
+        label="Delete"
+        color="error"
+        onClick={startDeleting}
+        disabled={disabled}
+      >
+        <FaTrash />
       </IconButton>
       <DeleteTorrentModal
         show={deleting}
