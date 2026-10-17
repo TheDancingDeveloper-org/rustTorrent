@@ -1,0 +1,30 @@
+# Maintainer: AusAgentSmith <admin@rusttorrent.dev>
+# Binary package for the signed GitHub release. This file is a template:
+# packaging/scripts/render-aur.sh fills the placeholder values below from the
+# verified SHA256SUMS of the release. The rendered file is what gets submitted
+# to the AUR; do not commit a rendered copy.
+pkgname=rtbit-bin
+_tag=REPLACE_WITH_TAG
+pkgver=REPLACE_WITH_AUR_PKGVER
+pkgrel=1
+pkgdesc="BitTorrent client written in Rust, with a web UI and HTTP API"
+arch=('x86_64')
+url="https://github.com/TheDancingDeveloper-org/rustTorrent"
+license=('Apache-2.0')
+provides=('rtbit')
+conflicts=('rtbit')
+options=('!strip')
+depends=('glibc' 'gcc-libs')
+backup=('etc/rtbit/rtbit.conf')
+source=("rtbit-${_tag}-linux-x86_64::${url}/releases/download/${_tag}/rtbit-${_tag}-linux-x86_64"
+        "rtbit-service-files.tar.gz::${url}/releases/download/${_tag}/rtbit-${_tag}-service-files.tar.gz")
+sha256sums=('REPLACE_WITH_SHA256_BINARY'
+            'REPLACE_WITH_SHA256_SERVICE_FILES')
+
+package() {
+  install -Dm755 "rtbit-${_tag}-linux-x86_64" "${pkgdir}/usr/bin/rtbit"
+
+  # Unit files, sysusers entry and default config, as staged by release.yml.
+  # The same files ship in the deb/rpm packages.
+  cp -a usr etc "${pkgdir}/"
+}
