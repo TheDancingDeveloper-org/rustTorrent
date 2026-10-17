@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { Virtuoso } from "react-virtuoso";
 import { GoSearch, GoX } from "react-icons/go";
 import debounce from "lodash.debounce";
@@ -21,6 +21,8 @@ import { TorrentContextMenu, ContextMenuState } from "./TorrentContextMenu";
 
 const DEFAULT_SORT_COLUMN: TorrentSortColumn = "id";
 const DEFAULT_SORT_DIRECTION: SortDirection = "desc";
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_SLOP_PX = 10;
 
 export const CardLayout = (props: {
   torrents: Array<TorrentListItem> | null;
@@ -89,28 +91,95 @@ export const CardLayout = (props: {
     sortDirection,
   ]);
 
+  // Handlers read the card's index from the DOM (data-index) and the list from a ref,
+  // so they stay stable across renders and can be shared by every card
+  const filteredRef = useRef<TorrentListItem[] | null>(null);
+  filteredRef.current = filteredTorrents;
+
+  const openCardMenu = useCallback((x: number, y: number, index: number) => {
+    const torrent = filteredRef.current?.[index];
+    if (!torrent) return;
+    setTorrentContextMenu({ x, y, torrent, selectedTorrents: [torrent] });
+  }, []);
+
+  const handleCardContextMenu = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      openCardMenu(e.clientX, e.clientY, Number(e.currentTarget.dataset.index));
+    },
+    [openCardMenu],
+  );
+
+  // Touch long-press (500 ms) opens the same menu as a right-click
+  const longPress = useRef<{
+    timer: number;
+    x: number;
+    y: number;
+    index: number;
+  } | null>(null);
+
+  const cancelLongPress = useCallback(() => {
+    if (!longPress.current) return;
+    window.clearTimeout(longPress.current.timer);
+    longPress.current = null;
+  }, []);
+
+  useEffect(() => cancelLongPress, [cancelLongPress]);
+
+  const handleCardPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.pointerType !== "touch") return;
+      cancelLongPress();
+      const { clientX: x, clientY: y } = e;
+      const index = Number(e.currentTarget.dataset.index);
+      const timer = window.setTimeout(() => {
+        longPress.current = null;
+        openCardMenu(x, y, index);
+      }, LONG_PRESS_MS);
+      longPress.current = { timer, x, y, index };
+    },
+    [cancelLongPress, openCardMenu],
+  );
+
+  // Moving past a small slop means the user is scrolling, not holding still
+  const handleCardPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const press = longPress.current;
+      if (!press) return;
+      if (
+        Math.hypot(e.clientX - press.x, e.clientY - press.y) >
+        LONG_PRESS_SLOP_PX
+      )
+        cancelLongPress();
+    },
+    [cancelLongPress],
+  );
+
   // Item renderer for react-virtuoso
   const itemContent = useCallback(
     (index: number) => {
       const torrent = filteredTorrents![index];
       return (
         <div
+          data-index={index}
           className="pb-1.5 sm:pb-2 px-2 sm:px-7 max-w-4xl mx-auto w-full"
-          onContextMenu={(e) => {
-            e.preventDefault();
-            setTorrentContextMenu({
-              x: e.clientX,
-              y: e.clientY,
-              torrent,
-              selectedTorrents: [torrent],
-            });
-          }}
+          onContextMenu={handleCardContextMenu}
+          onPointerDown={handleCardPointerDown}
+          onPointerMove={handleCardPointerMove}
+          onPointerUp={cancelLongPress}
+          onPointerCancel={cancelLongPress}
         >
           <TorrentCard key={torrent.id} torrent={torrent} />
         </div>
       );
     },
-    [filteredTorrents],
+    [
+      filteredTorrents,
+      handleCardContextMenu,
+      handleCardPointerDown,
+      handleCardPointerMove,
+      cancelLongPress,
+    ],
   );
 
   return (
@@ -122,15 +191,18 @@ export const CardLayout = (props: {
           <input
             type="text"
             data-search-input
+            aria-label="Filter torrents"
             value={localSearch}
             onChange={handleSearchChange}
             placeholder="Search..."
-            className="w-full pl-8 sm:pl-9 pr-8 sm:pr-9 py-1.5 sm:py-2 text-sm bg-surface border border-divider rounded-lg focus:outline-none focus:border-primary placeholder:text-tertiary"
+            className="w-full pl-8 sm:pl-9 pr-8 sm:pr-9 py-1.5 sm:py-2 text-sm bg-surface border border-divider rounded-lg focus-ring placeholder:text-tertiary"
           />
           {localSearch && (
             <button
+              type="button"
+              aria-label="Clear search"
               onClick={clearSearch}
-              className="absolute right-1.5 sm:right-2 top-1/2 -translate-y-1/2 p-1 text-tertiary hover:text-secondary rounded cursor-pointer"
+              className="absolute right-1.5 sm:right-2 top-1/2 -translate-y-1/2 p-1 text-tertiary hover:text-secondary rounded cursor-pointer focus-ring"
             >
               <GoX className="w-4 h-4" />
             </button>
@@ -139,9 +211,10 @@ export const CardLayout = (props: {
 
         {/* Status filter */}
         <select
+          aria-label="Status filter"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-          className="py-1.5 sm:py-2 px-2 sm:px-3 text-sm bg-surface border border-divider rounded-lg focus:outline-none focus:border-primary"
+          className="py-1.5 sm:py-2 px-2 sm:px-3 text-sm bg-surface border border-divider rounded-lg focus-ring"
         >
           {(Object.keys(STATUS_FILTER_LABELS) as StatusFilter[]).map(
             (status) => (
@@ -154,9 +227,10 @@ export const CardLayout = (props: {
 
         {/* Sort dropdown */}
         <select
+          aria-label="Sort by"
           value={`${sortColumn}:${sortDirection}`}
           onChange={handleSortChange}
-          className="py-1.5 sm:py-2 px-2 sm:px-3 text-sm bg-surface border border-divider rounded-lg focus:outline-none focus:border-primary"
+          className="py-1.5 sm:py-2 px-2 sm:px-3 text-sm bg-surface border border-divider rounded-lg focus-ring"
         >
           {(Object.keys(SORT_COLUMN_LABELS) as TorrentSortColumn[]).flatMap(
             (col) => [

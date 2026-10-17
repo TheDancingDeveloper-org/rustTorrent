@@ -5,13 +5,18 @@ import { formatSecondsToTime } from "../../helper/formatSecondsToTime";
 import { formatUnixDate } from "../../helper/formatUnixDate";
 import { getCompletionETA } from "../../helper/getCompletionETA";
 import { torrentTrackerHosts } from "../../helper/torrentFilters";
-import { memo } from "react";
+import { memo, useEffect, useRef } from "react";
 import { ColumnDef, ColumnId, useColumnStore } from "../../stores/columnStore";
 
 interface TorrentTableRowProps {
   torrent: TorrentListItem;
   isSelected: boolean;
   odd?: boolean;
+  /** Position in the sorted list; the header row is row 1 in ARIA terms */
+  rowIndex: number;
+  /** The one row in the grid that takes Tab focus (roving tabindex) */
+  active: boolean;
+  onRowFocus: (index: number) => void;
   onRowClick: (id: number, e: React.MouseEvent) => void;
   onContextMenu: (id: number, e: React.MouseEvent) => void;
   onCheckboxChange: (id: number) => void;
@@ -62,11 +67,25 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
   torrent,
   isSelected,
   odd,
+  rowIndex,
+  active,
+  onRowFocus,
   onRowClick,
   onContextMenu,
   onCheckboxChange,
   visibleColumns,
 }) => {
+  const rowRef = useRef<HTMLTableRowElement>(null);
+
+  // Keyboard navigation moves the active row; take DOM focus when focus is already in the grid,
+  // so rows that mount or scroll into view don't steal focus from elsewhere on the page
+  useEffect(() => {
+    if (!active || !rowRef.current) return;
+    const grid = rowRef.current.closest('[role="grid"]');
+    if (grid?.contains(document.activeElement)) {
+      rowRef.current.focus({ preventScroll: true });
+    }
+  }, [active]);
   const stats = torrent.stats;
   const state = stats?.state ?? "";
   const error = stats?.error ?? null;
@@ -122,12 +141,15 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
       case "checkbox":
         return (
           <td
+            role="gridcell"
             key="checkbox"
             className={`px-2 align-middle text-center ${cellBorder}`}
             onMouseDown={handleCheckboxClick}
           >
             <input
               type="checkbox"
+              tabIndex={-1}
+              aria-label="Select torrent"
               checked={isSelected}
               onChange={() => {}}
               className="w-4 h-4 rounded border-divider-strong bg-surface text-primary focus:ring-primary"
@@ -136,7 +158,11 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
         );
       case "status_icon":
         return (
-          <td key="status_icon" className={`px-1 align-middle ${cellBorder}`}>
+          <td
+            role="gridcell"
+            key="status_icon"
+            className={`px-1 align-middle ${cellBorder}`}
+          >
             <StatusIcon
               className="w-5 h-5"
               error={!!error}
@@ -149,6 +175,7 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
       case "id":
         return (
           <td
+            role="gridcell"
             key="id"
             className={`${baseCls} text-center text-tertiary font-mono`}
           >
@@ -158,6 +185,7 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
       case "name":
         return (
           <td
+            role="gridcell"
             key="name"
             className={`px-2 align-middle ${alignClass} ${cellBorder}`}
           >
@@ -173,13 +201,18 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
         );
       case "size":
         return (
-          <td key="size" className={`${baseCls} ${alignClass} text-secondary`}>
+          <td
+            role="gridcell"
+            key="size"
+            className={`${baseCls} ${alignClass} text-secondary`}
+          >
             {formatBytes(totalBytes)}
           </td>
         );
       case "progress":
         return (
           <td
+            role="gridcell"
             key="progress"
             className={`px-2 align-middle text-center ${cellBorder}`}
           >
@@ -207,6 +240,7 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
       case "downloadedBytes":
         return (
           <td
+            role="gridcell"
             key="downloadedBytes"
             className={`${baseCls} ${alignClass} text-secondary`}
           >
@@ -217,6 +251,7 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
         const active = (stats?.live?.download_speed?.mbps ?? 0) > 0.01;
         return (
           <td
+            role="gridcell"
             key="downSpeed"
             className={`${baseCls} ${alignClass} tabular-nums ${
               active ? "text-accent-download font-medium" : "text-secondary"
@@ -230,6 +265,7 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
         const active = (stats?.live?.upload_speed?.mbps ?? 0) > 0.01;
         return (
           <td
+            role="gridcell"
             key="upSpeed"
             className={`${baseCls} ${alignClass} tabular-nums ${
               active ? "text-accent-upload font-medium" : "text-secondary"
@@ -242,6 +278,7 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
       case "uploadedBytes":
         return (
           <td
+            role="gridcell"
             key="uploadedBytes"
             className={`${baseCls} ${alignClass} text-secondary`}
           >
@@ -250,13 +287,21 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
         );
       case "eta":
         return (
-          <td key="eta" className={`${baseCls} ${alignClass} text-secondary`}>
+          <td
+            role="gridcell"
+            key="eta"
+            className={`${baseCls} ${alignClass} text-secondary`}
+          >
             {displayEta}
           </td>
         );
       case "peers":
         return (
-          <td key="peers" className={`${baseCls} ${alignClass} text-secondary`}>
+          <td
+            role="gridcell"
+            key="peers"
+            className={`${baseCls} ${alignClass} text-secondary`}
+          >
             {peersDisplay}
           </td>
         );
@@ -268,7 +313,11 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
           stats?.queue_state === "Queued",
         );
         return (
-          <td key="state" className={`${baseCls} ${alignClass}`}>
+          <td
+            role="gridcell"
+            key="state"
+            className={`${baseCls} ${alignClass}`}
+          >
             <span
               className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${badge.cls}`}
             >
@@ -280,6 +329,7 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
       case "info_hash":
         return (
           <td
+            role="gridcell"
             key="info_hash"
             className={`px-2 align-middle ${alignClass} font-mono text-xs text-tertiary ${cellBorder}`}
           >
@@ -297,7 +347,11 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
               ? (uploadedBytes / totalBytes).toFixed(2)
               : "0.00";
         return (
-          <td key="ratio" className={`${baseCls} ${alignClass} text-secondary`}>
+          <td
+            role="gridcell"
+            key="ratio"
+            className={`${baseCls} ${alignClass} text-secondary`}
+          >
             {ratioDisplay}
           </td>
         );
@@ -305,6 +359,7 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
       case "category":
         return (
           <td
+            role="gridcell"
             key="category"
             className={`${baseCls} ${alignClass} text-secondary`}
           >
@@ -315,6 +370,7 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
         const seedTime = stats?.seeding_time_secs;
         return (
           <td
+            role="gridcell"
             key="seeding_time"
             className={`${baseCls} ${alignClass} text-secondary`}
           >
@@ -335,6 +391,7 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
         }
         return (
           <td
+            role="gridcell"
             key="queue_position"
             className={`${baseCls} ${alignClass} text-secondary`}
           >
@@ -345,6 +402,7 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
       case "sequential":
         return (
           <td
+            role="gridcell"
             key="sequential"
             className={`${baseCls} ${alignClass} text-secondary`}
           >
@@ -355,6 +413,7 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
         const avail = stats?.min_piece_availability;
         return (
           <td
+            role="gridcell"
             key="availability"
             className={`${baseCls} ${alignClass} text-secondary`}
           >
@@ -365,6 +424,7 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
       case "added_on":
         return (
           <td
+            role="gridcell"
             key="added_on"
             className={`${baseCls} ${alignClass} text-secondary tabular-nums`}
           >
@@ -375,6 +435,7 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
         const hosts = torrentTrackerHosts(torrent);
         return (
           <td
+            role="gridcell"
             key="tracker"
             className={`${baseCls} ${alignClass} text-secondary`}
             title={hosts.join(", ")}
@@ -390,18 +451,28 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
         );
       }
       default:
-        return <td key={col.id} className={baseCls} />;
+        return <td role="gridcell" key={col.id} className={baseCls} />;
     }
   }
 
   return (
-    <table className="w-full table-fixed">
+    // Presentation wrappers: the grid in TorrentTable supplies the table semantics
+    <table className="w-full table-fixed" role="presentation">
       <RowColGroup columns={visibleColumns} />
-      <tbody>
+      <tbody role="presentation">
         <tr
+          ref={rowRef}
+          role="row"
+          aria-selected={isSelected}
+          aria-rowindex={rowIndex + 2}
+          data-row-index={rowIndex}
+          tabIndex={active ? 0 : -1}
+          onFocus={(e) => {
+            if (e.target === e.currentTarget) onRowFocus(rowIndex);
+          }}
           onMouseDown={handleRowClick}
           onContextMenu={handleContextMenu}
-          className={`cursor-pointer border-b border-divider/60 text-sm h-8 transition-colors ${
+          className={`focus-ring cursor-pointer border-b border-divider/60 text-sm h-8 pointer-coarse:h-11 transition-colors ${
             isSelected
               ? "bg-primary/15"
               : `${odd ? "bg-surface-sunken/40" : ""} hover:bg-primary/5`
