@@ -647,9 +647,14 @@ impl Session {
             .values()
             .cloned()
             .collect::<Vec<_>>();
+        info!(
+            torrents = torrents.len(),
+            "stopping session, saving torrent state"
+        );
         // Save before pausing, so the record keeps each torrent's running state and
         // this run's upload total. Pausing then only moves the total into the base.
         self.persist_all().await;
+        info!("torrent state saved, pausing torrents");
         for torrent in torrents {
             if let Err(e) = torrent.pause() {
                 debug!("error pausing torrent: {e:#}");
@@ -658,6 +663,7 @@ impl Session {
         self.cancellation_token.cancel();
         // this sucks, but hopefully will be enough
         tokio::time::sleep(Duration::from_secs(1)).await;
+        info!("session stopped");
     }
 
     /// Run a callback given the currently managed torrents.

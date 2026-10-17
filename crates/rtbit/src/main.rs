@@ -26,13 +26,47 @@ use librtbit::{
         StorageFactory, StorageFactoryExt,
         filesystem::{FilesystemStorageFactory, MmapFilesystemStorageFactory},
     },
-    tracing_subscriber_config_utils::{InitLoggingOptions, InitLoggingResult, init_logging},
+    tracing_subscriber_config_utils::{
+        InitLoggingOptions, InitLoggingResult, LogFormat, LogRotation, init_logging,
+    },
 };
 use size_format::SizeFormatterBinary as SF;
 use tokio_util::sync::CancellationToken;
 
 mod config_file;
 use tracing::{debug_span, error, info, trace_span, warn};
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum LogFormatArg {
+    Text,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum LogRotationArg {
+    Never,
+    Hourly,
+    Daily,
+}
+
+impl From<LogFormatArg> for LogFormat {
+    fn from(value: LogFormatArg) -> Self {
+        match value {
+            LogFormatArg::Text => LogFormat::Text,
+            LogFormatArg::Json => LogFormat::Json,
+        }
+    }
+}
+
+impl From<LogRotationArg> for LogRotation {
+    fn from(value: LogRotationArg) -> Self {
+        match value {
+            LogRotationArg::Never => LogRotation::Never,
+            LogRotationArg::Hourly => LogRotation::Hourly,
+            LogRotationArg::Daily => LogRotation::Daily,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum LogLevel {
@@ -96,6 +130,30 @@ struct Opts {
         env = "RTBIT_LOG_FILE_RUST_LOG"
     )]
     log_file_rust_log: String,
+
+    /// The output format for the console and the log file: text (default) or json.
+    #[arg(
+        long = "log-format",
+        value_enum,
+        default_value = "text",
+        env = "RTBIT_LOG_FORMAT"
+    )]
+    log_format: LogFormatArg,
+
+    /// Roll the log file over: never (default, keep appending to one file), hourly or daily.
+    /// A rolled file is named <log-file>.<date>, e.g. rtbit.log.2026-10-17.
+    #[arg(
+        long = "log-file-rotation",
+        value_enum,
+        default_value = "never",
+        env = "RTBIT_LOG_FILE_ROTATION"
+    )]
+    log_file_rotation: LogRotationArg,
+
+    /// With --log-file-rotation, keep only this many rolled log files and delete older ones.
+    /// Keeps every rolled file if unset.
+    #[arg(long = "log-file-max-files", env = "RTBIT_LOG_FILE_MAX_FILES")]
+    log_file_max_files: Option<usize>,
 
     /// How long to wait for a graceful shutdown after SIGINT/SIGTERM before exiting anyway,
     /// e.g. 30s. A second signal exits immediately. Gives session state a chance to flush.
@@ -753,6 +811,9 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
         }),
         log_file: opts.log_file.as_deref(),
         log_file_rust_log: Some(&opts.log_file_rust_log),
+        log_file_rotation: opts.log_file_rotation.into(),
+        log_file_max_files: opts.log_file_max_files,
+        log_format: opts.log_format.into(),
     })?;
 
     match librtbit::try_increase_nofile_limit() {
@@ -1504,7 +1565,7 @@ fn spawn_stats_printer(session: Arc<Session>) {
 mod tests {
     use clap::Parser;
 
-    use crate::Opts;
+    use crate::{LogFormatArg, LogRotationArg, Opts};
 
     #[test]
     fn announce_port_is_initialized_from_cli_value() {
@@ -1560,6 +1621,31 @@ mod tests {
     fn log_file_defaults_to_info_not_librtbit_debug() {
         let opts = parse_server_opts(&[]);
         assert_eq!(opts.log_file_rust_log, "info");
+    }
+
+    #[test]
+    fn log_format_and_rotation_default_to_text_and_never() {
+        let opts = parse_server_opts(&[]);
+        assert!(matches!(opts.log_format, LogFormatArg::Text));
+        assert!(matches!(opts.log_file_rotation, LogRotationArg::Never));
+        assert_eq!(opts.log_file_max_files, None);
+    }
+
+    #[test]
+    fn log_format_and_rotation_are_configurable() {
+        let opts = parse_server_opts(&[
+            "--log-format",
+            "json",
+            "--log-file",
+            "/tmp/rtbit.log",
+            "--log-file-rotation",
+            "daily",
+            "--log-file-max-files",
+            "7",
+        ]);
+        assert!(matches!(opts.log_format, LogFormatArg::Json));
+        assert!(matches!(opts.log_file_rotation, LogRotationArg::Daily));
+        assert_eq!(opts.log_file_max_files, Some(7));
     }
 
     #[test]
