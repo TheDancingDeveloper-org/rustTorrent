@@ -623,7 +623,10 @@ async fn h_auth_login(
     super::super::auth::ClientAddr(client): super::super::auth::ClientAddr,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Some(wait) = state.api_state.login_limiter.check(client, Instant::now()) {
+    use super::super::auth::{Verdict, busy_response, verify_credentials};
+
+    let limiter = &state.api_state.login_limiter;
+    if let Some(wait) = limiter.check(client, Instant::now()) {
         let retry_after = wait.as_secs().max(1).to_string();
         return (
             StatusCode::TOO_MANY_REQUESTS,
@@ -641,31 +644,45 @@ async fn h_auth_login(
         .credential_store
         .as_ref()
         .filter(|store| store.has_credentials());
-    let auth_ok = match (stored_credentials, &state.api_state.opts.basic_auth) {
-        (Some(store), _) => store.validate(&form.username, &form.password),
+    let verdict = match (stored_credentials, &state.api_state.opts.basic_auth) {
+        (Some(store), _) => {
+            verify_credentials(limiter, Arc::clone(store), form.username, form.password).await
+        }
         (None, Some((expected_user, expected_pass))) => {
-            super::super::constant_time_eq(form.username.as_bytes(), expected_user.as_bytes())
+            if super::super::constant_time_eq(form.username.as_bytes(), expected_user.as_bytes())
                 && super::super::constant_time_eq(
                     form.password.as_bytes(),
                     expected_pass.as_bytes(),
                 )
+            {
+                Verdict::Valid
+            } else {
+                Verdict::Invalid
+            }
         }
         // No credentials at all: only acceptable when there is no credential store either.
         // With a store, setup has not happened yet and login must fail.
-        (None, None) => state.api_state.opts.credential_store.is_none(),
+        (None, None) => {
+            if state.api_state.opts.credential_store.is_none() {
+                Verdict::Valid
+            } else {
+                Verdict::Invalid
+            }
+        }
     };
 
-    if auth_ok {
-        state.api_state.login_limiter.record_success(client);
-        let sid = state.sessions.create_session();
-        let cookie = format!("SID={sid}; Path=/; HttpOnly; SameSite=Strict");
-        (StatusCode::OK, [(SET_COOKIE, cookie)], "Ok.".to_string()).into_response()
-    } else {
-        state
-            .api_state
-            .login_limiter
-            .record_failure(client, Instant::now());
-        (StatusCode::FORBIDDEN, "Fails.".to_string()).into_response()
+    match verdict {
+        Verdict::Busy => busy_response(),
+        Verdict::Valid => {
+            limiter.record_success(client);
+            let sid = state.sessions.create_session();
+            let cookie = format!("SID={sid}; Path=/; HttpOnly; SameSite=Strict");
+            (StatusCode::OK, [(SET_COOKIE, cookie)], "Ok.".to_string()).into_response()
+        }
+        Verdict::Invalid => {
+            limiter.record_failure(client, Instant::now());
+            (StatusCode::FORBIDDEN, "Fails.".to_string()).into_response()
+        }
     }
 }
 
