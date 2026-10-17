@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+PackageIdentifier: TheDancingDeveloper.rustTorrent
+PackageVersion: REPLACE_WITH_VERSION
+Installers:
+  - Architecture: x64
+    InstallerType: portable
+    InstallerUrl: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/download/REPLACE_WITH_TAG/rtbit-REPLACE_WITH_TAG-windows-x86_64.exe
+    # Filled from SHA256SUMS by packaging/scripts/render-winget.sh.
+    InstallerSha256: REPLACE_WITH_SHA256_WINDOWS_EXE
+    Commands:
+      - rtbit
+ManifestType: installer
+ManifestVersion: 1.6.0

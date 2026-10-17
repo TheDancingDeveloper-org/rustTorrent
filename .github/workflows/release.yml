@@ -185,6 +185,16 @@ jobs:
           name: channel-flatpak
           path: rendered/flatpak/
           if-no-files-found: error
+      - name: Render winget manifests
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          packaging/scripts/render-winget.sh "$tag" release-artifacts rendered/winget
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: channel-winget
+          path: rendered/winget/
+          if-no-files-found: error
 
   publish:
     needs: [build, sign, channels]
