@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::io::{self, Write};
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -136,7 +137,12 @@ const LOGIN_MAX_LOCKOUT: Duration = Duration::from_secs(60 * 60);
 /// Failures older than this no longer count towards a lockout. It must be longer than
 /// the longest lockout, or a client that waits out a lockout would start counting afresh.
 const LOGIN_FAILURE_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
-const LOGIN_TRACKED_CLIENTS_MAX: usize = 10_000;
+/// Most clients tracked at once. When full, the least active quarter is evicted, so memory
+/// stays bounded however many addresses a client cycles through.
+const LOGIN_TRACKED_CLIENTS_MAX: usize = 4096;
+/// Most argon2 verifications running at once. Each costs tens of milliseconds of CPU and
+/// tens of MiB of memory, so this bounds the work whatever the number of addresses.
+const ARGON2_CONCURRENT_VERIFIES: usize = 4;
 
 #[derive(Clone, Copy)]
 struct ClientLoginState {
@@ -145,11 +151,66 @@ struct ClientLoginState {
     locked_until: Option<Instant>,
 }
 
+/// Counting limit on concurrent argon2 verifications. It never queues: a request that
+/// finds every slot taken is turned away at once, so waiting requests cannot pile up.
+struct VerifySlots {
+    in_use: AtomicUsize,
+    max: usize,
+}
+
+/// One argon2 verification in progress. Dropping it frees the slot.
+pub struct VerifySlot(Arc<VerifySlots>);
+
+impl Drop for VerifySlot {
+    fn drop(&mut self) {
+        self.0.in_use.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// Per-client lockout for the login endpoints. After a run of failed logins a client is
 /// refused for an exponentially growing period; a successful login clears its record.
-#[derive(Default)]
 pub struct LoginLimiter {
     clients: Mutex<HashMap<IpAddr, ClientLoginState>>,
+    verifies: Arc<VerifySlots>,
+}
+
+impl Default for LoginLimiter {
+    fn default() -> Self {
+        Self {
+            clients: Mutex::new(HashMap::new()),
+            verifies: Arc::new(VerifySlots {
+                in_use: AtomicUsize::new(0),
+                max: ARGON2_CONCURRENT_VERIFIES,
+            }),
+        }
+    }
+}
+
+/// The address a client's failures are counted against. An IPv6 client can cheaply pick
+/// any address in its /64, so the whole /64 shares one bucket. IPv4-mapped addresses are
+/// folded to IPv4 first.
+fn limiter_key(client: IpAddr) -> IpAddr {
+    match client.to_canonical() {
+        IpAddr::V6(v6) => IpAddr::V6(Ipv6Addr::from(u128::from(v6) & (!0u128 << 64))),
+        v4 => v4,
+    }
+}
+
+/// Drops the least active quarter of tracked clients. Clients not currently locked out go
+/// first, so an attacker cannot shed a lockout by flooding the table.
+fn evict_least_active(clients: &mut HashMap<IpAddr, ClientLoginState>, now: Instant) {
+    let mut order: Vec<(bool, Instant, IpAddr)> = clients
+        .iter()
+        .map(|(ip, state)| {
+            let locked = state.locked_until.is_some_and(|until| until > now);
+            (locked, state.last_failure, *ip)
+        })
+        .collect();
+    let quarter = (order.len() / 4).max(1);
+    order.select_nth_unstable(quarter - 1);
+    for (_, _, ip) in order.drain(..quarter) {
+        clients.remove(&ip);
+    }
 }
 
 impl LoginLimiter {
@@ -157,22 +218,20 @@ impl LoginLimiter {
     pub fn check(&self, client: IpAddr, now: Instant) -> Option<Duration> {
         let clients = self.clients.lock();
         clients
-            .get(&client)
+            .get(&limiter_key(client))
             .and_then(|state| state.locked_until)
             .and_then(|until| until.checked_duration_since(now))
             .filter(|remaining| !remaining.is_zero())
     }
 
     pub fn record_failure(&self, client: IpAddr, now: Instant) {
+        let key = limiter_key(client);
         let mut clients = self.clients.lock();
-        if clients.len() >= LOGIN_TRACKED_CLIENTS_MAX && !clients.contains_key(&client) {
-            clients.retain(|_, state| {
-                state.locked_until.is_some_and(|until| until > now)
-                    || now.duration_since(state.last_failure) < LOGIN_FAILURE_WINDOW
-            });
+        if !clients.contains_key(&key) && clients.len() >= LOGIN_TRACKED_CLIENTS_MAX {
+            evict_least_active(&mut clients, now);
         }
 
-        let state = clients.entry(client).or_insert(ClientLoginState {
+        let state = clients.entry(key).or_insert(ClientLoginState {
             failures: 0,
             last_failure: now,
             locked_until: None,
@@ -194,8 +253,70 @@ impl LoginLimiter {
     }
 
     pub fn record_success(&self, client: IpAddr) {
-        self.clients.lock().remove(&client);
+        self.clients.lock().remove(&limiter_key(client));
     }
+
+    /// Takes a slot for one argon2 verification, or `None` when all slots are in use.
+    pub fn try_verify_slot(&self) -> Option<VerifySlot> {
+        let slots = &self.verifies;
+        let mut current = slots.in_use.load(Ordering::Acquire);
+        loop {
+            if current >= slots.max {
+                return None;
+            }
+            match slots.in_use.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Some(VerifySlot(Arc::clone(slots))),
+                Err(actual) => current = actual,
+            }
+        }
+    }
+}
+
+/// Outcome of checking a login against the stored credentials.
+pub enum Verdict {
+    Valid,
+    Invalid,
+    /// No verification slot was free, so nothing was checked and no failure is recorded.
+    Busy,
+}
+
+/// Checks a login against the stored credentials. argon2 runs on a blocking thread, and only
+/// while a verification slot is free. Callers check the lockout before calling this.
+pub async fn verify_credentials(
+    limiter: &LoginLimiter,
+    store: Arc<CredentialStore>,
+    username: String,
+    password: String,
+) -> Verdict {
+    let Some(slot) = limiter.try_verify_slot() else {
+        return Verdict::Busy;
+    };
+    let valid = tokio::task::spawn_blocking(move || {
+        let _slot = slot;
+        store.validate(&username, &password)
+    })
+    .await
+    .unwrap_or(false);
+    if valid {
+        Verdict::Valid
+    } else {
+        Verdict::Invalid
+    }
+}
+
+/// The refusal sent when no argon2 verification slot is free.
+pub fn busy_response() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        [(http::header::RETRY_AFTER, "1")],
+        "too many concurrent login checks; retry shortly",
+    )
+        .into_response()
 }
 
 /// The client address that login rate limiting keys on. Requests without a recorded
@@ -690,6 +811,86 @@ mod tests {
         }
         assert_eq!(last, LOGIN_MAX_LOCKOUT);
     }
+
+    fn lock_out(limiter: &LoginLimiter, ip: IpAddr, now: Instant) {
+        for _ in 0..LOGIN_FAILURES_BEFORE_LOCKOUT {
+            limiter.record_failure(ip, now);
+        }
+    }
+
+    #[test]
+    fn ipv6_addresses_in_one_slash64_share_a_lockout() {
+        let limiter = LoginLimiter::default();
+        let now = Instant::now();
+        let first: IpAddr = "2001:db8:1:2::1".parse().unwrap();
+        let rotated: IpAddr = "2001:db8:1:2:ffff:ffff:ffff:ffff".parse().unwrap();
+        let other_net: IpAddr = "2001:db8:1:3::1".parse().unwrap();
+
+        lock_out(&limiter, first, now);
+        assert!(
+            limiter.check(rotated, now).is_some(),
+            "same /64 must be locked"
+        );
+        assert!(
+            limiter.check(other_net, now).is_none(),
+            "other /64 is separate"
+        );
+    }
+
+    #[test]
+    fn ipv4_mapped_ipv6_is_the_same_client_as_ipv4() {
+        let limiter = LoginLimiter::default();
+        let now = Instant::now();
+        let v4: IpAddr = "192.0.2.7".parse().unwrap();
+        let mapped: IpAddr = "::ffff:192.0.2.7".parse().unwrap();
+
+        lock_out(&limiter, mapped, now);
+        assert!(limiter.check(v4, now).is_some());
+    }
+
+    #[test]
+    fn tracked_clients_stay_within_the_bound() {
+        let limiter = LoginLimiter::default();
+        let now = Instant::now();
+        for i in 0..(LOGIN_TRACKED_CLIENTS_MAX as u32 + 500) {
+            let ip = IpAddr::V4(Ipv4Addr::from(0x0a00_0000 + i));
+            limiter.record_failure(ip, now);
+        }
+        assert!(limiter.clients.lock().len() <= LOGIN_TRACKED_CLIENTS_MAX);
+    }
+
+    #[test]
+    fn eviction_keeps_locked_clients_when_unlocked_ones_remain() {
+        let limiter = LoginLimiter::default();
+        let now = Instant::now();
+        let locked = test_ip();
+        lock_out(&limiter, locked, now);
+        for i in 0..(LOGIN_TRACKED_CLIENTS_MAX as u32 + 500) {
+            let ip = IpAddr::V4(Ipv4Addr::from(0x0b00_0000 + i));
+            limiter.record_failure(ip, now);
+        }
+        assert!(
+            limiter.check(locked, now).is_some(),
+            "a lockout must survive a flood"
+        );
+    }
+
+    #[test]
+    fn verify_slots_are_bounded_and_released_on_drop() {
+        let limiter = LoginLimiter::default();
+        let held: Vec<VerifySlot> = (0..ARGON2_CONCURRENT_VERIFIES)
+            .map(|_| limiter.try_verify_slot().expect("slot free"))
+            .collect();
+        assert!(
+            limiter.try_verify_slot().is_none(),
+            "no slot beyond the limit"
+        );
+        drop(held);
+        assert!(
+            limiter.try_verify_slot().is_some(),
+            "dropping frees the slots"
+        );
+    }
 }
 
 // --- Change Credentials ---
@@ -715,8 +916,18 @@ pub async fn h_auth_change_credentials(
     // Verify the current password against the stored credentials, or the env var fallback.
     let (current_username, current_ok) = match cs.username() {
         Some(username) => {
-            let ok = cs.validate(&username, &req.current_password);
-            (username, ok)
+            let verdict = verify_credentials(
+                &state.login_limiter,
+                cs.clone(),
+                username.clone(),
+                req.current_password.clone(),
+            )
+            .await;
+            match verdict {
+                Verdict::Busy => return busy_response(),
+                Verdict::Valid => (username, true),
+                Verdict::Invalid => (username, false),
+            }
         }
         None => match &state.opts.basic_auth {
             Some((u, p)) => (
@@ -760,41 +971,39 @@ pub async fn h_auth_login(
     ClientAddr(client): ClientAddr,
     Json(req): Json<LoginRequest>,
 ) -> impl IntoResponse {
+    // Checked before any password hash is computed, so a locked-out client costs nothing.
     if let Some(wait) = state.login_limiter.check(client, Instant::now()) {
         return too_many_login_attempts(wait);
     }
 
-    // Check credential store first, then fall back to basic_auth
-    let valid = if let Some(cs) = &state.opts.credential_store {
-        if cs.has_credentials() {
-            cs.validate(&req.username, &req.password)
-        } else {
-            // Fall back to env var credentials
-            match &state.opts.basic_auth {
-                Some((u, p)) => {
-                    super::constant_time_eq(req.username.as_bytes(), u.as_bytes())
-                        && super::constant_time_eq(req.password.as_bytes(), p.as_bytes())
-                }
-                None => false,
+    // The stored credentials take precedence; the env var is the fallback when none are stored.
+    let verdict = match (&state.opts.credential_store, &state.opts.basic_auth) {
+        (Some(cs), _) if cs.has_credentials() => {
+            verify_credentials(&state.login_limiter, cs.clone(), req.username, req.password).await
+        }
+        (_, Some((u, p))) => {
+            if super::constant_time_eq(req.username.as_bytes(), u.as_bytes())
+                && super::constant_time_eq(req.password.as_bytes(), p.as_bytes())
+            {
+                Verdict::Valid
+            } else {
+                Verdict::Invalid
             }
         }
-    } else {
-        match &state.opts.basic_auth {
-            Some((u, p)) => {
-                super::constant_time_eq(req.username.as_bytes(), u.as_bytes())
-                    && super::constant_time_eq(req.password.as_bytes(), p.as_bytes())
-            }
-            None => {
-                return (StatusCode::NOT_FOUND, "authentication not configured").into_response();
-            }
+        (Some(_), None) => Verdict::Invalid,
+        (None, None) => {
+            return (StatusCode::NOT_FOUND, "authentication not configured").into_response();
         }
     };
 
-    if !valid {
-        state.login_limiter.record_failure(client, Instant::now());
-        return (StatusCode::UNAUTHORIZED, "invalid credentials").into_response();
+    match verdict {
+        Verdict::Busy => return busy_response(),
+        Verdict::Invalid => {
+            state.login_limiter.record_failure(client, Instant::now());
+            return (StatusCode::UNAUTHORIZED, "invalid credentials").into_response();
+        }
+        Verdict::Valid => state.login_limiter.record_success(client),
     }
-    state.login_limiter.record_success(client);
 
     let token_store = match &state.opts.token_store {
         Some(ts) => ts,

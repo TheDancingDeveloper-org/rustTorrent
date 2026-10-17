@@ -94,26 +94,24 @@ async fn api_from_config(
 
     let (listen, connect) = config.connections.as_listener_and_connect_opts();
 
-    // Credential store for persistent auth — uses the desktop config directory
+    // Credential store for persistent auth — uses the desktop config directory.
+    // Refuses to start if credentials.json is corrupt, rather than running unauthenticated.
     let credential_store = {
         let config_dir = directories::ProjectDirs::from("com", "rtbit", "desktop")
             .expect("directories::ProjectDirs::from")
             .config_dir()
             .to_owned();
-        Arc::new(librtbit::http_api::auth::CredentialStore::new(config_dir))
+        Arc::new(librtbit::http_api::auth::CredentialStore::load(config_dir)?)
     };
 
-    // Load stored credentials as basic_auth so the auth middleware recognises them
-    let basic_auth = credential_store
-        .get_credentials()
-        .map(|c| (c.username, c.password));
-
+    // Stored credentials are checked against their hash by the HTTP API, so they are not
+    // copied into basic_auth.
     // Always create token store (needed for setup flow and login)
     let token_store = Some(Arc::new(librtbit::http_api::auth::TokenStore::new()));
 
     let mut http_api_opts = librtbit::http_api::HttpApiOptions {
         read_only: config.http_api.read_only,
-        basic_auth,
+        basic_auth: None,
         token_store,
         credential_store: Some(credential_store),
         ..Default::default()

@@ -218,8 +218,11 @@ impl HttpApi {
             } else if let Some(cs) = &credential_store {
                 info!("Authentication not yet configured; the API is closed until setup is done");
                 if let Some(token) = cs.setup_token() {
-                    info!(
-                        "First-time setup token: {token} (send it as \"setup_token\" to POST /auth/setup, or enter it on the setup page)"
+                    // Written to stderr, not through tracing: the token is a secret, and log
+                    // filters, JSON output and log shippers would otherwise keep a copy of it.
+                    eprintln!("rtbit first-time setup token: {token}");
+                    eprintln!(
+                        "Send it as \"setup_token\" to POST /auth/setup, or enter it on the setup page."
                     );
                 }
             }
@@ -302,12 +305,22 @@ impl HttpApi {
 
                         if let Some((u, p)) = user_pass.split_once(':') {
                             // Check credential store
-                            if has_stored_creds
-                                && let Some(cs) = &credential_store
-                                && cs.validate(u, p)
-                            {
-                                limiter_state.login_limiter.record_success(client);
-                                return Ok(next.run(request).await);
+                            if has_stored_creds && let Some(cs) = &credential_store {
+                                let verdict = auth::verify_credentials(
+                                    &limiter_state.login_limiter,
+                                    cs.clone(),
+                                    u.to_owned(),
+                                    p.to_owned(),
+                                )
+                                .await;
+                                match verdict {
+                                    auth::Verdict::Valid => {
+                                        limiter_state.login_limiter.record_success(client);
+                                        return Ok(next.run(request).await);
+                                    }
+                                    auth::Verdict::Busy => return Ok(auth::busy_response()),
+                                    auth::Verdict::Invalid => {}
+                                }
                             }
 
                             // Check env var credentials
