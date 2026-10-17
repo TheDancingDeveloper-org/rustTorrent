@@ -1,8 +1,9 @@
 # nfpm config for the rtbit .deb and .rpm packages.
-# Built in CI from the release-github binary; VERSION, ARCH and BINARY are
-# set by the caller, e.g.:
-#   VERSION=0.1.0 ARCH=amd64 BINARY=target/release-github/rtbit \
-#     nfpm package --packager deb --config packaging/linux/nfpm.yaml
+# Built in CI (release.yml, build job) from the release-github binary;
+# VERSION, ARCH and BINARY are set by the caller, e.g.:
+#   VERSION=0.1.0-rc.1 ARCH=amd64 BINARY=target/release-github/rtbit \
+#     nfpm package --packager deb --config packaging/linux/nfpm.yaml \
+#     --target target/release-github/rtbit_amd64.deb
 name: rtbit
 arch: "${ARCH}"
 platform: linux
@@ -30,6 +31,18 @@ contents:
 
   - src: packaging/linux/rtbit.sysusers.conf
     dst: /usr/lib/sysusers.d/rtbit.conf
+    file_info:
+      mode: 0644
+
+  # Per-user units, kept from the cargo-deb package for users who run rtbit
+  # inside their own session instead of as the system service.
+  - src: systemd/rtbit.service
+    dst: /usr/lib/systemd/user/rtbit.service
+    file_info:
+      mode: 0644
+
+  - src: systemd/rtbit.socket
+    dst: /usr/lib/systemd/user/rtbit.socket
     file_info:
       mode: 0644
 

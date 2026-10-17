@@ -67,18 +67,5 @@ gethostname.workspace = true
 url.workspace = true
 librqbit-dualstack-sockets.workspace = true
 
-[package.metadata.deb]
-maintainer = "AusAgentSmith <admin@rusttorrent.dev>"
-copyright = "2024-2026 AusAgentSmith"
-extended-description = "A modern BitTorrent client written in Rust. Fast, lightweight, with a web UI, HTTP API, and Docker support."
-section = "net"
-priority = "optional"
-assets = [
-    ["target/release/rtbit", "usr/bin/", "755"],
-    ["../../systemd/rtbit.service", "lib/systemd/user/rtbit.service", "644"],
-    ["../../systemd/rtbit.socket", "lib/systemd/user/rtbit.socket", "644"],
-    ["../../systemd/rtbit.conf", "etc/rtbit/rtbit.conf", "644"],
-]
-
 [dev-dependencies]
 futures.workspace = true
