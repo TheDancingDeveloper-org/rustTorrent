@@ -661,6 +661,27 @@ impl TorrentStateLive {
             )
     }
 
+    /// Give a finished file its final name. A no-op unless the file is still
+    /// under a `.part` name; failures are logged and leave the file where it is.
+    fn finalize_file(&self, file_id: usize, relative: &std::path::Path) {
+        if let Err(e) = self.files.rename_file(file_id, relative) {
+            debug!(
+                id = self.shared.id,
+                ?relative,
+                "could not finalize file: {e:#}"
+            );
+        }
+    }
+
+    /// Finalize every file, for torrents that were already complete when restored.
+    pub(crate) fn finalize_all_files(&self) {
+        for (idx, fi) in self.metadata.file_infos.iter().enumerate() {
+            if !fi.attrs.padding {
+                self.finalize_file(idx, &fi.relative_filename);
+            }
+        }
+    }
+
     pub(crate) fn on_piece_completed(&self, id: ValidPieceIndex) -> anyhow::Result<()> {
         if let Err(e) = self.files.on_piece_completed(id) {
             debug!(?id, "file storage errored in on_piece_completed(): {e:#}");
@@ -678,7 +699,10 @@ impl TorrentStateLive {
             .skip_while(|(_, fi)| !fi.piece_range.contains(&id.get()))
             .take_while(|(_, fi)| fi.piece_range.contains(&id.get()))
         {
-            let _remaining = pieces.update_file_have_on_piece_completed(id, idx, file_info);
+            let remaining = pieces.update_file_have_on_piece_completed(id, idx, file_info);
+            if remaining == 0 {
+                self.finalize_file(idx, &file_info.relative_filename);
+            }
         }
 
         self.streams

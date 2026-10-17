@@ -17,6 +17,14 @@ use crate::storage::{StorageFactory, TorrentStorage};
 
 use super::opened_file::OpenedFile;
 
+/// Name an incomplete file is written under when `part_files` is on: the final
+/// name with `.part` appended.
+pub(crate) fn part_path(final_path: &Path) -> PathBuf {
+    let mut name = final_path.as_os_str().to_owned();
+    name.push(".part");
+    PathBuf::from(name)
+}
+
 #[derive(Default, Clone, Copy)]
 pub struct FilesystemStorageFactory {
     read_only: bool,
@@ -113,9 +121,14 @@ impl TorrentStorage for FilesystemStorage {
 
     fn remove_file(&self, _file_id: usize, filename: &Path) -> anyhow::Result<()> {
         self.require_writable()?;
-        Ok(std::fs::remove_file(
-            self.output_folder.read().join(filename),
-        )?)
+        let full = self.output_folder.read().join(filename);
+        // An incomplete file may still be under its `.part` name.
+        let target = if !full.exists() && part_path(&full).exists() {
+            part_path(&full)
+        } else {
+            full
+        };
+        Ok(std::fs::remove_file(target)?)
     }
 
     fn rename_file(&self, file_id: usize, new_relative: &Path) -> anyhow::Result<()> {
@@ -227,6 +240,12 @@ impl TorrentStorage for FilesystemStorage {
                     }
                 }
                 continue;
+            }
+
+            // While a file is incomplete it lives under `<name>.part`, unless the
+            // final name already exists (a finished file, or one the user placed).
+            if shared.options.part_files && !full_path.exists() {
+                full_path = part_path(&full_path);
             }
 
             std::fs::create_dir_all(full_path.parent().context("bug: no parent")?)?;
@@ -644,5 +663,57 @@ mod tests {
 
         let taken = storage.take().unwrap();
         assert!(taken.pwrite_all(0, 0, b"changed").is_err());
+    }
+
+    #[test]
+    fn part_path_appends_suffix() {
+        assert_eq!(
+            part_path(Path::new("/dl/movie/file.mkv")),
+            PathBuf::from("/dl/movie/file.mkv.part")
+        );
+    }
+
+    #[test]
+    fn finalize_renames_part_file_and_keeps_handle_writable() {
+        let dir = tempfile::tempdir().unwrap();
+        let part = dir.path().join("file_0.dat.part");
+        let f = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&part)
+            .unwrap();
+        let storage = FilesystemStorage {
+            output_folder: RwLock::new(dir.path().to_owned()),
+            opened_files: vec![OpenedFile::new(part.clone(), f)],
+            read_only: false,
+        };
+
+        storage.pwrite_all(0, 0, b"hello").unwrap();
+        storage
+            .rename_file(0, Path::new("file_0.dat"))
+            .expect("finalize");
+
+        assert!(!part.exists());
+        assert_eq!(
+            std::fs::read(dir.path().join("file_0.dat")).unwrap(),
+            b"hello"
+        );
+        // The cached handle follows the rename.
+        storage.pwrite_all(0, 5, b"!").unwrap();
+        assert_eq!(
+            std::fs::read(dir.path().join("file_0.dat")).unwrap(),
+            b"hello!"
+        );
+    }
+
+    #[test]
+    fn finalize_is_noop_when_already_final() {
+        let (storage, dir) = make_test_storage(1);
+        storage
+            .rename_file(0, Path::new("file_0.dat"))
+            .expect("already final");
+        assert!(dir.path().join("file_0.dat").exists());
     }
 }

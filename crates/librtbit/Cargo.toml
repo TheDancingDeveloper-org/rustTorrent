@@ -130,7 +130,7 @@ librqbit-utp = { version = "0.7", features = ["export-metrics"] }
 axum-extra = { version = "0.12", features = ["query"] }
 librqbit-dualstack-sockets = { version = "0.7", features = ["axum"] }
 socket2 = "0.6"
-nix = { version = "0.31", features = ["uio"] }
+nix = { version = "0.31", features = ["uio", "fs"] }
 thiserror = "2"
 utoipa = { version = "5", optional = true }
 utoipa-axum = { version = "0.2", optional = true }
