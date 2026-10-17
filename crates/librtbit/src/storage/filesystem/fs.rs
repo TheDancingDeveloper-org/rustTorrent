@@ -244,8 +244,13 @@ impl TorrentStorage for FilesystemStorage {
 
             // While a file is incomplete it lives under `<name>.part`, unless the
             // final name already exists (a finished file, or one the user placed).
-            if shared.options.part_files && !full_path.exists() {
-                full_path = part_path(&full_path);
+            // An existing `.part` is adopted even when `part_files` is off, so a
+            // partial download is never orphaned and redownloaded.
+            if !full_path.exists() {
+                let part = part_path(&full_path);
+                if shared.options.part_files || part.exists() {
+                    full_path = part;
+                }
             }
 
             std::fs::create_dir_all(full_path.parent().context("bug: no parent")?)?;

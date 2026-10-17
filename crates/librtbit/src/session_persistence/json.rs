@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, trace, warn};
 
+use super::runtime_fields;
 use super::{SerializedTorrent, SessionPersistenceStore, SessionSettings};
-use crate::session::PolicyFlags;
 
 #[derive(Serialize, Deserialize, Default)]
 struct SerializedSessionDatabase {
@@ -146,7 +146,7 @@ impl JsonSessionPersistenceStore {
         // Read the torrent and store it under one lock. Otherwise two updates can read
         // before they lock and store in the reverse order, and the older state wins.
         let mut db_content = self.db_content.write().await;
-        let policy = PolicyFlags::read(torrent.shared());
+        let (policy, share_limits, uploaded_bytes, part_files) = runtime_fields(torrent);
         let st = SerializedTorrent {
             trackers: torrent
                 .shared()
@@ -163,6 +163,9 @@ impl JsonSessionPersistenceStore {
             queued: policy.queued,
             held_for_disk: policy.held_for_disk,
             share_paused: policy.share_paused,
+            share_limits,
+            uploaded_bytes,
+            part_files,
             output_folder: torrent.shared().options.output_folder.clone(),
             output_folder_root: torrent.shared().options.output_folder_root.clone(),
             category: torrent.shared().category.read().clone(),

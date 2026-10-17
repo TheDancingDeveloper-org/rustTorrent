@@ -306,6 +306,10 @@ pub struct ManagedTorrentShared {
     /// Set while the torrent is paused because it hit its share limit. Only a
     /// user resume clears it; the policy pass never resumes such a torrent.
     pub(crate) share_paused: AtomicBool,
+
+    /// Bytes uploaded in earlier runs of this torrent. Each live run starts its
+    /// own counter at zero, so a pause adds that run's total here.
+    pub(crate) uploaded_bytes_base: std::sync::atomic::AtomicU64,
 }
 
 impl ManagedTorrentShared {
@@ -812,6 +816,9 @@ impl ManagedTorrent {
         match &g.state {
             ManagedTorrentState::Live(live) => {
                 let paused = live.pause()?;
+                self.shared
+                    .uploaded_bytes_base
+                    .fetch_add(live.get_uploaded_bytes(), Ordering::Relaxed);
                 g.state = ManagedTorrentState::Paused(paused);
                 g.paused = true;
                 self.state_change_notify.notify_waiters();
@@ -838,6 +845,15 @@ impl ManagedTorrent {
         }
     }
 
+    /// Bytes uploaded across every run of this torrent, including the current one.
+    pub fn uploaded_bytes(&self) -> u64 {
+        let live = self.with_state(|s| match s {
+            ManagedTorrentState::Live(l) => l.get_uploaded_bytes(),
+            _ => 0,
+        });
+        self.shared.uploaded_bytes_base.load(Ordering::Relaxed) + live
+    }
+
     /// Get stats.
     pub fn stats(&self) -> TorrentStats {
         use stats::TorrentStatsState as S;
@@ -858,6 +874,7 @@ impl ManagedTorrent {
             queued_for_init: None,
         };
 
+        resp.uploaded_bytes = self.shared.uploaded_bytes_base.load(Ordering::Relaxed);
         self.with_state(|s| {
             match s {
                 ManagedTorrentState::Initializing(i) => {
@@ -880,7 +897,7 @@ impl ManagedTorrent {
                     resp.total_bytes = hns.total();
                     resp.progress_bytes = hns.progress();
                     resp.finished = hns.finished();
-                    resp.uploaded_bytes = l.get_uploaded_bytes();
+                    resp.uploaded_bytes += l.get_uploaded_bytes();
                     resp.file_progress = l
                         .lock_read("file_progress")
                         .get_chunks()

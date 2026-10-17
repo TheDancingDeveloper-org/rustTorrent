@@ -2,7 +2,10 @@
 //! guard and share limits. The restart tests check that the queued, held and
 //! share-paused state written by the pass comes back when a session restarts.
 
-use std::{path::Path, sync::Arc, sync::atomic::Ordering};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, atomic::Ordering},
+};
 
 use anyhow::Context;
 use tempfile::TempDir;
@@ -289,6 +292,223 @@ async fn share_paused_seed_stays_paused_across_restart() -> anyhow::Result<()> {
         restored.is_paused(),
         "the policy pass must not resume a share-paused seed"
     );
+
+    session.stop().await;
+    Ok(())
+}
+
+/// Every file under `dir`, at any depth.
+fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.extend(files_under(&path));
+        } else {
+            out.push(path);
+        }
+    }
+    out
+}
+
+fn is_part_file(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "part")
+}
+
+/// Share limits and the upload total survive a restart, and the restored limit
+/// still trips once uploads continue past it.
+#[tokio::test(flavor = "multi_thread")]
+async fn share_limits_and_uploads_survive_restart() -> anyhow::Result<()> {
+    setup_test_logging();
+
+    let payload =
+        create_default_random_dir_with_torrents(2, 64 * 1024, Some("policy_share_restart"));
+    let torrent = create_torrent_bytes(payload.path()).await?;
+    let root = TempDir::with_prefix("policy_share_restart_out")?;
+    let persist = TempDir::with_prefix("policy_share_restart_state")?;
+    let limits = ShareLimits {
+        max_ratio: Some(1.5),
+        max_seeding_time: Some(Duration::from_secs(3600)),
+    };
+
+    let session = create_session(root.path(), Some(persist.path())).await?;
+    let seed = session
+        .add_torrent(
+            AddTorrent::from_bytes(torrent),
+            Some(AddTorrentOptions {
+                overwrite: true,
+                output_folder: Some(payload.path().to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+        )
+        .await?
+        .into_handle()
+        .context("expected a torrent handle")?;
+    timeout(Duration::from_secs(10), seed.wait_until_initialized()).await??;
+    anyhow::ensure!(seed.stats().finished, "seed should start out finished");
+    let id = seed.id();
+    let total = seed.stats().total_bytes;
+
+    session.set_share_limits(&seed, limits);
+    // One full copy uploaded so far: ratio 1.0, under the 1.5 limit.
+    seed.shared()
+        .uploaded_bytes_base
+        .store(total, Ordering::Relaxed);
+    session.stop().await;
+    drop(session);
+
+    let session = create_session(root.path(), Some(persist.path())).await?;
+    let restored = handle_by_id(&session, id)?;
+    timeout(Duration::from_secs(10), restored.wait_until_initialized()).await??;
+    assert_eq!(
+        session.share_limits(&restored),
+        limits,
+        "limits must survive the restart"
+    );
+    assert_eq!(
+        restored.uploaded_bytes(),
+        total,
+        "the upload total must survive the restart"
+    );
+
+    session.policy_pass().await;
+    assert!(
+        !restored.is_paused(),
+        "a seed at ratio 1.0 is under its 1.5 limit"
+    );
+
+    // Uploads continue after the restart. The restored total counts toward the
+    // limit, so the seed reaches ratio 2.0 and the restored limit trips.
+    restored
+        .shared()
+        .uploaded_bytes_base
+        .fetch_add(total, Ordering::Relaxed);
+    session.policy_pass().await;
+    assert!(
+        restored.is_paused(),
+        "the restored ratio limit must be enforced"
+    );
+    assert!(restored.shared().share_paused.load(Ordering::Relaxed));
+
+    session.stop().await;
+    Ok(())
+}
+
+/// A torrent that was storing `.part` files keeps doing so after a restart even
+/// when the session setting is off. Its partial data is left intact.
+#[tokio::test(flavor = "multi_thread")]
+async fn part_file_choice_survives_restart() -> anyhow::Result<()> {
+    setup_test_logging();
+
+    const SIZE: usize = 64 * 1024;
+    let root = TempDir::with_prefix("policy_part_out")?;
+    let persist = TempDir::with_prefix("policy_part_state")?;
+    let output = root.path().join("dl");
+
+    let session = create_session(root.path(), Some(persist.path())).await?;
+    session.set_use_part_files(true);
+    let download = add_download(&session, random_torrent("policy_part").await?, &output).await?;
+    let id = download.id();
+    assert!(download.shared().options.part_files);
+
+    let parts: Vec<PathBuf> = files_under(&output)
+        .into_iter()
+        .filter(|p| is_part_file(p))
+        .collect();
+    anyhow::ensure!(
+        !parts.is_empty(),
+        "a .part download should create .part files"
+    );
+    for part in &parts {
+        std::fs::write(part, vec![7u8; SIZE])?;
+    }
+    session.stop().await;
+    drop(session);
+
+    // The session setting is off, so only the persisted choice can keep `.part`.
+    let session = create_session(root.path(), Some(persist.path())).await?;
+    let restored = handle_by_id(&session, id)?;
+    timeout(Duration::from_secs(10), restored.wait_until_initialized()).await??;
+
+    assert!(
+        restored.shared().options.part_files,
+        "the restored torrent keeps .part"
+    );
+    let final_files: Vec<PathBuf> = files_under(&output)
+        .into_iter()
+        .filter(|p| !is_part_file(p))
+        .collect();
+    assert!(
+        final_files.is_empty(),
+        "no final-name file may be created: {final_files:?}"
+    );
+    for part in &parts {
+        assert_eq!(
+            std::fs::read(part)?,
+            vec![7u8; SIZE],
+            "partial data must not be thrown away"
+        );
+    }
+
+    session.stop().await;
+    Ok(())
+}
+
+/// An existing `.part` file is adopted on restore even when the torrent was saved
+/// without `.part` and the session setting is off, so its data is not orphaned.
+#[tokio::test(flavor = "multi_thread")]
+async fn existing_part_file_is_adopted_with_switch_off() -> anyhow::Result<()> {
+    setup_test_logging();
+
+    const SIZE: usize = 64 * 1024;
+    let root = TempDir::with_prefix("policy_adopt_out")?;
+    let persist = TempDir::with_prefix("policy_adopt_state")?;
+    let output = root.path().join("dl");
+
+    let session = create_session(root.path(), Some(persist.path())).await?;
+    let download = add_download(&session, random_torrent("policy_adopt").await?, &output).await?;
+    let id = download.id();
+    assert!(!download.shared().options.part_files);
+    session.stop().await;
+    drop(session);
+
+    // Simulate an interrupted `.part` download: the data sits under `.part` names
+    // and no final-name file exists.
+    let finals: Vec<PathBuf> = files_under(&output)
+        .into_iter()
+        .filter(|p| !is_part_file(p))
+        .collect();
+    anyhow::ensure!(!finals.is_empty(), "the first run should create files");
+    let mut parts = Vec::new();
+    for file in &finals {
+        std::fs::write(file, vec![9u8; SIZE])?;
+        let part = PathBuf::from(format!("{}.part", file.display()));
+        std::fs::rename(file, &part)?;
+        parts.push(part);
+    }
+
+    let session = create_session(root.path(), Some(persist.path())).await?;
+    let restored = handle_by_id(&session, id)?;
+    timeout(Duration::from_secs(10), restored.wait_until_initialized()).await??;
+
+    let final_files: Vec<PathBuf> = files_under(&output)
+        .into_iter()
+        .filter(|p| !is_part_file(p))
+        .collect();
+    assert!(
+        final_files.is_empty(),
+        "the .part data must be adopted, not replaced: {final_files:?}"
+    );
+    for part in &parts {
+        assert_eq!(
+            std::fs::read(part)?,
+            vec![9u8; SIZE],
+            "adopted .part data must be kept"
+        );
+    }
 
     session.stop().await;
     Ok(())

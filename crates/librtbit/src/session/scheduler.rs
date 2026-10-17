@@ -11,6 +11,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use serde::{Deserialize, Serialize};
 use tracing::{debug, debug_span, info, warn};
 
 use super::{ManagedTorrentHandle, Session, TorrentId};
@@ -82,10 +83,17 @@ impl PolicyFlags {
 ///
 /// The ratio is `uploaded / total size`, counted from the current session's
 /// upload counter. It is not persisted, so limits reset with the process.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct ShareLimits {
     pub max_ratio: Option<f64>,
     pub max_seeding_time: Option<Duration>,
+}
+
+impl ShareLimits {
+    /// True when neither limit is set. Used to leave the limits out of state.
+    pub(crate) fn is_unset(&self) -> bool {
+        self.max_ratio.is_none() && self.max_seeding_time.is_none()
+    }
 }
 
 /// Why a seeding torrent hit its share limit.
