@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
@@ -56,12 +56,25 @@ fn sha256_hex(value: &str) -> String {
     hex::encode(Sha256::digest(value.as_bytes()))
 }
 
+/// Longest a login may last, however often its refresh tokens are used. Refresh extends a
+/// session only up to this point, so a stolen refresh chain cannot keep a session alive forever.
+const SESSION_MAX_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60); // 30 days
+
+/// Answers the current credential fingerprint for `role`, or None if that account no longer
+/// exists. Sessions are valid only while this still matches the fingerprint they were issued under.
+pub type CurrentFingerprint<'a> = &'a dyn Fn(Role) -> Option<String>;
+
 /// A session token as persisted. Times are Unix seconds, because an `Instant` means nothing
 /// after a restart.
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct SessionRecord {
     role: Role,
+    /// The credential the session was issued under. A password change, or removing the account,
+    /// changes it and so ends the session. See `CredentialStore::session_fingerprint`.
+    fingerprint: String,
     expires_at: u64,
+    /// When the login that started this session ends, however it is refreshed.
+    session_end: u64,
 }
 
 /// The contents of `sessions.json`. Keys are the SHA-256 of each token.
@@ -89,25 +102,26 @@ pub struct TokenResponse {
     pub role: Role,
 }
 
-/// Issues a new access and refresh token for `role` into `file`.
-fn issue_tokens(file: &mut SessionFile, role: Role) -> TokenResponse {
+/// Issues a new access and refresh token into `file`, for a session that ends at `session_end`.
+fn issue_tokens(
+    file: &mut SessionFile,
+    role: Role,
+    fingerprint: &str,
+    now: u64,
+    session_end: u64,
+) -> TokenResponse {
     let access_token = generate_token();
     let refresh_token = generate_token();
-    let now = now_unix();
-    file.access.insert(
-        sha256_hex(&access_token),
-        SessionRecord {
-            role,
-            expires_at: now + ACCESS_TOKEN_TTL.as_secs(),
-        },
-    );
-    file.refresh.insert(
-        sha256_hex(&refresh_token),
-        SessionRecord {
-            role,
-            expires_at: now + REFRESH_TOKEN_TTL.as_secs(),
-        },
-    );
+    let record = |ttl: Duration| SessionRecord {
+        role,
+        fingerprint: fingerprint.to_owned(),
+        expires_at: (now + ttl.as_secs()).min(session_end),
+        session_end,
+    };
+    file.access
+        .insert(sha256_hex(&access_token), record(ACCESS_TOKEN_TTL));
+    file.refresh
+        .insert(sha256_hex(&refresh_token), record(REFRESH_TOKEN_TTL));
     TokenResponse {
         access_token,
         refresh_token,
@@ -136,6 +150,27 @@ pub struct LogoutRequest {
 fn generate_token() -> String {
     let bytes: [u8; 32] = rand::random();
     hex::encode(bytes)
+}
+
+/// The fingerprint sessions for `role` are issued and checked under: the stored credentials when
+/// there are any, otherwise the environment credentials. None when that account does not exist.
+pub fn fingerprint_for(
+    store: Option<&CredentialStore>,
+    env: Option<&(String, String)>,
+    role: Role,
+) -> Option<String> {
+    match store.filter(|cs| cs.has_credentials()) {
+        Some(cs) => cs.session_fingerprint(role),
+        None => match (role, env) {
+            (Role::Admin, Some((user, pass))) => Some(sha256_hex(&format!("env\n{user}\n{pass}"))),
+            _ => None,
+        },
+    }
+}
+
+/// Whether a session issued under `record`'s fingerprint is still backed by that credential.
+fn is_current(record: &SessionRecord, current: CurrentFingerprint<'_>) -> bool {
+    current(record.role).as_deref() == Some(record.fingerprint.as_str())
 }
 
 impl TokenStore {
@@ -181,34 +216,71 @@ impl TokenStore {
         }
     }
 
-    pub fn create_tokens(&self, role: Role) -> TokenResponse {
+    /// Starts a new login session for `role`, issued under `fingerprint`.
+    pub fn create_tokens(&self, role: Role, fingerprint: &str) -> TokenResponse {
+        self.start_session_at(role, fingerprint, now_unix())
+    }
+
+    fn start_session_at(&self, role: Role, fingerprint: &str, now: u64) -> TokenResponse {
         let mut file = self.sessions.write();
-        let tokens = issue_tokens(&mut file, role);
+        let tokens = issue_tokens(
+            &mut file,
+            role,
+            fingerprint,
+            now,
+            now + SESSION_MAX_LIFETIME.as_secs(),
+        );
         self.persist(&file);
         tokens
     }
 
-    /// The role of `token` if it is a live access token.
-    pub fn validate_access_token(&self, token: &str) -> Option<Role> {
+    /// The role of `token` if it is a live access token whose credential is still current.
+    pub fn validate_access_token(
+        &self,
+        token: &str,
+        current: CurrentFingerprint<'_>,
+    ) -> Option<Role> {
         let now = now_unix();
         self.sessions
             .read()
             .access
             .get(&sha256_hex(token))
-            .filter(|record| record.expires_at > now)
+            .filter(|record| record.expires_at > now && is_current(record, current))
             .map(|record| record.role)
     }
 
-    /// Trades a live refresh token for a new pair with the same role. The old refresh token is
-    /// revoked, so each one works once.
-    pub fn refresh(&self, refresh_token: &str) -> Option<TokenResponse> {
+    /// Trades a live refresh token for a new pair with the same role and session. The old
+    /// refresh token is revoked, so each one works once. Refresh never extends the session past
+    /// its end, and it fails once the credential has changed.
+    pub fn refresh(
+        &self,
+        refresh_token: &str,
+        current: CurrentFingerprint<'_>,
+    ) -> Option<TokenResponse> {
+        self.refresh_at(refresh_token, current, now_unix())
+    }
+
+    fn refresh_at(
+        &self,
+        refresh_token: &str,
+        current: CurrentFingerprint<'_>,
+        now: u64,
+    ) -> Option<TokenResponse> {
         let mut file = self.sessions.write();
         let record = file.refresh.remove(&sha256_hex(refresh_token))?;
-        if record.expires_at <= now_unix() {
+        let live =
+            record.expires_at > now && now < record.session_end && is_current(&record, current);
+        if !live {
             self.persist(&file);
             return None;
         }
-        let tokens = issue_tokens(&mut file, record.role);
+        let tokens = issue_tokens(
+            &mut file,
+            record.role,
+            &record.fingerprint,
+            now,
+            record.session_end,
+        );
         self.persist(&file);
         Some(tokens)
     }
@@ -583,10 +655,86 @@ struct ReadOnlyFile {
 }
 
 pub struct CredentialStore {
+    /// The last credentials read from the file. The file is the source of truth; see `current`.
     credentials: RwLock<Option<CredentialFile>>,
     file_path: PathBuf,
     /// One-time token that `/auth/setup` requires. Only generated while no credentials exist.
     setup_token: Option<String>,
+}
+
+/// Reads `credentials.json` as it is on disk. None when there is no file. A file that cannot be
+/// read or parsed is an error, so callers refuse rather than run without authentication.
+fn read_credentials_file(path: &Path) -> anyhow::Result<Option<CredentialFile>> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => {
+            let creds: CredentialFile = serde_json::from_str(&contents).with_context(|| {
+                format!(
+                    "{} is corrupt; refusing to start without authentication. \
+                     Fix or remove the file, or run `rtbit auth reset-password`",
+                    path.display()
+                )
+            })?;
+            anyhow::ensure!(
+                creds.password_hash.is_some() || creds.legacy_password.is_some(),
+                "{} contains no password; refusing to start without authentication. \
+                 Fix or remove the file, or run `rtbit auth reset-password`",
+                path.display()
+            );
+            Ok(Some(creds))
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
+    }
+}
+
+/// The admin credential as sessions see it: the username and the password hash (or, before
+/// migration, the legacy password). Changing either changes it.
+fn admin_secret(creds: &CredentialFile) -> String {
+    match &creds.password_hash {
+        Some(hash) => format!("hash\n{}\n{hash}", creds.username),
+        None => format!(
+            "legacy\n{}\n{}",
+            creds.username,
+            creds.legacy_password.as_deref().unwrap_or_default()
+        ),
+    }
+}
+
+/// Rejects a read-only account that would share the admin username.
+fn ensure_names_differ(admin: &str, read_only: Option<&ReadOnlyFile>) -> io::Result<()> {
+    if read_only.is_some_and(|account| account.username == admin) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the admin username must differ from the read-only username",
+        ));
+    }
+    Ok(())
+}
+
+/// An argon2 hash of a throwaway password, verified against when there is no read-only account
+/// so that the work done does not reveal whether one exists.
+fn dummy_password_hash() -> &'static str {
+    static DUMMY: OnceLock<String> = OnceLock::new();
+    DUMMY.get_or_init(|| hash_password("no-such-account").expect("argon2 is available"))
+}
+
+/// Compares two usernames by SHA-256 digest. Both digests are 32 bytes, so the time taken does
+/// not depend on the usernames' lengths or on where they differ.
+fn usernames_match(given: &str, expected: &str) -> bool {
+    super::constant_time_eq(
+        &Sha256::digest(given.as_bytes()),
+        &Sha256::digest(expected.as_bytes()),
+    )
+}
+
+/// Whether `username` and `password` are the read-only account's. The username is always
+/// compared and the password always verified, even when there is no such account, so the work
+/// done does not reveal whether the account exists or whether the username matched.
+fn read_only_matches(account: Option<&ReadOnlyFile>, username: &str, password: &str) -> bool {
+    let user_ok = usernames_match(username, account.map_or("", |a| a.username.as_str()));
+    let hash = account.map_or(dummy_password_hash(), |a| a.password_hash.as_str());
+    let pass_ok = verify_password(password, hash);
+    account.is_some() && user_ok && pass_ok
 }
 
 impl CredentialStore {
@@ -595,28 +743,7 @@ impl CredentialStore {
     /// refuses to start rather than silently running without authentication.
     pub fn load(config_dir: PathBuf) -> anyhow::Result<Self> {
         let file_path = config_dir.join("credentials.json");
-        let credentials = match std::fs::read_to_string(&file_path) {
-            Ok(contents) => {
-                let creds: CredentialFile = serde_json::from_str(&contents).with_context(|| {
-                    format!(
-                        "{} is corrupt; refusing to start without authentication. \
-                         Fix or remove the file, or run `rtbit auth reset-password`",
-                        file_path.display()
-                    )
-                })?;
-                anyhow::ensure!(
-                    creds.password_hash.is_some() || creds.legacy_password.is_some(),
-                    "{} contains no password; refusing to start without authentication. \
-                     Fix or remove the file, or run `rtbit auth reset-password`",
-                    file_path.display()
-                );
-                Some(creds)
-            }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
-            Err(e) => {
-                return Err(e).with_context(|| format!("cannot read {}", file_path.display()));
-            }
-        };
+        let credentials = read_credentials_file(&file_path)?;
         let setup_token = credentials.is_none().then(generate_token);
         let store = Self {
             credentials: RwLock::new(credentials),
@@ -647,30 +774,81 @@ impl CredentialStore {
         }
     }
 
-    /// Replaces the stored credentials in `config_dir`, even if the existing file is corrupt.
-    /// Backs the `rtbit auth reset-password` command.
+    /// Replaces the admin account in `config_dir`, even if the existing file is corrupt. Backs
+    /// the `rtbit auth reset-password` command. The read-only account is kept when the existing
+    /// file can be read, because it is not the admin's to lose.
     pub fn reset_credentials(
         config_dir: PathBuf,
         username: &str,
         password: &str,
     ) -> io::Result<()> {
-        let store = Self {
-            credentials: RwLock::new(None),
-            file_path: config_dir.join("credentials.json"),
-            setup_token: None,
+        let file_path = config_dir.join("credentials.json");
+        let read_only = match read_credentials_file(&file_path) {
+            Ok(existing) => existing.and_then(|creds| creds.read_only),
+            Err(e) => {
+                eprintln!(
+                    "warning: the existing credentials cannot be read, so the read-only account \
+                     could not be kept: {e:#}"
+                );
+                None
+            }
         };
-        store.set_credentials(username, password)
+        ensure_names_differ(username, read_only.as_ref())?;
+        let hash = hash_password(password)?;
+        let file = CredentialFile {
+            username: username.to_owned(),
+            password_hash: Some(hash),
+            legacy_password: None,
+            read_only,
+        };
+        let json = serde_json::to_vec_pretty(&file).map_err(io::Error::other)?;
+        write_private_file(&file_path, &json)?;
+        let _ = std::fs::remove_file(file_path.with_file_name("setup-token"));
+        Ok(())
+    }
+
+    /// The credentials as they are on disk now. Every check goes through here, so a change made
+    /// by another process (`rtbit auth ...`) applies at once. If the file cannot be read, the last
+    /// good copy is used and the failure is logged.
+    fn current(&self) -> Option<CredentialFile> {
+        let mut guard = self.credentials.write();
+        match read_credentials_file(&self.file_path) {
+            Ok(creds) => {
+                *guard = creds.clone();
+                creds
+            }
+            Err(e) => {
+                warn!("using the last known credentials: {e:#}");
+                guard.clone()
+            }
+        }
+    }
+
+    /// Applies `change` to the credentials on disk and saves the result, returning whether anything
+    /// was written. It runs under the lock and starts from the file, so two changes cannot interleave
+    /// and a change saved by another process is never overwritten. If the file cannot be read,
+    /// nothing is written.
+    fn update(
+        &self,
+        change: impl FnOnce(Option<&CredentialFile>) -> io::Result<Option<CredentialFile>>,
+    ) -> io::Result<bool> {
+        let mut guard = self.credentials.write();
+        let on_disk = read_credentials_file(&self.file_path).map_err(io::Error::other)?;
+        let Some(next) = change(on_disk.as_ref())? else {
+            return Ok(false);
+        };
+        let json = serde_json::to_vec_pretty(&next).map_err(io::Error::other)?;
+        write_private_file(&self.file_path, &json)?;
+        *guard = Some(next);
+        Ok(true)
     }
 
     pub fn has_credentials(&self) -> bool {
-        self.credentials.read().is_some()
+        self.current().is_some()
     }
 
     pub fn username(&self) -> Option<String> {
-        self.credentials
-            .read()
-            .as_ref()
-            .map(|creds| creds.username.clone())
+        self.current().map(|creds| creds.username)
     }
 
     /// The one-time setup token, if setup has not happened yet.
@@ -684,31 +862,20 @@ impl CredentialStore {
             .is_some_and(|token| super::constant_time_eq(candidate.as_bytes(), token.as_bytes()))
     }
 
-    /// Stores `username` with an argon2 hash of `password`, replacing any existing credentials.
     /// Stores `username` with an argon2 hash of `password`, replacing the admin account. The
-    /// read-only account is kept.
+    /// read-only account is kept. Every session issued under the old password ends.
     pub fn set_credentials(&self, username: &str, password: &str) -> io::Result<()> {
         let hash = hash_password(password)?;
-        let mut guard = self.credentials.write();
-        let read_only = guard.as_ref().and_then(|creds| creds.read_only.clone());
-        if read_only
-            .as_ref()
-            .is_some_and(|account| account.username == username)
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "the admin username must differ from the read-only username",
-            ));
-        }
-        let file = CredentialFile {
-            username: username.to_owned(),
-            password_hash: Some(hash),
-            legacy_password: None,
-            read_only,
-        };
-        let json = serde_json::to_vec_pretty(&file).map_err(io::Error::other)?;
-        write_private_file(&self.file_path, &json)?;
-        *guard = Some(file);
+        self.update(|on_disk| {
+            let read_only = on_disk.and_then(|creds| creds.read_only.clone());
+            ensure_names_differ(username, read_only.as_ref())?;
+            Ok(Some(CredentialFile {
+                username: username.to_owned(),
+                password_hash: Some(hash),
+                legacy_password: None,
+                read_only,
+            }))
+        })?;
         let _ = std::fs::remove_file(self.setup_token_path());
         Ok(())
     }
@@ -717,62 +884,67 @@ impl CredentialStore {
     /// and the two usernames must differ.
     pub fn set_read_only_user(&self, username: &str, password: &str) -> io::Result<()> {
         let hash = hash_password(password)?;
-        let mut guard = self.credentials.write();
-        let Some(current) = guard.clone() else {
-            return Err(io::Error::other(
-                "finish first-run setup before adding a read-only user",
-            ));
-        };
-        if current.username == username {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "the read-only username must differ from the admin username",
-            ));
-        }
-        let file = CredentialFile {
-            read_only: Some(ReadOnlyFile {
-                username: username.to_owned(),
-                password_hash: hash,
-            }),
-            ..current
-        };
-        let json = serde_json::to_vec_pretty(&file).map_err(io::Error::other)?;
-        write_private_file(&self.file_path, &json)?;
-        *guard = Some(file);
+        self.update(|on_disk| {
+            let current = on_disk.ok_or_else(|| {
+                io::Error::other("finish first-run setup before adding a read-only user")
+            })?;
+            if current.username == username {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "the read-only username must differ from the admin username",
+                ));
+            }
+            Ok(Some(CredentialFile {
+                read_only: Some(ReadOnlyFile {
+                    username: username.to_owned(),
+                    password_hash: hash,
+                }),
+                ..current.clone()
+            }))
+        })?;
         Ok(())
     }
 
-    /// Removes the read-only account. Returns false if there was none.
+    /// Removes the read-only account, ending its sessions. Returns false if there was none.
     pub fn remove_read_only_user(&self) -> io::Result<bool> {
-        let mut guard = self.credentials.write();
-        let Some(current) = guard.clone() else {
-            return Ok(false);
-        };
-        if current.read_only.is_none() {
-            return Ok(false);
-        }
-        let file = CredentialFile {
-            read_only: None,
-            ..current
-        };
-        let json = serde_json::to_vec_pretty(&file).map_err(io::Error::other)?;
-        write_private_file(&self.file_path, &json)?;
-        *guard = Some(file);
-        Ok(true)
+        self.update(|on_disk| {
+            Ok(on_disk
+                .filter(|creds| creds.read_only.is_some())
+                .map(|creds| CredentialFile {
+                    read_only: None,
+                    ..creds.clone()
+                }))
+        })
     }
 
     /// The username of the read-only account, if there is one.
     pub fn read_only_username(&self) -> Option<String> {
-        self.credentials
-            .read()
-            .as_ref()
-            .and_then(|creds| creds.read_only.as_ref())
-            .map(|account| account.username.clone())
+        self.current()
+            .and_then(|creds| creds.read_only.map(|account| account.username))
+    }
+
+    /// What a session issued for `role` is bound to, as the credentials stand now. It changes with
+    /// the admin username or password, so a password change ends every session. It also changes
+    /// with the read-only account, so those sessions end when that account is removed or changed.
+    /// None when the account does not exist.
+    pub fn session_fingerprint(&self, role: Role) -> Option<String> {
+        let creds = self.current()?;
+        let admin = admin_secret(&creds);
+        match role {
+            Role::Admin => Some(sha256_hex(&admin)),
+            Role::ReadOnly => {
+                let account = creds.read_only.as_ref()?;
+                Some(sha256_hex(&format!(
+                    "{admin}\nread-only\n{}\n{}",
+                    account.username, account.password_hash
+                )))
+            }
+        }
     }
 
     /// The role that `username` and `password` log in as, or None if neither account matches.
     pub fn authenticate(&self, username: &str, password: &str) -> Option<Role> {
-        let creds = self.credentials.read().clone()?;
+        let creds = self.current()?;
         let admin_user_ok = super::constant_time_eq(username.as_bytes(), creds.username.as_bytes());
         // The password is always checked, so a wrong username takes as long as a right one.
         let admin_pass_ok = match &creds.password_hash {
@@ -789,10 +961,7 @@ impl CredentialStore {
             return Some(Role::Admin);
         }
 
-        let account = creds.read_only.as_ref()?;
-        (super::constant_time_eq(username.as_bytes(), account.username.as_bytes())
-            && verify_password(password, &account.password_hash))
-        .then_some(Role::ReadOnly)
+        read_only_matches(creds.read_only.as_ref(), username, password).then_some(Role::ReadOnly)
     }
 
     /// Replaces a legacy plaintext entry with a hash of the password that just matched.
@@ -806,26 +975,23 @@ impl CredentialStore {
                 return;
             }
         };
-        let mut guard = self.credentials.write();
-        let Some(creds) = guard.as_mut() else {
-            return;
-        };
-        // Something else changed the credentials while we were hashing; leave them alone.
-        if creds.password_hash.is_some() || creds.legacy_password.as_deref() != Some(password) {
-            return;
-        }
-        let migrated = CredentialFile {
-            username: creds.username.clone(),
-            password_hash: Some(hash),
-            legacy_password: None,
-            read_only: creds.read_only.clone(),
-        };
-        let written = serde_json::to_vec_pretty(&migrated)
-            .map_err(io::Error::other)
-            .and_then(|json| write_private_file(&self.file_path, &json));
-        match written {
-            Ok(()) => *creds = migrated,
-            Err(e) => warn!("could not migrate the stored password to a hash: {e}"),
+        let result = self.update(|on_disk| {
+            let Some(creds) = on_disk else {
+                return Ok(None);
+            };
+            // Something else changed the credentials while we were hashing; leave them alone.
+            if creds.password_hash.is_some() || creds.legacy_password.as_deref() != Some(password) {
+                return Ok(None);
+            }
+            Ok(Some(CredentialFile {
+                username: creds.username.clone(),
+                password_hash: Some(hash),
+                legacy_password: None,
+                read_only: creds.read_only.clone(),
+            }))
+        });
+        if let Err(e) = result {
+            warn!("could not migrate the stored password to a hash: {e}");
         }
     }
 }
@@ -952,7 +1118,14 @@ pub async fn h_auth_setup(
         Ok(_) => {
             // Create tokens for the new user so they're immediately logged in
             if let Some(ts) = &state.opts.token_store {
-                let tokens = ts.create_tokens(Role::Admin);
+                let Some(fingerprint) = fingerprint_for(Some(cs), None, Role::Admin) else {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "failed to start a session",
+                    )
+                        .into_response();
+                };
+                let tokens = ts.create_tokens(Role::Admin, &fingerprint);
                 return (StatusCode::OK, Json(tokens)).into_response();
             }
             StatusCode::OK.into_response()
@@ -976,23 +1149,36 @@ mod tests {
     #[test]
     fn token_refresh_rotates_and_logout_revokes() {
         let store = TokenStore::new();
-        let original = store.create_tokens(Role::Admin);
+        let original = store.create_tokens(Role::Admin, "fp");
         assert_eq!(
-            store.validate_access_token(&original.access_token),
+            store.validate_access_token(&original.access_token, &always("fp")),
             Some(Role::Admin)
         );
 
         let replacement = store
-            .refresh(&original.refresh_token)
+            .refresh(&original.refresh_token, &always("fp"))
             .expect("valid refresh token");
-        assert!(store.refresh(&original.refresh_token).is_none());
+        assert!(
+            store
+                .refresh(&original.refresh_token, &always("fp"))
+                .is_none()
+        );
         assert_eq!(
-            store.validate_access_token(&replacement.access_token),
+            store.validate_access_token(&replacement.access_token, &always("fp")),
             Some(Role::Admin)
         );
 
         store.revoke_refresh_token(&replacement.refresh_token);
-        assert!(store.refresh(&replacement.refresh_token).is_none());
+        assert!(
+            store
+                .refresh(&replacement.refresh_token, &always("fp"))
+                .is_none()
+        );
+    }
+
+    /// A credential check that always answers `fp`, as if the account were unchanged.
+    fn always(fp: &'static str) -> impl Fn(Role) -> Option<String> {
+        move |_| Some(fp.to_owned())
     }
 
     /// True when `username` and `password` log in as the admin account.
@@ -1269,7 +1455,7 @@ mod tests {
     fn sessions_survive_a_restart_but_are_stored_hashed() {
         let temp = tempfile::tempdir().expect("temporary directory");
         let store = TokenStore::load(temp.path().to_path_buf());
-        let tokens = store.create_tokens(Role::ReadOnly);
+        let tokens = store.create_tokens(Role::ReadOnly, "fp");
 
         let on_disk =
             std::fs::read_to_string(temp.path().join("sessions.json")).expect("sessions file");
@@ -1278,14 +1464,18 @@ mod tests {
 
         let reloaded = TokenStore::load(temp.path().to_path_buf());
         assert_eq!(
-            reloaded.validate_access_token(&tokens.access_token),
+            reloaded.validate_access_token(&tokens.access_token, &always("fp")),
             Some(Role::ReadOnly)
         );
         let refreshed = reloaded
-            .refresh(&tokens.refresh_token)
+            .refresh(&tokens.refresh_token, &always("fp"))
             .expect("refresh after restart");
         assert_eq!(refreshed.role, Role::ReadOnly);
-        assert!(reloaded.refresh(&tokens.refresh_token).is_none());
+        assert!(
+            reloaded
+                .refresh(&tokens.refresh_token, &always("fp"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -1293,10 +1483,12 @@ mod tests {
         let temp = tempfile::tempdir().expect("temporary directory");
         let expired = SessionRecord {
             role: Role::Admin,
+            fingerprint: "fp".to_owned(),
             expires_at: 1,
+            session_end: 1,
         };
         let mut file = SessionFile::default();
-        file.access.insert(sha256_hex("old-token"), expired);
+        file.access.insert(sha256_hex("old-token"), expired.clone());
         file.refresh.insert(sha256_hex("old-refresh"), expired);
         std::fs::write(
             temp.path().join("sessions.json"),
@@ -1305,8 +1497,11 @@ mod tests {
         .expect("write sessions");
 
         let store = TokenStore::load(temp.path().to_path_buf());
-        assert_eq!(store.validate_access_token("old-token"), None);
-        assert!(store.refresh("old-refresh").is_none());
+        assert_eq!(
+            store.validate_access_token("old-token", &always("fp")),
+            None
+        );
+        assert!(store.refresh("old-refresh", &always("fp")).is_none());
     }
 
     #[test]
@@ -1314,9 +1509,9 @@ mod tests {
         let temp = tempfile::tempdir().expect("temporary directory");
         std::fs::write(temp.path().join("sessions.json"), "not json").expect("write");
         let store = TokenStore::load(temp.path().to_path_buf());
-        let tokens = store.create_tokens(Role::Admin);
+        let tokens = store.create_tokens(Role::Admin, "fp");
         assert_eq!(
-            store.validate_access_token(&tokens.access_token),
+            store.validate_access_token(&tokens.access_token, &always("fp")),
             Some(Role::Admin)
         );
     }
@@ -1407,6 +1602,220 @@ mod tests {
         let temp = tempfile::tempdir().expect("temporary directory");
         let store = CredentialStore::load(temp.path().to_path_buf()).expect("load");
         assert!(store.set_read_only_user("viewer", "view-pass").is_err());
+    }
+
+    #[test]
+    fn password_change_ends_every_session() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let store = CredentialStore::load(temp.path().to_path_buf()).expect("load");
+        store.set_credentials("admin", "old-pass").expect("admin");
+        store
+            .set_read_only_user("viewer", "view-pass")
+            .expect("viewer");
+        let tokens = TokenStore::new();
+        let current = |role: Role| store.session_fingerprint(role);
+        let admin = tokens.create_tokens(Role::Admin, &current(Role::Admin).expect("admin fp"));
+        let viewer = tokens.create_tokens(
+            Role::ReadOnly,
+            &current(Role::ReadOnly).expect("read-only fp"),
+        );
+        assert_eq!(
+            tokens.validate_access_token(&admin.access_token, &current),
+            Some(Role::Admin)
+        );
+        assert_eq!(
+            tokens.validate_access_token(&viewer.access_token, &current),
+            Some(Role::ReadOnly)
+        );
+
+        store.set_credentials("admin", "new-pass").expect("change");
+        assert_eq!(
+            tokens.validate_access_token(&admin.access_token, &current),
+            None
+        );
+        assert_eq!(
+            tokens.validate_access_token(&viewer.access_token, &current),
+            None
+        );
+        assert!(tokens.refresh(&admin.refresh_token, &current).is_none());
+        assert!(tokens.refresh(&viewer.refresh_token, &current).is_none());
+    }
+
+    #[test]
+    fn reset_password_ends_sessions_and_keeps_the_read_only_account() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let dir = temp.path().to_path_buf();
+        let store = CredentialStore::load(dir.clone()).expect("load");
+        store.set_credentials("admin", "old-pass").expect("admin");
+        store
+            .set_read_only_user("viewer", "view-pass")
+            .expect("viewer");
+        let tokens = TokenStore::new();
+        let admin = tokens.create_tokens(
+            Role::Admin,
+            &store.session_fingerprint(Role::Admin).expect("fp"),
+        );
+
+        CredentialStore::reset_credentials(dir.clone(), "admin", "reset-pass").expect("reset");
+        let reloaded = CredentialStore::load(dir.clone()).expect("reload");
+        assert_eq!(
+            reloaded.authenticate("admin", "reset-pass"),
+            Some(Role::Admin)
+        );
+        assert_eq!(
+            reloaded.authenticate("viewer", "view-pass"),
+            Some(Role::ReadOnly),
+            "reset-password must keep the read-only account"
+        );
+        assert_eq!(
+            tokens.validate_access_token(&admin.access_token, &|role| reloaded
+                .session_fingerprint(role)),
+            None,
+            "reset-password must end the admin's sessions"
+        );
+
+        assert!(
+            CredentialStore::reset_credentials(dir.clone(), "viewer", "x").is_err(),
+            "reset must not give the admin the read-only account's name"
+        );
+        let unchanged = CredentialStore::load(dir).expect("reload");
+        assert_eq!(unchanged.read_only_username().as_deref(), Some("viewer"));
+    }
+
+    #[test]
+    fn refresh_cannot_extend_a_session_past_its_cap() {
+        let store = TokenStore::new();
+        let start = 1_000_000;
+        let session_end = start + SESSION_MAX_LIFETIME.as_secs();
+        let first = store.start_session_at(Role::Admin, "fp", start);
+
+        let second = store
+            .refresh_at(&first.refresh_token, &always("fp"), session_end - 60)
+            .expect("refresh inside the cap");
+        let record = store
+            .sessions
+            .read()
+            .refresh
+            .get(&sha256_hex(&second.refresh_token))
+            .cloned()
+            .expect("new refresh record");
+        assert_eq!(
+            record.session_end, session_end,
+            "the cap is kept, not restarted"
+        );
+        assert!(record.expires_at <= session_end);
+
+        assert!(
+            store
+                .refresh_at(&second.refresh_token, &always("fp"), session_end)
+                .is_none(),
+            "a refresh at the cap is refused"
+        );
+    }
+
+    #[test]
+    fn removing_the_read_only_account_ends_its_sessions_at_once() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let dir = temp.path().to_path_buf();
+        let server = CredentialStore::load(dir.clone()).expect("server copy");
+        server
+            .set_credentials("admin", "admin-pass")
+            .expect("admin");
+        let cli = CredentialStore::load(dir.clone()).expect("cli copy");
+        cli.set_read_only_user("viewer", "view-pass").expect("add");
+
+        // The running server sees the account the CLI added, without a restart.
+        assert_eq!(
+            server.authenticate("viewer", "view-pass"),
+            Some(Role::ReadOnly)
+        );
+        let tokens = TokenStore::new();
+        let viewer = tokens.create_tokens(
+            Role::ReadOnly,
+            &server.session_fingerprint(Role::ReadOnly).expect("fp"),
+        );
+        let admin = tokens.create_tokens(
+            Role::Admin,
+            &server.session_fingerprint(Role::Admin).expect("fp"),
+        );
+
+        assert!(cli.remove_read_only_user().expect("remove"));
+        let current = |role: Role| server.session_fingerprint(role);
+        assert_eq!(
+            tokens.validate_access_token(&viewer.access_token, &current),
+            None
+        );
+        assert!(tokens.refresh(&viewer.refresh_token, &current).is_none());
+        assert_eq!(
+            tokens.validate_access_token(&admin.access_token, &current),
+            Some(Role::Admin)
+        );
+        assert_eq!(server.authenticate("viewer", "view-pass"), None);
+
+        // A stale server copy must not bring the account back when the admin password is saved.
+        server
+            .set_credentials("admin", "rotated-pass")
+            .expect("save");
+        let reloaded = CredentialStore::load(dir).expect("reload");
+        assert_eq!(reloaded.authenticate("viewer", "view-pass"), None);
+        assert_eq!(
+            reloaded.authenticate("admin", "rotated-pass"),
+            Some(Role::Admin)
+        );
+    }
+
+    #[test]
+    fn an_admin_save_keeps_accounts_added_by_another_process() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let dir = temp.path().to_path_buf();
+        let server = CredentialStore::load(dir.clone()).expect("server copy");
+        server
+            .set_credentials("admin", "admin-pass")
+            .expect("admin");
+        let cli = CredentialStore::load(dir.clone()).expect("cli copy");
+        cli.set_read_only_user("viewer", "view-pass").expect("add");
+
+        server
+            .set_credentials("admin", "rotated-pass")
+            .expect("save");
+        let reloaded = CredentialStore::load(dir).expect("reload");
+        assert_eq!(
+            reloaded.authenticate("viewer", "view-pass"),
+            Some(Role::ReadOnly)
+        );
+        assert_eq!(
+            reloaded.authenticate("admin", "rotated-pass"),
+            Some(Role::Admin)
+        );
+    }
+
+    #[test]
+    fn read_only_login_needs_the_exact_username_and_password() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let store = CredentialStore::load(temp.path().to_path_buf()).expect("load");
+        store.set_credentials("admin", "admin-pass").expect("admin");
+
+        // No read-only account: nothing gets in through that path, whatever it is sent.
+        for (user, pass) in [("viewer", "view-pass"), ("", ""), ("admin", "view-pass")] {
+            assert_eq!(store.authenticate(user, pass), None, "{user:?}");
+        }
+
+        store
+            .set_read_only_user("viewer", "view-pass")
+            .expect("viewer");
+        for (user, pass) in [
+            ("viewer-", "view-pass"),
+            ("Viewer", "view-pass"),
+            ("viewe", "view-pass"),
+            ("viewer", "wrong"),
+            ("viewer", ""),
+        ] {
+            assert_eq!(store.authenticate(user, pass), None, "{user:?} / {pass:?}");
+        }
+        assert_eq!(
+            store.authenticate("viewer", "view-pass"),
+            Some(Role::ReadOnly)
+        );
     }
 }
 
@@ -1542,7 +1951,14 @@ pub async fn h_auth_login(
     };
 
     token_store.cleanup_expired();
-    let tokens = token_store.create_tokens(role);
+    let Some(fingerprint) = fingerprint_for(
+        state.opts.credential_store.as_deref(),
+        state.opts.basic_auth.as_ref(),
+        role,
+    ) else {
+        return (StatusCode::UNAUTHORIZED, "the account changed; try again").into_response();
+    };
+    let tokens = token_store.create_tokens(role, &fingerprint);
     (StatusCode::OK, Json(tokens)).into_response()
 }
 
@@ -1567,7 +1983,14 @@ pub async fn h_auth_refresh(
         }
     };
 
-    match token_store.refresh(&req.refresh_token) {
+    let current = |role: Role| {
+        fingerprint_for(
+            state.opts.credential_store.as_deref(),
+            state.opts.basic_auth.as_ref(),
+            role,
+        )
+    };
+    match token_store.refresh(&req.refresh_token, &current) {
         Some(tokens) => (StatusCode::OK, Json(tokens)).into_response(),
         None => (StatusCode::UNAUTHORIZED, "invalid or expired refresh token").into_response(),
     }
