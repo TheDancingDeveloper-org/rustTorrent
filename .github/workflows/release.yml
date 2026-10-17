@@ -40,17 +40,22 @@ jobs:
         shell: bash
         run: |
           apt-get update
-          apt-get install -y gcc-mingw-w64-x86-64 nasm
-          cargo install cargo-deb --locked
+          apt-get install -y gcc-mingw-w64-x86-64 nasm golang-go
+          # nfpm is pinned; it builds both the .deb and the .rpm.
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.1
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           rustup target add x86_64-pc-windows-gnu
-      - name: Build Linux and Debian artifacts
+      - name: Build Linux, Debian and RPM artifacts
         shell: bash
         run: |
           export CARGO_PROFILE_RELEASE_GITHUB_LTO=fat
           export CARGO_PROFILE_RELEASE_GITHUB_CODEGEN_UNITS=1
           export CARGO_PROFILE_RELEASE_GITHUB_STRIP=symbols
           cargo build --profile release-github -p rtbit --no-default-features --features default-tls
-          cargo deb -p rtbit --no-build --no-strip --profile release-github -o target/release-github/rtbit_amd64.deb
+          tag="${{ inputs.tag || github.ref_name }}"
+          export VERSION="${tag#v}" ARCH=amd64 BINARY=target/release-github/rtbit
+          nfpm package --packager deb --config packaging/linux/nfpm.yaml --target target/release-github/rtbit_amd64.deb
+          nfpm package --packager rpm --config packaging/linux/nfpm.yaml --target target/release-github/rtbit-x86_64.rpm
       - name: Build Windows artifact
         shell: bash
         run: |
@@ -68,6 +73,7 @@ jobs:
           cp target/release-github/rtbit "release-artifacts/rtbit-$tag-linux-x86_64"
           cp target/x86_64-pc-windows-gnu/release-github/rtbit.exe "release-artifacts/rtbit-$tag-windows-x86_64.exe"
           cp target/release-github/rtbit_amd64.deb "release-artifacts/rtbit-$tag-amd64.deb"
+          cp target/release-github/rtbit-x86_64.rpm "release-artifacts/rtbit-$tag-x86_64.rpm"
           (cd release-artifacts && sha256sum rtbit-*) > "release-artifacts/SHA256SUMS-$tag.txt"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -109,8 +115,32 @@ jobs:
           path: release-artifacts/
           if-no-files-found: error
 
+  # Gates publish: the signed checksum file must verify and every artefact in
+  # it must match before anything is uploaded. Channel renders (AUR, Homebrew,
+  # winget, Flatpak) hang off this job as further steps.
+  channels:
+    needs: sign
+    runs-on: [self-hosted]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-artifacts-signed
+          path: release-artifacts/
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Verify SHA256SUMS signature and artefact digests
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          test -n "$tag"
+          packaging/scripts/verify-release.sh "$tag" release-artifacts
+
   publish:
-    needs: [build, sign]
+    needs: [build, sign, channels]
     runs-on: [self-hosted]
     permissions:
       contents: write
