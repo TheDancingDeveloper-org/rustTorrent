@@ -5093,7 +5093,7 @@ dependencies = [
 
 [[package]]
 name = "rtbit-desktop"
-version = "0.0.1"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "directories",
@@ -6090,7 +6090,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "swarmforge"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -6176,7 +6176,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-bencode"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "arrayvec",
@@ -6191,7 +6191,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-buffers"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "bytes",
  "serde",
@@ -6201,14 +6201,14 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-clone-to-owned"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "bytes",
 ]
 
 [[package]]
 name = "swarmforge-core"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -6237,7 +6237,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-dht"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
@@ -6269,7 +6269,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-lsd"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "atoi 3.1.0",
@@ -6289,7 +6289,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-peer-protocol"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "bitvec",
@@ -6309,7 +6309,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-sha1-wrapper"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "assert_cfg",
  "aws-lc-rs",
@@ -6319,7 +6319,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-tracker-comms"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -6346,7 +6346,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-upnp"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "bstr",
@@ -6367,7 +6367,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-upnp-serve"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "axum",

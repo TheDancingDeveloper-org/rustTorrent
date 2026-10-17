@@ -124,7 +124,7 @@ jobs:
   release:
     # Builds the standalone binaries from the soaked commit, signs them, and
     # publishes the stable GitHub release (generated notes unless a
-    # RELEASE_NOTES_<stable>.md file is checked in at that commit).
+    # docs/releases/<stable>.md file is checked in at that commit).
     needs: [resolve, tag-stable]
     permissions:
       contents: write

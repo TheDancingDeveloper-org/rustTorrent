@@ -20,7 +20,7 @@ if $resume && [[ -n "$publish_flag" ]]; then
   exit 2
 fi
 
-version="0.1.0"
+version="0.1.0-rc.1"
 
 # Keep this list explicit: Cargo package publication must follow dependency
 # order, and directory discovery can publish the binary or a leaf before the

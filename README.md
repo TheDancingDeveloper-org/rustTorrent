@@ -116,7 +116,7 @@ Most behaviour is configurable from the web UI's settings dialog or via CLI flag
 | `desktop/` | Tauri desktop application |
 | `website/` | Static rusttorrent.dev website and deployment assets |
 | `fuzz/` | Fuzz targets for the protocol parsers |
-| `docs/` | Architecture notes, testing guide, fork provenance |
+| `docs/` | Architecture notes, testing guide, fork provenance, release notes (`docs/releases/`) |
 
 ## Naming
 
@@ -142,6 +142,7 @@ builds on that foundation.
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE). Contribution guidelines are in
+Apache 2.0 — see [LICENSE](LICENSE). Each path in the repository is described in
+[docs/REPOSITORY-LAYOUT.md](docs/REPOSITORY-LAYOUT.md). Contribution guidelines are in
 [CONTRIBUTING.md](CONTRIBUTING.md), the release history is in
 [CHANGELOG.md](CHANGELOG.md), and security reports follow [SECURITY.md](SECURITY.md).

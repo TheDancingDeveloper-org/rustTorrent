@@ -1,7 +1,7 @@
 # Changelog
 
 All notable changes to rustTorrent are recorded here. The full release notes for
-each tag remain in the `RELEASE_NOTES_<tag>.md` files at the repository root.
+each tag are in `docs/releases/<tag>.md`.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions before 1.0 may include breaking changes between pre-releases; the
@@ -11,10 +11,13 @@ upgrade notes in each release describe what to back up and check.
 
 ### Changed
 
-- Repository hygiene: added `LICENSE` full text, `NOTICE`, `CONTRIBUTING.md`,
-  `SECURITY.md` and this changelog; corrected stale paths in `runme.md` and the
-  `Makefile`; unified the desktop package version with the `rtbit` release
-  version.
+- Repository hygiene: restored the full `LICENSE` text; added `NOTICE`,
+  `CONTRIBUTING.md` and `SECURITY.md`; corrected stale `../libs` paths.
+- Every crate and package is at version `0.1.0-rc.1`, including the `librtbit-*`
+  crates, `rtbit`, the desktop app and `fuzz`/`benchv2`.
+- Release notes moved from the repository root to `docs/releases/`, and
+  `documentation/` was merged into `docs/`. The layout of each path is described
+  in `docs/REPOSITORY-LAYOUT.md`.
 
 ## [0.1.0-rc.1]
 

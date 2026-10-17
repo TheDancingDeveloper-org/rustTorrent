@@ -23,4 +23,4 @@ To start the app/stack, you have a few options:
   Opens http://localhost:3032/mock.html with 1000 fake torrents.
 
 Release and CI process:
-  See documentation/ReleaseProcess.md.
+  See docs/ReleaseProcess.md.

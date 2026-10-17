@@ -1,7 +1,7 @@
 # Fork provenance
 
 rustTorrent is a permanent hard fork of Igor Katson's rqbit project. The
-original Apache-2.0/MIT copyright and license notices remain in place; this
+original Apache-2.0 copyright and license notice remains in place; this
 repository does not merge future upstream changes automatically.
 
 The shared crates were consolidated into this monorepo from these Forgejo

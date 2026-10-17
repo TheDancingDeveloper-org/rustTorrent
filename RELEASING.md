@@ -75,7 +75,7 @@ changed by promotion, because the image is copied, not rebuilt.
    ghcr.io/thedancingdeveloper-org/rusttorrent:latest
    ```
 
-Release notes: a tag with a checked-in `RELEASE_NOTES_<tag>.md` uses that file
+Release notes: a tag with a checked-in `docs/releases/<tag>.md` uses that file
 verbatim. A tag without one, such as a promoted stable tag, gets
 GitHub-generated notes.
 

@@ -38,8 +38,8 @@ branch.
 
 Pushes and tags run the workflows under `.github/workflows/`.
 
-The Rust workflow builds the workspace from GitHub. Local development keeps
-`[patch]` sections pointed at sibling crates under `../libs/`.
+The Rust workflow builds the workspace from this repository. The library crates
+live under `crates/` and are built in place; no sibling checkouts are needed.
 
 `dev` branch pushes publish the GHCR image as `dev`; `main` branch pushes
 publish it as `staging`; both add an immutable `sha-<commit>` tag.
@@ -57,7 +57,7 @@ GitHub release. The container workflow publishes the multi-arch GHCR image.
 Promotion of a soaked pre-release to stable is the manual `promote-release.yml`
 workflow; see [RELEASING.md](../RELEASING.md).
 
-Release notes are checked in as `RELEASE_NOTES_<tag>.md`; the GitHub release
+Release notes are checked in as `docs/releases/<tag>.md`; the GitHub release
 workflow uses that file verbatim and uploads the binaries and checksums.
 
 GitHub marks a tag whose semantic version contains `alpha`, `beta`, or `rc` as a
