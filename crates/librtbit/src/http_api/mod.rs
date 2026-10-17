@@ -131,7 +131,12 @@ async fn admit(role: auth::Role, mut request: axum::extract::Request, next: Next
 fn is_public_auth_path(path: &str) -> bool {
     matches!(
         path,
-        "/auth/login" | "/auth/refresh" | "/auth/logout" | "/auth/status" | "/auth/setup"
+        "/auth/login"
+            | "/auth/refresh"
+            | "/auth/logout"
+            | "/auth/status"
+            | "/auth/setup"
+            | "/healthz"
     )
 }
 
@@ -455,6 +460,7 @@ mod tests {
             "/auth/logout",
             "/auth/status",
             "/auth/setup",
+            "/healthz",
         ] {
             assert!(is_public_auth_path(path), "{path}");
         }

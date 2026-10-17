@@ -23,10 +23,9 @@ if a manifest drifts from it.
 
 | Path | Purpose |
 |------|---------|
-| `Dockerfile` | Builds the published image from source, as a multi-stage build with the web UI compiled in. CI (`.github/workflows/container.yml`) builds this file. |
-| `docker/Dockerfile` | A minimal `scratch` image that packages binaries built elsewhere, for example by `docker/Dockerfile.xx`. |
-| `docker/Dockerfile.xx` | Cross-compiles `rtbit` for several platforms inside Docker, using `tonistiigi/xx`. |
-| `docker/compose-examples/server.yaml` | Compose example for the `docker/` image. |
+| `Dockerfile` | The only Dockerfile. Builds the image from source, as a multi-stage build with the web UI compiled in, on an Alpine base. CI (`.github/workflows/container.yml`) builds this file, and `make docker-build-amd64` and `make docker-build-armv7` build it per platform. Its `HEALTHCHECK` probes `/healthz`. |
+| `docker/compose-examples/server.yaml` | Standalone compose example for the published image, using host networking for UPnP. |
+| `systemd/` | Per-user systemd unit, socket and environment file for running `rtbit` without a container. See [systemd/README.md](../systemd/README.md). |
 | `docker-compose.yml` | Builds the image from this checkout (`docker compose up --build`). Used for local development from source. |
 | `docker-compose.example.yml` | Template for a self-hosted deployment. It pulls the published image and uses host paths for downloads, with PUID, PGID and TZ settings. Copy it and edit the paths. |
 | `docker-compose.local.yml` | Runs the published image with named volumes and no host paths. Useful for a quick trial on one machine. |

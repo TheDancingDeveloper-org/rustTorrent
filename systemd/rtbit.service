@@ -13,14 +13,10 @@ RestartSec=5
 # Gives the shutdown path time to flush session persistence before SIGKILL.
 TimeoutStopSec=30
 
-# Hardening. Downloads and the rtbit data/cache dirs live under the user's
-# home, so home is the only writable location besides the private /tmp.
+# Hardening that a per-user service manager applies without mount or user
+# namespaces. Filesystem sandboxing (ProtectSystem, PrivateTmp, ...) is left out
+# on purpose: it needs namespaces that user units cannot always rely on.
 NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-ReadWritePaths=%h
-ProtectKernelTunables=yes
-ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 
