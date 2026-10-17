@@ -2,17 +2,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
+mod launch;
+mod tray;
+mod updates;
 
 use std::{
     collections::HashMap,
     fs::{File, OpenOptions},
     io::{BufReader, BufWriter},
     net::SocketAddr,
-    path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
@@ -21,24 +21,31 @@ use config::RtbitDesktopConfig;
 use librqbit_dualstack_sockets::TcpListener;
 use librtbit::{
     Api, Session, SessionOptions, SessionPersistenceConfig, TorrentStatsState,
-    api::{ApiTorrentListOpts, TorrentIdOrHash},
+    api::ApiTorrentListOpts,
     dht::PersistentDhtConfig,
     rss::db::RssDatabase,
     tracing_subscriber_config_utils::{InitLoggingOptions, InitLoggingResult, init_logging},
 };
-use tauri::menu::{MenuBuilder, MenuItemBuilder};
-use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tracing::{debug_span, error, info, warn};
 
 // ---------------------------------------------------------------------------
 // Engine state — shared via Tauri's managed state
 // ---------------------------------------------------------------------------
 
-struct EngineState {
-    api: Api,
-    listen_addr: SocketAddr,
-    paused: AtomicBool,
+pub struct EngineState {
+    pub api: Api,
+    pub listen_addr: SocketAddr,
+}
+
+/// Where the desktop config lives. The config is read and written here.
+fn config_file_path() -> PathBuf {
+    directories::ProjectDirs::from("com", "rtbit", "desktop")
+        .expect("directories::ProjectDirs::from")
+        .config_dir()
+        .join("config.json")
 }
 
 // ---------------------------------------------------------------------------
@@ -244,14 +251,9 @@ async fn api_from_config(
 /// Start the engine, HTTP server, and wait for readiness.
 async fn start_engine(
     init_logging: &InitLoggingResult,
-) -> anyhow::Result<(Api, SocketAddr, String, Option<String>)> {
-    let config_filename = directories::ProjectDirs::from("com", "rtbit", "desktop")
-        .expect("directories::ProjectDirs::from")
-        .config_dir()
-        .join("config.json")
-        .to_str()
-        .expect("to_str()")
-        .to_owned();
+) -> anyhow::Result<(Api, SocketAddr, Option<String>)> {
+    let config_path = config_file_path();
+    let config_filename = config_path.display().to_string();
 
     let config = match read_config(&config_filename) {
         Ok(config) => {
@@ -278,136 +280,13 @@ async fn start_engine(
             && resp.status().is_success()
         {
             info!("HTTP server ready on {listen_addr}");
-            return Ok((api, listen_addr, config_filename, setup_token));
+            return Ok((api, listen_addr, setup_token));
         }
     }
 
     // Server may still work even if polling didn't succeed.
     warn!("Could not confirm HTTP server readiness, continuing anyway");
-    Ok((api, listen_addr, config_filename, setup_token))
-}
-
-// ---------------------------------------------------------------------------
-// System tray
-// ---------------------------------------------------------------------------
-
-fn format_speed(mbps: f64) -> String {
-    if mbps < 1.0 / 1024.0 {
-        "0 B/s".to_string()
-    } else if mbps < 1.0 {
-        format!("{:.0} KB/s", mbps * 1024.0)
-    } else {
-        format!("{:.1} MB/s", mbps)
-    }
-}
-
-fn setup_tray(app: &AppHandle) -> anyhow::Result<()> {
-    let speed_item = MenuItemBuilder::with_id("speed", "Speed: idle")
-        .enabled(false)
-        .build(app)?;
-
-    let pause_item = MenuItemBuilder::with_id("pause", "Pause All").build(app)?;
-
-    let browser_item = MenuItemBuilder::with_id("browser", "Open in Browser").build(app)?;
-
-    let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
-
-    let menu = MenuBuilder::new(app)
-        .item(&speed_item)
-        .separator()
-        .item(&pause_item)
-        .item(&browser_item)
-        .separator()
-        .item(&quit_item)
-        .build()?;
-
-    let app_handle = app.clone();
-    TrayIconBuilder::with_id("main")
-        .menu(&menu)
-        .tooltip("rtbit")
-        .on_menu_event(move |tray, event| {
-            let app = tray.app_handle();
-            match event.id().as_ref() {
-                "pause" => {
-                    if let Some(state) = app.try_state::<EngineState>() {
-                        let api = state.api.clone();
-                        let was_paused = state.paused.load(Ordering::Relaxed);
-                        let paused_flag = Arc::new(AtomicBool::new(was_paused));
-                        let paused_ref = paused_flag.clone();
-
-                        tauri::async_runtime::spawn(async move {
-                            let list = api.api_torrent_list_ext(ApiTorrentListOpts {
-                                with_stats: true,
-                                ..Default::default()
-                            });
-                            for torrent in &list.torrents {
-                                if let Some(id) = torrent.id {
-                                    let idx = TorrentIdOrHash::Id(id);
-                                    if was_paused {
-                                        let _ = api.api_torrent_action_start(idx).await;
-                                    } else {
-                                        let _ = api.api_torrent_action_pause(idx).await;
-                                    }
-                                }
-                            }
-                            paused_ref.store(!was_paused, Ordering::Relaxed);
-                        });
-
-                        state.paused.store(!was_paused, Ordering::Relaxed);
-                    }
-                }
-                "browser" => {
-                    if let Some(state) = app.try_state::<EngineState>() {
-                        let url = format!("http://{}", state.listen_addr);
-                        let _ = open::that(&url);
-                    }
-                }
-                "quit" => {
-                    app.exit(0);
-                }
-                _ => {}
-            }
-        })
-        .on_tray_icon_event(|tray, event| {
-            if matches!(event, tauri::tray::TrayIconEvent::Click { .. })
-                && let Some(window) = tray.app_handle().get_webview_window("main")
-            {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        })
-        .build(&app_handle)?;
-
-    // Spawn background task to update tray tooltip with speed info.
-    let app_for_tray = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(2));
-        loop {
-            interval.tick().await;
-            if let Some(state) = app_for_tray.try_state::<EngineState>() {
-                let stats = state.api.api_session_stats();
-                let dl = format_speed(stats.download_speed.mbps);
-                let ul = format_speed(stats.upload_speed.mbps);
-
-                let paused = state.paused.load(Ordering::Relaxed);
-                let speed_text = if paused {
-                    "paused".to_string()
-                } else if stats.download_speed.mbps < 1.0 / 1024.0
-                    && stats.upload_speed.mbps < 1.0 / 1024.0
-                {
-                    "idle".to_string()
-                } else {
-                    format!("D: {} | U: {}", dl, ul)
-                };
-
-                if let Some(tray) = app_for_tray.tray_by_id("main") {
-                    let _ = tray.set_tooltip(Some(&format!("rtbit - {}", speed_text)));
-                }
-            }
-        }
-    });
-
-    Ok(())
+    Ok((api, listen_addr, setup_token))
 }
 
 // ---------------------------------------------------------------------------
@@ -470,7 +349,7 @@ fn spawn_notification_monitor(app: &AppHandle) {
     });
 }
 
-fn send_notification(app: &AppHandle, title: &str, body: &str) {
+pub(crate) fn send_notification(app: &AppHandle, title: &str, body: &str) {
     use tauri_plugin_notification::NotificationExt;
     if let Err(e) = app.notification().builder().title(title).body(body).show() {
         warn!("Failed to send notification: {e}");
@@ -491,9 +370,36 @@ fn cmd_open_in_browser(state: tauri::State<'_, EngineState>) {
 // App entry point
 // ---------------------------------------------------------------------------
 
-async fn start() {
-    tauri::async_runtime::set(tokio::runtime::Handle::current());
+/// Shown when the engine cannot start. Without this a GUI user sees nothing:
+/// the message only ever went to stderr, which a double-clicked app never shows.
+fn show_engine_failure(app: &AppHandle, cause: &str) {
+    let message = format!(
+        "rtbit could not start its engine.\n\n{cause}\n\n\
+         If the error mentions an address already in use, another program or another rtbit \
+         is using the HTTP API port (http_api.listen_addr, default 127.0.0.1:3030) or the \
+         peer port (connections.listen_port, default 4240).\n\n\
+         Config: {}\n\
+         Logs go to stderr; start rtbit from a terminal to see them.",
+        config_file_path().display()
+    );
+    let handle = app.clone();
+    app.dialog()
+        .message(message)
+        .title("rtbit failed to start")
+        .kind(MessageDialogKind::Error)
+        .show(move |_| handle.exit(1));
+}
 
+/// Registers the magnet scheme at runtime. Installed builds get it from the bundle.
+#[cfg(all(debug_assertions, any(windows, target_os = "linux")))]
+fn register_dev_deep_links(app: &AppHandle) {
+    use tauri_plugin_deep_link::DeepLinkExt;
+    if let Err(e) = app.deep_link().register("magnet") {
+        warn!("could not register magnet: scheme for development: {e}");
+    }
+}
+
+fn run_app() {
     let init_logging_result = init_logging(InitLoggingOptions {
         default_rust_log_value: Some("info"),
         log_file: None,
@@ -506,61 +412,106 @@ async fn start() {
         Err(e) => warn!("failed increasing open file limit: {:#}", e),
     };
 
-    let (api, listen_addr, _config_filename, setup_token) =
-        match start_engine(&init_logging_result).await {
-            Ok(result) => result,
-            Err(e) => {
-                error!("Failed to start engine: {e:#}");
-                eprintln!("Fatal: Failed to start rtbit engine: {e:#}");
-                std::process::exit(1);
-            }
-        };
-
-    let server_url = format!("http://{}/web/", listen_addr);
+    let argv: Vec<String> = std::env::args().collect();
+    let start_hidden = launch::starts_hidden(&argv);
 
     tauri::Builder::default()
+        // Must be first. A second instance hands its argv (a .torrent or magnet:
+        // link to open) to this one and exits here, before it starts an engine
+        // that would fight for the same ports.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            tray::show_main_window(app);
+            let targets = launch::targets_from_args(&argv, std::path::Path::new(&cwd));
+            launch::spawn_add(app.clone(), targets);
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
-        .manage(EngineState {
-            api,
-            listen_addr,
-            paused: AtomicBool::new(false),
-        })
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec![launch::AUTOSTART_ARG]),
+        ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![cmd_open_in_browser])
         .setup(move |app| {
+            // The engine starts here, after the single-instance check above, and
+            // before the window that needs its address.
+            let (api, listen_addr, setup_token) =
+                match tauri::async_runtime::block_on(start_engine(&init_logging_result)) {
+                    Ok(engine) => engine,
+                    Err(e) => {
+                        error!("Failed to start engine: {e:#}");
+                        show_engine_failure(app.handle(), &format!("{e:#}"));
+                        return Ok(());
+                    }
+                };
+            app.manage(EngineState { api, listen_addr });
+
+            #[cfg(all(debug_assertions, any(windows, target_os = "linux")))]
+            register_dev_deep_links(app.handle());
+
             // Create main window pointing at the HTTP server's web UI.
-            let url = WebviewUrl::External(server_url.parse().unwrap());
-            let mut window = WebviewWindowBuilder::new(app, "main", url)
+            let url = WebviewUrl::External(format!("http://{listen_addr}/web/").parse()?);
+            let mut builder = WebviewWindowBuilder::new(app, "main", url)
                 .title("rtbit")
-                .inner_size(1280.0, 800.0);
+                .inner_size(1280.0, 800.0)
+                .visible(!start_hidden);
             if let Some(token) = &setup_token {
                 // Only this webview sees the token; the setup page reads it and fills the field.
                 let script = format!(
                     "window.__RTBIT_SETUP_TOKEN__ = {};",
                     serde_json::to_string(token)?
                 );
-                window = window.initialization_script(&script);
+                builder = builder.initialization_script(&script);
             }
-            let _window = window.build()?;
+            let window = builder.build()?;
+
+            // Close hides to the tray instead of quitting. Quit is in the tray menu.
+            let close_handle = window.clone();
+            window.on_window_event(move |event| {
+                if let WindowEvent::CloseRequested { api, .. } = event
+                    && tray::is_available(close_handle.app_handle())
+                {
+                    api.prevent_close();
+                    let _ = close_handle.hide();
+                }
+            });
 
             // Set up system tray.
-            if let Err(e) = setup_tray(app.handle()) {
-                warn!("Failed to set up system tray: {e}");
+            let tray_ready = match tray::setup(app.handle()) {
+                Ok(()) => true,
+                Err(e) => {
+                    warn!("Failed to set up system tray: {e}");
+                    false
+                }
+            };
+            // A hidden start is only safe with a tray to bring the window back from.
+            if start_hidden && !tray_ready {
+                let _ = window.show();
             }
 
             // Start notification monitor for download complete/failed.
             spawn_notification_monitor(app.handle());
 
+            // Anything the OS handed us on the first launch (a .torrent or magnet: link).
+            launch::spawn_add(
+                app.handle().clone(),
+                launch::targets_from_args(&argv, &std::env::current_dir()?),
+            );
+
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![cmd_open_in_browser])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
 fn main() {
-    tokio::runtime::Builder::new_multi_thread()
+    // The runtime lives for the whole process; Tauri's event loop runs on this thread.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .expect("couldn't set up tokio runtime")
-        .block_on(start())
+        .expect("couldn't set up tokio runtime");
+    tauri::async_runtime::set(runtime.handle().clone());
+    run_app();
 }

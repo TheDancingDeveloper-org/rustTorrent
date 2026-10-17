@@ -5,7 +5,19 @@
   "productName": "rtbit-desktop",
   "mainBinaryName": "rtbit-desktop",
   "identifier": "com.rtbit.desktop",
-  "plugins": {},
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["magnet"]
+      }
+    },
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://github.com/TheDancingDeveloper-org/rustTorrent/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "app": {
     "windows": [],
     "security": {
@@ -32,6 +44,14 @@
         "mimeType": "application/x-bittorrent",
         "description": "Torrent File"
       }
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "linux/rtbit-desktop.desktop.hbs"
+      },
+      "rpm": {
+        "desktopTemplate": "linux/rtbit-desktop.desktop.hbs"
+      }
+    }
   }
 }
