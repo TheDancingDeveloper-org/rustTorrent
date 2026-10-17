@@ -209,7 +209,7 @@ export const PeersTab: React.FC<PeersTabProps> = ({ torrent }) => {
   }
 
   const headerClass =
-    "px-2 py-1.5 text-left text-sm text-secondary cursor-pointer hover:text-text select-none";
+    "px-2 py-1.5 text-left text-sm text-secondary select-none";
 
   return (
     <div className="p-3">
@@ -217,68 +217,143 @@ export const PeersTab: React.FC<PeersTabProps> = ({ torrent }) => {
         <table className="min-w-full">
           <thead>
             <tr className="border-b border-divider">
-              <th className={headerClass} onClick={() => handleSort("addr")}>
-                IP Address
-                <SortIcon
-                  column="addr"
-                  sortColumn={sortColumn}
-                  sortDirection={sortDirection}
-                />
+              <th
+                className={headerClass}
+                aria-sort={
+                  sortColumn !== "addr"
+                    ? "none"
+                    : sortDirection === "asc"
+                      ? "ascending"
+                      : "descending"
+                }
+              >
+                <button
+                  type="button"
+                  onClick={() => handleSort("addr")}
+                  className="inline-flex items-center gap-0.5 rounded focus-ring hover:text-text"
+                >
+                  IP Address
+                  <SortIcon
+                    column="addr"
+                    sortColumn={sortColumn}
+                    sortDirection={sortDirection}
+                  />
+                </button>
               </th>
               <th
                 className={headerClass}
-                onClick={() => handleSort("connKind")}
+                aria-sort={
+                  sortColumn !== "connKind"
+                    ? "none"
+                    : sortDirection === "asc"
+                      ? "ascending"
+                      : "descending"
+                }
               >
-                Type
-                <SortIcon
-                  column="connKind"
-                  sortColumn={sortColumn}
-                  sortDirection={sortDirection}
-                />
+                <button
+                  type="button"
+                  onClick={() => handleSort("connKind")}
+                  className="inline-flex items-center gap-0.5 rounded focus-ring hover:text-text"
+                >
+                  Type
+                  <SortIcon
+                    column="connKind"
+                    sortColumn={sortColumn}
+                    sortDirection={sortDirection}
+                  />
+                </button>
               </th>
               <th
                 className={headerClass}
-                onClick={() => handleSort("downloadSpeed")}
+                aria-sort={
+                  sortColumn !== "downloadSpeed"
+                    ? "none"
+                    : sortDirection === "asc"
+                      ? "ascending"
+                      : "descending"
+                }
               >
-                Down Speed
-                <SortIcon
-                  column="downloadSpeed"
-                  sortColumn={sortColumn}
-                  sortDirection={sortDirection}
-                />
+                <button
+                  type="button"
+                  onClick={() => handleSort("downloadSpeed")}
+                  className="inline-flex items-center gap-0.5 rounded focus-ring hover:text-text"
+                >
+                  Down Speed
+                  <SortIcon
+                    column="downloadSpeed"
+                    sortColumn={sortColumn}
+                    sortDirection={sortDirection}
+                  />
+                </button>
               </th>
               <th
                 className={headerClass}
-                onClick={() => handleSort("uploadSpeed")}
+                aria-sort={
+                  sortColumn !== "uploadSpeed"
+                    ? "none"
+                    : sortDirection === "asc"
+                      ? "ascending"
+                      : "descending"
+                }
               >
-                Up Speed
-                <SortIcon
-                  column="uploadSpeed"
-                  sortColumn={sortColumn}
-                  sortDirection={sortDirection}
-                />
+                <button
+                  type="button"
+                  onClick={() => handleSort("uploadSpeed")}
+                  className="inline-flex items-center gap-0.5 rounded focus-ring hover:text-text"
+                >
+                  Up Speed
+                  <SortIcon
+                    column="uploadSpeed"
+                    sortColumn={sortColumn}
+                    sortDirection={sortDirection}
+                  />
+                </button>
               </th>
               <th
                 className={headerClass}
-                onClick={() => handleSort("downloaded")}
+                aria-sort={
+                  sortColumn !== "downloaded"
+                    ? "none"
+                    : sortDirection === "asc"
+                      ? "ascending"
+                      : "descending"
+                }
               >
-                Downloaded
-                <SortIcon
-                  column="downloaded"
-                  sortColumn={sortColumn}
-                  sortDirection={sortDirection}
-                />
+                <button
+                  type="button"
+                  onClick={() => handleSort("downloaded")}
+                  className="inline-flex items-center gap-0.5 rounded focus-ring hover:text-text"
+                >
+                  Downloaded
+                  <SortIcon
+                    column="downloaded"
+                    sortColumn={sortColumn}
+                    sortDirection={sortDirection}
+                  />
+                </button>
               </th>
               <th
                 className={headerClass}
-                onClick={() => handleSort("uploaded")}
+                aria-sort={
+                  sortColumn !== "uploaded"
+                    ? "none"
+                    : sortDirection === "asc"
+                      ? "ascending"
+                      : "descending"
+                }
               >
-                Uploaded
-                <SortIcon
-                  column="uploaded"
-                  sortColumn={sortColumn}
-                  sortDirection={sortDirection}
-                />
+                <button
+                  type="button"
+                  onClick={() => handleSort("uploaded")}
+                  className="inline-flex items-center gap-0.5 rounded focus-ring hover:text-text"
+                >
+                  Uploaded
+                  <SortIcon
+                    column="uploaded"
+                    sortColumn={sortColumn}
+                    sortDirection={sortDirection}
+                  />
+                </button>
               </th>
             </tr>
           </thead>

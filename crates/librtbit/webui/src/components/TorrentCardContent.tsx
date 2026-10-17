@@ -1,7 +1,9 @@
+import { useRef } from "react";
 import { GoClock, GoFile, GoPeople, GoArrowSwitch } from "react-icons/go";
-import { BsArrowRepeat } from "react-icons/bs";
+import { BsArrowRepeat, BsThreeDotsVertical } from "react-icons/bs";
 import { TorrentListItem, STATE_INITIALIZING } from "../api-types";
 import { TorrentActions } from "./buttons/TorrentActions";
+import { IconButton } from "./buttons/IconButton";
 import { ProgressBar } from "./ProgressBar";
 import { Speed } from "./Speed";
 import { formatBytes } from "../helper/formatBytes";
@@ -12,6 +14,7 @@ export const TorrentCardContent: React.FC<{
   torrent: TorrentListItem;
 }> = ({ torrent }) => {
   const id = torrent.id;
+  const moreRef = useRef<HTMLDivElement>(null);
   const statsResponse = torrent.stats ?? null;
   const state = statsResponse?.state ?? "";
   const error = statsResponse?.error ?? null;
@@ -45,6 +48,21 @@ export const TorrentCardContent: React.FC<{
         live={!!statsResponse?.live}
         finished={finished}
       />
+    );
+  };
+
+  // Touch has no right-click, so "More actions" re-dispatches a contextmenu event at the
+  // button's corner. The card list handles it exactly like a right-click, opening the same menu.
+  const openMoreMenu = () => {
+    const rect = moreRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    moreRef.current?.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: rect.left,
+        clientY: rect.bottom,
+      }),
     );
   };
 
@@ -137,8 +155,13 @@ export const TorrentCardContent: React.FC<{
         </div>
         {/* Actions */}
         {statsResponse && (
-          <div className="">
+          <div className="flex items-center">
             <TorrentActions torrent={{ ...torrent, stats: statsResponse }} />
+            <div ref={moreRef}>
+              <IconButton label="More actions" onClick={openMoreMenu}>
+                <BsThreeDotsVertical className="w-4 h-4" />
+              </IconButton>
+            </div>
           </div>
         )}
       </section>
