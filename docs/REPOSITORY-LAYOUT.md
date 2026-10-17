@@ -41,12 +41,10 @@ Merging them would mean choosing one set of defaults for all four cases.
 
 | Path | Purpose |
 |------|---------|
-| `bench/` | Original benchmark harness: a Python seeder, mock seeder and tracker, orchestrator, Prometheus config and a `run.sh` driver, all in Docker. |
-| `benchv2/` | Rust-native rewrite of the harness (see the table above). |
+| `benchv2/` | Current benchmark harness: a Rust-native binary (tracker, mock seeder, orchestrator) with its own `Cargo.toml`, `Dockerfile` and `docker-compose.yml`. Its real-seeder build context is `benchv2/seeder/`. |
 
-Both are kept because they are separate tools with separate dependencies, and
-neither is run by CI. Retiring `bench/` once `benchv2/` covers its scenarios is
-an open decision, not a settled one.
+The original Python harness under `bench/` is retired and no longer in the
+repository. `benchv2/` replaces it. Neither is run by CI.
 
 ## Documentation and release material
 
