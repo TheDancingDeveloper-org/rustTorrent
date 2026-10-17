@@ -48,6 +48,7 @@ import { ShortcutHelp } from "./ShortcutHelp";
 import { LiveAnnouncer } from "./LiveAnnouncer";
 import { TorrentDetailsModal } from "./modal/TorrentDetailsModal";
 import { DeleteTorrentModal } from "./modal/DeleteTorrentModal";
+import { KEY_HINT } from "../helper/shortcutList";
 
 interface ToolbarProps {
   title: string;
@@ -420,7 +421,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               className={
                 disabled || !hasSelection ? toolbarIconDisabled : toolbarIcon
               }
-              title="Resume selected"
+              title={`Resume selected (${KEY_HINT.run})`}
               aria-label="Resume selected"
             >
               <FaPlay className="w-3 h-3" />
@@ -431,7 +432,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               className={
                 disabled || !hasSelection ? toolbarIconDisabled : toolbarIcon
               }
-              title="Pause selected"
+              title={`Pause selected (${KEY_HINT.run})`}
               aria-label="Pause selected"
             >
               <FaPause className="w-3 h-3" />
@@ -444,7 +445,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                   ? toolbarIconDangerDisabled
                   : toolbarIconDanger
               }
-              title="Delete selected"
+              title={`Delete selected (${KEY_HINT.remove})`}
               aria-label="Delete selected"
             >
               <FaTrash className="w-3 h-3" />
@@ -477,7 +478,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             <button
               onClick={() => setConfigOpen(true)}
               className={toolbarIcon}
-              title="Configure"
+              title={`Configure (${KEY_HINT.settings})`}
               aria-label="Settings"
             >
               <BsSliders2 className="w-4 h-4" />
@@ -486,7 +487,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <button
             onClick={onLogsClick}
             className={toolbarIcon}
-            title="View logs"
+            title={`View logs (${KEY_HINT.logs})`}
             aria-label="View logs"
           >
             <BsBodyText className="w-4 h-4" />

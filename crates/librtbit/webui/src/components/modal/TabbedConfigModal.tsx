@@ -1,4 +1,4 @@
-import React, { useState, type ReactNode } from "react";
+import React, { useEffect, useRef, useState, type ReactNode } from "react";
 import { Modal } from "./Modal";
 import { ModalBody } from "./ModalBody";
 import { ModalFooter } from "./ModalFooter";
@@ -48,6 +48,9 @@ export const TabbedConfigModal: React.FC<TabbedConfigModalProps> = ({
 }) => {
   const [currentTab, setCurrentTab] = useState(initialTab || tabs[0]?.id);
   const [query, setQuery] = useState("");
+  // Set by a search result; the field is focused once its tab is showing
+  const [focusSettingId, setFocusSettingId] = useState<string | null>(null);
+  const tabsRef = useRef<HTMLDivElement>(null);
 
   const searching = query.trim() !== "";
   const matches = matchSettings(settings, tabs, query);
@@ -61,8 +64,20 @@ export const TabbedConfigModal: React.FC<TabbedConfigModalProps> = ({
 
   const jumpTo = (setting: SettingDefinition) => {
     setCurrentTab(setting.tab);
+    setFocusSettingId(setting.id);
     setQuery("");
   };
+
+  useEffect(() => {
+    if (!focusSettingId) return;
+    const field = tabsRef.current?.querySelector<HTMLElement>(
+      `[data-setting-id="${focusSettingId}"]`,
+    );
+    setFocusSettingId(null);
+    if (!field) return;
+    field.scrollIntoView({ block: "center" });
+    field.querySelector<HTMLElement>("input, select, textarea")?.focus();
+  }, [focusSettingId]);
 
   return (
     <Modal
@@ -120,11 +135,13 @@ export const TabbedConfigModal: React.FC<TabbedConfigModalProps> = ({
             ))}
           </TabList>
         )}
-        {tabs.map((tab) => (
-          <div key={tab.id} className={tab.id === activeTab ? "" : "hidden"}>
-            {tab.content}
-          </div>
-        ))}
+        <div ref={tabsRef}>
+          {tabs.map((tab) => (
+            <div key={tab.id} className={tab.id === activeTab ? "" : "hidden"}>
+              {tab.content}
+            </div>
+          ))}
+        </div>
       </ModalBody>
       <ModalFooter>
         {onClose && (

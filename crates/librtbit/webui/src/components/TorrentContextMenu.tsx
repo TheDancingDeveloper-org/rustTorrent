@@ -28,6 +28,7 @@ import {
   FaSyncAlt,
 } from "react-icons/fa";
 import { BsCheckSquareFill, BsSquare } from "react-icons/bs";
+import { KEY_HINT } from "../helper/shortcutList";
 
 export interface ContextMenuState {
   x: number;
@@ -453,6 +454,7 @@ export const TorrentContextMenu: React.FC<TorrentContextMenuProps> = ({
   const itemCls =
     "flex items-center gap-2 w-full px-3 py-1.5 text-sm text-left hover:bg-surface focus:bg-surface focus:outline-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed";
   const iconCls = "w-3.5 h-3.5 shrink-0";
+  const keyHintCls = "ml-auto pl-4 text-xs text-tertiary";
   const separator = (
     <div role="separator" className="border-t border-divider my-1" />
   );
@@ -493,6 +495,7 @@ export const TorrentContextMenu: React.FC<TorrentContextMenuProps> = ({
           >
             <FaPlay className={`${iconCls} text-green-600`} />
             {isBulk ? "Resume Selected" : "Resume"}
+            <span className={keyHintCls}>{KEY_HINT.run}</span>
           </button>
         )}
         {hasLive && (
@@ -504,6 +507,7 @@ export const TorrentContextMenu: React.FC<TorrentContextMenuProps> = ({
           >
             <FaPause className={`${iconCls} text-amber-500`} />
             {isBulk ? "Pause Selected" : "Pause"}
+            <span className={keyHintCls}>{KEY_HINT.run}</span>
           </button>
         )}
 
@@ -790,6 +794,7 @@ export const TorrentContextMenu: React.FC<TorrentContextMenuProps> = ({
         >
           <FaTrash className={`${iconCls}`} />
           {isBulk ? `Delete ${targets.length} Torrents...` : "Delete..."}
+          <span className={keyHintCls}>{KEY_HINT.remove}</span>
         </button>
       </div>
 

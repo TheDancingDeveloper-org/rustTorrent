@@ -1,6 +1,6 @@
-// Single list of individual settings. The settings search and the restart
-// markers are both generated from it, so a setting's label is written once.
-// The field JSX in each tab still spells its own label; keep the two in step.
+// Single list of individual settings. The settings search, the restart
+// markers and the field labels in each tab are all read from it, so a
+// setting's label is written once.
 
 export type SettingsTabId =
   | "general"
@@ -118,6 +118,13 @@ export const SETTINGS: readonly SettingDefinition[] = [
 
   { id: "feed-history-limit", tab: "rss", label: "Feed History Limit" },
 ];
+
+/** The registry label for a setting. Throws on an unknown id, so a typo fails loudly. */
+export const settingLabel = (id: string): string => {
+  const setting = SETTINGS.find((s) => s.id === id);
+  if (!setting) throw new Error(`Unknown setting id: ${id}`);
+  return setting.label;
+};
 
 export const restartRequiredSettings = (
   tab?: SettingsTabId,
