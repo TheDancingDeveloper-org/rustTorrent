@@ -37,9 +37,12 @@ already run.
 
 ```bash
 docker run -d --name rusttorrent \
-  -p 3030:3030 -p 4240:4240 \
-  -v ~/downloads:/downloads \
-  ghcr.io/thedancingdeveloper-org/rusttorrent:beta
+  -p 127.0.0.1:3030:3030 -p 4240:4240 \
+  -v rtbit-db:/home/rtbit/db \
+  -v rtbit-cache:/home/rtbit/cache \
+  -v ~/downloads:/home/rtbit/downloads \
+  -v ~/completed:/home/rtbit/completed \
+  ghcr.io/thedancingdeveloper-org/rusttorrent:latest
 ```
 
 Or build from the repository:
@@ -50,7 +53,28 @@ cd rustTorrent
 docker compose up --build -d
 ```
 
-**Ports:** `3030` (web UI + API), `4240` (BitTorrent TCP + uTP).
+**Ports:** `3030` (web UI + API), `4240` (BitTorrent TCP + uTP). Publishing `3030`
+without an address, as `-p 3030:3030` or the bundled compose file does, makes it
+reachable from your whole network. Until the first-run setup is complete, anyone
+who can reach that port can claim the setup, so finish setup before exposing it,
+or keep it on `127.0.0.1` as in the command above.
+
+**Volumes:** the image declares four volumes. Mount all of them to keep state
+across container upgrades and removal.
+
+| Container path | Contents |
+|----------------|----------|
+| `/home/rtbit/db` | Session, RSS, DHT and credential state (`XDG_DATA_HOME`). Back this up before upgrading. |
+| `/home/rtbit/cache` | Cache data that can be rebuilt. |
+| `/home/rtbit/downloads` | Default download folder for new torrents. |
+| `/home/rtbit/completed` | Folder for completed torrents, when a completed folder is configured. |
+
+**Image tags:** `latest` and `beta` both point at the most recent `v*` release tag,
+and `<tag>` (for example `v0.1.0-rc.1`) is that release. Pin an exact tag when you
+need reproducible deployments. Other tags are used for development:
+`staging` tracks `main`, `dev` tracks the `dev` branch, and `sha-<commit>` is an
+immutable build of one commit. Container images are published for `linux/amd64`
+and `linux/arm64` for release tags only; `main` and `dev` builds are `linux/amd64`.
 
 ### Prebuilt binaries
 
@@ -94,14 +118,30 @@ Most behaviour is configurable from the web UI's settings dialog or via CLI flag
 | `fuzz/` | Fuzz targets for the protocol parsers |
 | `docs/` | Architecture notes, testing guide, fork provenance |
 
+## Naming
+
+The project has several names, and they refer to different things:
+
+- **rustTorrent** is the project, the repository and the container image
+  (`rusttorrent`).
+- **`rtbit`** is the command-line program (`rtbit server start …`) and the
+  `crates/rtbit` package.
+- **`librtbit`** is the core engine library, in `crates/librtbit`. It is published
+  as the **`swarmforge`** package, so depend on `swarmforge` and import `librtbit`.
+  The other `librtbit-*` directories are published as `swarmforge-*` packages.
+- **rqbit** is the upstream project this repository forks. Its name appears only
+  in attribution.
+
 ## Attribution
 
 rustTorrent is a permanent hard fork of [rqbit](https://github.com/ikatson/rqbit) by
 **Igor Katson**, licensed under Apache 2.0. The original copyright and license notices
-are preserved; see [docs/FORK_PROVENANCE.md](docs/FORK_PROVENANCE.md) for details of what
-was imported and when. We're grateful for Igor's work — rustTorrent builds on that
-foundation.
+are preserved; see [NOTICE](NOTICE) and [docs/FORK_PROVENANCE.md](docs/FORK_PROVENANCE.md)
+for details of what was imported and when. We're grateful for Igor's work — rustTorrent
+builds on that foundation.
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE).
+Apache 2.0 — see [LICENSE](LICENSE). Contribution guidelines are in
+[CONTRIBUTING.md](CONTRIBUTING.md), the release history is in
+[CHANGELOG.md](CHANGELOG.md), and security reports follow [SECURITY.md](SECURITY.md).

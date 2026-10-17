@@ -1,6 +1,6 @@
 all:
 
-WEBUI_DIR ?= ../libs/librtbit/webui
+WEBUI_DIR ?= crates/librtbit/webui
 
 @PHONY: webui-deps
 webui-deps:
@@ -47,6 +47,10 @@ devserver-postgres:
 	echo -n '' > $(RTBIT_LOG_FILE) && \
 	cargo run $(CARGO_RUN_FLAGS) -- \
 	server start --fastresume --persistence-location $(RTBIT_POSTGRES_CONNECTION_STRING) $(RTBIT_OUTPUT_FOLDER)
+
+@PHONY: check-repo
+check-repo:
+	bash scripts/check-repo-hygiene.sh
 
 @PHONY: testserver
 testserver:
