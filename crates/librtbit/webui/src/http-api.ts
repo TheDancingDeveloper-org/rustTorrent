@@ -256,12 +256,20 @@ export const AuthAPI = {
     return response.json();
   },
 
-  setup: async (username: string, password: string): Promise<TokenResponse> => {
+  setup: async (
+    username: string,
+    password: string,
+    setupToken: string,
+  ): Promise<TokenResponse> => {
     const url = apiUrl + "/auth/setup";
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({
+        username,
+        password,
+        setup_token: setupToken,
+      }),
     });
     if (!response.ok) {
       const text = await response.text();

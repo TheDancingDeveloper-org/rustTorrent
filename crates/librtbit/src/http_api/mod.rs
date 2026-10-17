@@ -77,6 +77,7 @@ struct ApiDoc;
 pub struct HttpApi {
     api: Api,
     opts: HttpApiOptions,
+    login_limiter: auth::LoginLimiter,
 }
 
 #[derive(Default)]
@@ -112,11 +113,18 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         == 0
 }
 
+/// Paths reachable before any credentials exist: the setup status and setup endpoints,
+/// and the static web UI that hosts the setup page. Everything else waits for setup.
+fn is_pre_setup_path(path: &str) -> bool {
+    path == "/auth/status" || path == "/auth/setup" || path == "/web" || path.starts_with("/web/")
+}
+
 impl HttpApi {
     pub fn new(api: Api, opts: Option<HttpApiOptions>) -> Self {
         Self {
             api,
             opts: opts.unwrap_or_default(),
+            login_limiter: auth::LoginLimiter::default(),
         }
     }
 
@@ -207,15 +215,22 @@ impl HttpApi {
 
             if has_initial_creds {
                 info!("Enabling authentication in HTTP API");
-            } else if credential_store.is_some() {
-                info!("Authentication not yet configured; setup required via /auth/setup");
+            } else if let Some(cs) = &credential_store {
+                info!("Authentication not yet configured; the API is closed until setup is done");
+                if let Some(token) = cs.setup_token() {
+                    info!(
+                        "First-time setup token: {token} (send it as \"setup_token\" to POST /auth/setup, or enter it on the setup page)"
+                    );
+                }
             }
 
+            let limiter_state = state.clone();
             main_router = main_router.route_layer(axum::middleware::from_fn(
                 move |headers: HeaderMap, request: axum::extract::Request, next: Next| {
                     let token_store = token_store.clone();
                     let basic_auth = basic_auth.clone();
                     let credential_store = credential_store.clone();
+                    let limiter_state = limiter_state.clone();
                     async move {
                         // Always skip auth for these public endpoints
                         let path = request.uri().path();
@@ -233,10 +248,16 @@ impl HttpApi {
                             .is_some_and(|cs| cs.has_credentials());
                         let has_env_creds = basic_auth.is_some();
 
-                        // If no credentials configured anywhere, allow all requests through
-                        // (setup_required state — user needs to set up auth first)
                         if !has_stored_creds && !has_env_creds {
-                            return Ok(next.run(request).await);
+                            // Without a credential store, auth cannot be configured at all.
+                            if credential_store.is_none() {
+                                return Ok(next.run(request).await);
+                            }
+                            // Setup is pending: nothing but the setup page may be reached.
+                            if is_pre_setup_path(path) {
+                                return Ok(next.run(request).await);
+                            }
+                            return Ok((StatusCode::FORBIDDEN, "setup required").into_response());
                         }
 
                         // Try Bearer token first
@@ -271,12 +292,21 @@ impl HttpApi {
                             }
                         };
 
+                        // Failed Basic attempts count as login attempts. A locked-out client is
+                        // refused before any password hash is computed.
+                        let client = auth::client_addr_from_extensions(request.extensions());
+                        let now = std::time::Instant::now();
+                        if let Some(wait) = limiter_state.login_limiter.check(client, now) {
+                            return Ok(auth::too_many_login_attempts(wait));
+                        }
+
                         if let Some((u, p)) = user_pass.split_once(':') {
                             // Check credential store
                             if has_stored_creds
                                 && let Some(cs) = &credential_store
                                 && cs.validate(u, p)
                             {
+                                limiter_state.login_limiter.record_success(client);
                                 return Ok(next.run(request).await);
                             }
 
@@ -285,10 +315,12 @@ impl HttpApi {
                                 && constant_time_eq(u.as_bytes(), env_u.as_bytes())
                                 && constant_time_eq(p.as_bytes(), env_p.as_bytes())
                             {
+                                limiter_state.login_limiter.record_success(client);
                                 return Ok(next.run(request).await);
                             }
                         }
 
+                        limiter_state.login_limiter.record_failure(client, now);
                         Err(ApiError::unauthorized())
                     }
                 },
@@ -347,5 +379,25 @@ impl HttpApi {
                 .context("error running HTTP API")
         }
         .boxed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_pre_setup_path;
+
+    #[test]
+    fn only_setup_status_and_web_ui_are_reachable_before_setup() {
+        assert!(is_pre_setup_path("/auth/status"));
+        assert!(is_pre_setup_path("/auth/setup"));
+        assert!(is_pre_setup_path("/web"));
+        assert!(is_pre_setup_path("/web/"));
+        assert!(is_pre_setup_path("/web/assets/index.js"));
+
+        assert!(!is_pre_setup_path("/"));
+        assert!(!is_pre_setup_path("/torrents"));
+        assert!(!is_pre_setup_path("/fs/browse"));
+        assert!(!is_pre_setup_path("/auth/change_credentials"));
+        assert!(!is_pre_setup_path("/webhooks/secret"));
     }
 }
