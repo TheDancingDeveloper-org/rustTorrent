@@ -22,6 +22,14 @@ fi
 
 version="0.1.0-rc.1"
 
+# Pre-release versions (a '-' suffix such as 0.1.0-rc.1) are never published to
+# crates.io from this script. Exit 0 so a release pipeline that calls it for every
+# tag does not fail on a pre-release tag.
+if [[ "$version" == *-* ]]; then
+  echo "skipping pre-release $version: crates.io publication is for final versions only"
+  exit 0
+fi
+
 # Keep this list explicit: Cargo package publication must follow dependency
 # order, and directory discovery can publish the binary or a leaf before the
 # family it depends on. The old librtbit-* repositories and packages remain

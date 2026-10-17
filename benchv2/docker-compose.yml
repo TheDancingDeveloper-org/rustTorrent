@@ -15,7 +15,7 @@ services:
     networks: [bench]
 
   seeder:
-    build: ../bench/seeder
+    build: ./seeder
     deploy:
       replicas: ${MAX_SEEDERS:-10}
     volumes:
