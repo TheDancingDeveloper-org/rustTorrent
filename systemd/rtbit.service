@@ -1,11 +1,28 @@
 [Unit]
 Description=rtbit Bittorrent client
+Documentation=https://github.com/TheDancingDeveloper-org/rustTorrent
 After=rtbit.socket
 Requires=rtbit.socket
 
 [Service]
+Type=simple
 EnvironmentFile=-%E/rtbit/rtbit.conf
-ExecStart=rtbit server start %h/Downloads
+ExecStart=/usr/local/bin/rtbit server start %h/Downloads
+Restart=on-failure
+RestartSec=5
+# Gives the shutdown path time to flush session persistence before SIGKILL.
+TimeoutStopSec=30
+
+# Hardening. Downloads and the rtbit data/cache dirs live under the user's
+# home, so home is the only writable location besides the private /tmp.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=%h
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
 
 [Install]
 Also=rtbit.socket

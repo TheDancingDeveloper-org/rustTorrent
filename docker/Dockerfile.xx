@@ -1,7 +1,7 @@
 # Dockerfile for cross compiling rtbit binaries from scratch inside docker.
 FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
 
-FROM --platform=$BUILDPLATFORM rust:alpine AS builder
+FROM --platform=$BUILDPLATFORM rust:1.99-alpine AS builder
 COPY --from=xx / /
 
 RUN apk update && apk add clang lld npm pkgconf

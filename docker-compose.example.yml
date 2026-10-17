@@ -10,7 +10,7 @@ services:
     environment:
       PUID: "1000"
       PGID: "1000"
-      TZ: "Australia/Sydney"
+      TZ: "${TZ:-Etc/UTC}"
       RTBIT_UPNP_SERVER_ENABLE: "false"
       RTBIT_FASTRESUME: "true"
       RTBIT_DOWNLOAD_FOLDER: "/home/rtbit/downloads"
