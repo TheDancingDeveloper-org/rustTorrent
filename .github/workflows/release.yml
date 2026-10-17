@@ -83,6 +83,14 @@ jobs:
           install -Dm644 packaging/linux/rtbit.sysusers.conf "$stage/usr/lib/sysusers.d/rtbit.conf"
           install -Dm644 systemd/rtbit.conf "$stage/etc/rtbit/rtbit.conf"
           tar --owner=0 --group=0 --numeric-owner -C "$stage" -czf "release-artifacts/rtbit-$tag-service-files.tar.gz" .
+          # Vendored crates for the offline Flatpak build. cargo vendor prints
+          # the source-replacement config, which goes beside vendor/ so that
+          # extracting at the repository root gives a working tree.
+          vendor_stage=$(mktemp -d)
+          mkdir -p "$vendor_stage/.cargo"
+          cargo vendor --locked vendor > "$vendor_stage/.cargo/config.toml"
+          mv vendor "$vendor_stage/vendor"
+          tar --owner=0 --group=0 --numeric-owner -C "$vendor_stage" -cJf "release-artifacts/rtbit-$tag-vendor.tar.xz" .
           (cd release-artifacts && sha256sum rtbit-*) > "release-artifacts/SHA256SUMS-$tag.txt"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -166,6 +174,16 @@ jobs:
         with:
           name: channel-homebrew
           path: rendered/homebrew/
+          if-no-files-found: error
+      - name: Render Flatpak manifest and metainfo
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          packaging/scripts/render-flatpak.sh "$tag" release-artifacts rendered/flatpak
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: channel-flatpak
+          path: rendered/flatpak/
           if-no-files-found: error
 
   publish:

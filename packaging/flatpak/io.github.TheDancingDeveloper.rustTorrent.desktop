@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=rtbit
+GenericName=BitTorrent client
+Comment=BitTorrent client written in Rust, with a web UI and HTTP API
+Exec=rtbit-desktop %U
+Icon=io.github.TheDancingDeveloper.rustTorrent
+Terminal=false
+Categories=Network;FileTransfer;
+MimeType=x-scheme-handler/magnet;
+StartupWMClass=rtbit-desktop
