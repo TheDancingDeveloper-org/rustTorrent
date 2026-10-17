@@ -302,6 +302,10 @@ pub struct ManagedTorrentShared {
 
     /// Set while the low-disk guard holds this download. The guard resumes it.
     pub(crate) held_for_disk: AtomicBool,
+
+    /// Set while the torrent is paused because it hit its share limit. Only a
+    /// user resume clears it; the policy pass never resumes such a torrent.
+    pub(crate) share_paused: AtomicBool,
 }
 
 impl ManagedTorrentShared {

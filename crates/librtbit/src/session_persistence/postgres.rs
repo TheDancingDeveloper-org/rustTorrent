@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crate::{
-    api::TorrentIdOrHash, bitv::BitV, bitv_factory::BitVFactory, session::TorrentId,
-    torrent_state::ManagedTorrentHandle, type_aliases::BF,
+    api::TorrentIdOrHash, bitv::BitV, bitv_factory::BitVFactory, session::PolicyFlags,
+    session::TorrentId, torrent_state::ManagedTorrentHandle, type_aliases::BF,
 };
 use anyhow::Context;
 use futures::{StreamExt, stream::BoxStream};
@@ -27,6 +27,9 @@ struct TorrentsTableRecord {
     output_folder_root: Option<String>,
     only_files: Option<Vec<i32>>,
     is_paused: bool,
+    queued: bool,
+    held_for_disk: bool,
+    share_paused: bool,
 }
 
 impl TorrentsTableRecord {
@@ -46,6 +49,9 @@ impl TorrentsTableRecord {
                 category: None,
                 added_on: None,
                 completion_on: None,
+                queued: self.queued,
+                held_for_disk: self.held_for_disk,
+                share_paused: self.share_paused,
             },
         ))
     }
@@ -87,6 +93,15 @@ impl PostgresSessionStorage {
 
         exec!("ALTER TABLE torrents ADD COLUMN IF NOT EXISTS have_bitfield BYTEA");
         exec!("ALTER TABLE torrents ADD COLUMN IF NOT EXISTS output_folder_root TEXT");
+        exec!(
+            "ALTER TABLE torrents ADD COLUMN IF NOT EXISTS queued BOOLEAN NOT NULL DEFAULT FALSE"
+        );
+        exec!(
+            "ALTER TABLE torrents ADD COLUMN IF NOT EXISTS held_for_disk BOOLEAN NOT NULL DEFAULT FALSE"
+        );
+        exec!(
+            "ALTER TABLE torrents ADD COLUMN IF NOT EXISTS share_paused BOOLEAN NOT NULL DEFAULT FALSE"
+        );
 
         Ok(Self { pool })
     }
@@ -186,8 +201,9 @@ impl SessionPersistenceStore for PostgresSessionStorage {
             .iter()
             .map(|tracker| tracker.to_string())
             .collect::<Vec<_>>();
+        let policy = PolicyFlags::read(torrent.shared());
         sqlx::query(
-            "UPDATE torrents SET trackers = $1, only_files = $2, is_paused = $3 WHERE id = $4",
+            "UPDATE torrents SET trackers = $1, only_files = $2, is_paused = $3, queued = $4, held_for_disk = $5, share_paused = $6 WHERE id = $7",
         )
         .bind(trackers)
         .bind(torrent.only_files().map(|v| {
@@ -196,6 +212,9 @@ impl SessionPersistenceStore for PostgresSessionStorage {
                 .collect::<Vec<i32>>()
         }))
         .bind(torrent.is_paused())
+        .bind(policy.queued)
+        .bind(policy.held_for_disk)
+        .bind(policy.share_paused)
         .bind::<i32>(id.try_into()?)
         .execute(&self.pool)
         .await

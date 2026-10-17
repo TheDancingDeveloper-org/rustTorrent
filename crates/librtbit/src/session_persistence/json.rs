@@ -21,6 +21,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, trace, warn};
 
 use super::{SerializedTorrent, SessionPersistenceStore, SessionSettings};
+use crate::session::PolicyFlags;
 
 #[derive(Serialize, Deserialize, Default)]
 struct SerializedSessionDatabase {
@@ -142,6 +143,7 @@ impl JsonSessionPersistenceStore {
             bail!("storages other than FilesystemStorageFactory are not supported");
         }
 
+        let policy = PolicyFlags::read(torrent.shared());
         let st = SerializedTorrent {
             trackers: torrent
                 .shared()
@@ -155,6 +157,9 @@ impl JsonSessionPersistenceStore {
             torrent_bytes: Default::default(),
             only_files: torrent.only_files().clone(),
             is_paused: torrent.is_paused(),
+            queued: policy.queued,
+            held_for_disk: policy.held_for_disk,
+            share_paused: policy.share_paused,
             output_folder: torrent.shared().options.output_folder.clone(),
             output_folder_root: torrent.shared().options.output_folder_root.clone(),
             category: torrent.shared().category.read().clone(),

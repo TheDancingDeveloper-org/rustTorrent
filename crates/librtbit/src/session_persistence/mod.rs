@@ -14,7 +14,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
     AddTorrent, AddTorrentOptions, bitv_factory::BitVFactory, category::TorrentCategory,
-    session::TorrentId, torrent_state::ManagedTorrentHandle,
+    session::PolicyFlags, session::TorrentId, torrent_state::ManagedTorrentHandle,
 };
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -46,11 +46,28 @@ pub struct SerializedTorrent {
     added_on: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     completion_on: Option<u64>,
+    /// Policy state from the queue, disk guard and share limits. Absent in
+    /// state written before these flags were persisted, so it reads as false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    queued: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    held_for_disk: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    share_paused: bool,
 }
 
 impl SerializedTorrent {
     pub fn info_hash(&self) -> &Id20 {
         &self.info_hash
+    }
+
+    /// The policy flags to reapply once the torrent is added back.
+    pub(crate) fn policy_flags(&self) -> PolicyFlags {
+        PolicyFlags {
+            queued: self.queued,
+            held_for_disk: self.held_for_disk,
+            share_paused: self.share_paused,
+        }
     }
 
     #[allow(dead_code)]
