@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { FaPause, FaPlay, FaTrash } from "react-icons/fa";
@@ -15,6 +16,7 @@ import {
   BsMoon,
   BsSliders2,
   BsSun,
+  BsThreeDotsVertical,
 } from "react-icons/bs";
 import { HiOutlineMenu } from "react-icons/hi";
 import debounce from "lodash.debounce";
@@ -98,6 +100,25 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const authState = useAuthStore((s) => s.state);
   const refreshToken = useAuthStore((s) => s.refreshToken);
   const clearTokens = useAuthStore((s) => s.clearTokens);
+
+  // Overflow menu for the utility icons below sm
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!moreRef.current?.contains(e.target as Node)) setMoreOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMoreOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [moreOpen]);
 
   const handleLogout = async () => {
     if (refreshToken) {
@@ -197,19 +218,23 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const navTabActive = `${navTab} bg-primary/12 text-primary`;
   const navTabInactive = `${navTab} text-secondary hover:text-text hover:bg-surface/50`;
 
+  // touch-target widens the hit area on coarse pointers; applied to every
+  // variant so the icon buttons keep the same size when disabled.
   const toolbarIcon =
-    "p-1.5 text-secondary hover:text-text hover:bg-surface/50 rounded-lg cursor-pointer transition-colors inline-flex items-center justify-center";
+    "p-1.5 touch-target text-secondary hover:text-text hover:bg-surface/50 rounded-lg cursor-pointer transition-colors inline-flex items-center justify-center";
   const toolbarIconDisabled =
-    "p-1.5 text-tertiary rounded-lg inline-flex items-center justify-center opacity-40 cursor-not-allowed";
+    "p-1.5 touch-target text-tertiary rounded-lg inline-flex items-center justify-center opacity-40 cursor-not-allowed";
   const toolbarIconDanger =
-    "p-1.5 text-error hover:text-error hover:bg-error/10 rounded-lg cursor-pointer transition-colors inline-flex items-center justify-center";
+    "p-1.5 touch-target text-error hover:text-error hover:bg-error/10 rounded-lg cursor-pointer transition-colors inline-flex items-center justify-center";
   const toolbarIconDangerDisabled =
-    "p-1.5 text-error rounded-lg inline-flex items-center justify-center opacity-40 cursor-not-allowed";
+    "p-1.5 touch-target text-error rounded-lg inline-flex items-center justify-center opacity-40 cursor-not-allowed";
+  const toolbarMenuItem =
+    "inline-flex items-center gap-2 px-2.5 py-1.5 text-sm text-secondary hover:text-text hover:bg-surface/50 rounded-md cursor-pointer whitespace-nowrap";
 
   return (
-    <div className="bg-surface-raised drop-shadow-lg">
+    <div className="relative z-30 bg-surface-raised drop-shadow-lg">
       {/* ── Single unified row ── */}
-      <div className="flex items-center gap-1 px-2 py-1.5">
+      <div className="flex flex-nowrap items-center gap-0.5 sm:gap-1 px-1 sm:px-2 py-1 sm:py-1.5">
         {/* Mobile hamburger */}
         {!isLargeScreen && (
           <button
@@ -219,6 +244,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             }}
             className="p-1.5 text-secondary hover:text-primary cursor-pointer"
             title="Open sidebar"
+            aria-label="Open sidebar"
           >
             <HiOutlineMenu className="w-5 h-5" />
           </button>
@@ -270,20 +296,23 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
         {/* Search input (torrents page only) */}
         {showTorrentActions && (
-          <div className="relative hidden lg:block">
+          <div className="relative hidden lg:block min-w-0 shrink">
             <GoSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-tertiary" />
             <input
               type="text"
               data-search-input
+              aria-label="Filter torrents"
               value={localSearch}
               onChange={handleSearchChange}
-              placeholder="Filter..."
-              className="pl-8 pr-7 py-1.5 w-44 text-sm bg-surface/50 border border-divider rounded-lg focus:outline-none focus:border-primary placeholder:text-tertiary"
+              placeholder="Filter torrents…"
+              className="pl-8 pr-7 py-1.5 w-44 shrink min-w-0 text-sm bg-surface/50 border border-divider rounded-lg focus-ring focus:border-primary placeholder:text-tertiary"
             />
             {localSearch && (
               <button
+                type="button"
                 onClick={clearSearch}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-tertiary hover:text-secondary rounded cursor-pointer"
+                aria-label="Clear search"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-tertiary hover:text-secondary rounded cursor-pointer"
               >
                 <GoX className="w-3.5 h-3.5" />
               </button>
@@ -298,10 +327,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
         {/* Torrent action group */}
         {showTorrentActions && (
-          <div className="flex items-center gap-0.5 bg-surface/30 rounded-lg p-0.5">
-            <MagnetInput className="grow-0 justify-center !px-2.5 !py-1 !text-sm !rounded-lg" />
+          <div className="flex items-center gap-0 sm:gap-0.5 bg-surface/30 rounded-lg p-0 sm:p-0.5">
+            <MagnetInput className="grow-0 justify-center !px-2 sm:!px-2.5 !py-1 !text-sm !rounded-lg" />
             <FileInput
-              className="grow-0 justify-center !px-2.5 !py-1 !text-sm !rounded-lg"
+              className="grow-0 justify-center !px-2 sm:!px-2.5 !py-1 !text-sm !rounded-lg"
               onMultiFileSelect={onMultiFileSelect}
             />
 
@@ -314,6 +343,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 disabled || !hasSelection ? toolbarIconDisabled : toolbarIcon
               }
               title="Resume selected"
+              aria-label="Resume selected"
             >
               <FaPlay className="w-3 h-3" />
             </button>
@@ -324,6 +354,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 disabled || !hasSelection ? toolbarIconDisabled : toolbarIcon
               }
               title="Pause selected"
+              aria-label="Pause selected"
             >
               <FaPause className="w-3 h-3" />
             </button>
@@ -336,6 +367,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                   : toolbarIconDanger
               }
               title="Delete selected"
+              aria-label="Delete selected"
             >
               <FaTrash className="w-3 h-3" />
             </button>
@@ -351,44 +383,134 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Divider before utility icons */}
         <div className="hidden lg:block w-px h-5 bg-divider mx-1" />
 
-        {/* Utility icons */}
+        {/* Utility icons: inline from sm up, folded into a menu below sm */}
         {menuButtons?.map((b, i) => (
           <span key={i}>{b}</span>
         ))}
         {showBuiltInConfigButton && (
-          <>
+          <ConfigModal
+            isOpen={configOpen}
+            onClose={() => setConfigOpen(false)}
+            version={version}
+          />
+        )}
+        <div className="hidden sm:contents">
+          {showBuiltInConfigButton && (
             <button
               onClick={() => setConfigOpen(true)}
               className={toolbarIcon}
               title="Configure"
+              aria-label="Settings"
             >
               <BsSliders2 className="w-4 h-4" />
             </button>
-            <ConfigModal
-              isOpen={configOpen}
-              onClose={() => setConfigOpen(false)}
-              version={version}
-            />
-          </>
-        )}
-        <button onClick={onLogsClick} className={toolbarIcon} title="View logs">
-          <BsBodyText className="w-4 h-4" />
-        </button>
-        <button
-          onClick={handleDarkModeToggle}
-          className={toolbarIcon}
-          title="Toggle dark mode"
-        >
-          {isDark ? (
-            <BsSun className="w-4 h-4" />
-          ) : (
-            <BsMoon className="w-4 h-4" />
           )}
-        </button>
-        {authState === "authenticated" && (
-          <button onClick={handleLogout} className={toolbarIcon} title="Logout">
-            <BsBoxArrowRight className="w-4 h-4" />
+          <button
+            onClick={onLogsClick}
+            className={toolbarIcon}
+            title="View logs"
+            aria-label="View logs"
+          >
+            <BsBodyText className="w-4 h-4" />
           </button>
+          <button
+            onClick={handleDarkModeToggle}
+            className={toolbarIcon}
+            title="Toggle dark mode"
+            aria-label={
+              isDark ? "Switch to light theme" : "Switch to dark theme"
+            }
+            aria-pressed={isDark}
+          >
+            {isDark ? (
+              <BsSun className="w-4 h-4" />
+            ) : (
+              <BsMoon className="w-4 h-4" />
+            )}
+          </button>
+        </div>
+        <div ref={moreRef} className="relative sm:hidden">
+          <button
+            onClick={() => setMoreOpen((open) => !open)}
+            className={toolbarIcon}
+            title="More actions"
+            aria-label="More actions"
+            aria-haspopup="menu"
+            aria-expanded={moreOpen}
+          >
+            <BsThreeDotsVertical className="w-4 h-4" />
+          </button>
+          {moreOpen && (
+            <div
+              role="menu"
+              className="absolute right-0 top-full mt-1 z-20 flex flex-col min-w-40 p-1 bg-surface-raised border border-divider rounded-lg shadow-lg"
+            >
+              {showBuiltInConfigButton && (
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setMoreOpen(false);
+                    setConfigOpen(true);
+                  }}
+                  className={toolbarMenuItem}
+                >
+                  <BsSliders2 className="w-4 h-4" />
+                  Settings
+                </button>
+              )}
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setMoreOpen(false);
+                  onLogsClick();
+                }}
+                className={toolbarMenuItem}
+              >
+                <BsBodyText className="w-4 h-4" />
+                View logs
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setMoreOpen(false);
+                  handleDarkModeToggle();
+                }}
+                className={toolbarMenuItem}
+              >
+                {isDark ? (
+                  <BsSun className="w-4 h-4" />
+                ) : (
+                  <BsMoon className="w-4 h-4" />
+                )}
+                {isDark ? "Light theme" : "Dark theme"}
+              </button>
+              {authState === "authenticated" && (
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setMoreOpen(false);
+                    handleLogout();
+                  }}
+                  className={toolbarMenuItem}
+                >
+                  <BsBoxArrowRight className="w-4 h-4" />
+                  Log out
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+        {authState === "authenticated" && (
+          <div className="hidden sm:contents">
+            <button
+              onClick={handleLogout}
+              className={toolbarIcon}
+              title="Logout"
+              aria-label="Log out"
+            >
+              <BsBoxArrowRight className="w-4 h-4" />
+            </button>
+          </div>
         )}
       </div>
 
