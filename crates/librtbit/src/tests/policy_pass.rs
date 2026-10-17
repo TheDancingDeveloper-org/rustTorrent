@@ -266,13 +266,15 @@ async fn share_paused_seed_stays_paused_across_restart() -> anyhow::Result<()> {
     let id = seed.id();
 
     // Any upload ratio reaches zero, so the limit trips at once.
-    session.set_share_limits(
-        &seed,
-        ShareLimits {
-            max_ratio: Some(0.0),
-            max_seeding_time: None,
-        },
-    );
+    session
+        .set_share_limits(
+            &seed,
+            ShareLimits {
+                max_ratio: Some(0.0),
+                max_seeding_time: None,
+            },
+        )
+        .await;
     session.policy_pass().await;
     assert!(seed.is_paused());
     assert!(seed.shared().share_paused.load(Ordering::Relaxed));
@@ -352,7 +354,7 @@ async fn share_limits_and_uploads_survive_restart() -> anyhow::Result<()> {
     let id = seed.id();
     let total = seed.stats().total_bytes;
 
-    session.set_share_limits(&seed, limits);
+    session.set_share_limits(&seed, limits).await;
     // One full copy uploaded so far: ratio 1.0, under the 1.5 limit.
     seed.shared()
         .uploaded_bytes_base
@@ -509,6 +511,151 @@ async fn existing_part_file_is_adopted_with_switch_off() -> anyhow::Result<()> {
             "adopted .part data must be kept"
         );
     }
+
+    session.stop().await;
+    Ok(())
+}
+
+/// A session that saves torrent state every `interval`. Cancelling `kill` stops
+/// the session's tasks without a final save, as a killed process would.
+async fn create_session_saving_every(
+    output_dir: &Path,
+    persist: &Path,
+    interval: Duration,
+    kill: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<Arc<Session>> {
+    Session::new_with_opts(
+        output_dir.to_owned(),
+        SessionOptions {
+            disable_dht: true,
+            disable_dht_persistence: true,
+            disable_local_service_discovery: true,
+            persistence: Some(SessionPersistenceConfig::Json {
+                folder: Some(persist.to_owned()),
+            }),
+            persist_interval: Some(interval),
+            cancellation_token: Some(kill),
+            ..Default::default()
+        },
+    )
+    .await
+    .context("error creating test session")
+}
+
+/// A finished seed in `payload`, added to `session`, with the given share limits.
+async fn add_finished_seed(
+    session: &Arc<Session>,
+    payload: &Path,
+    limits: ShareLimits,
+) -> anyhow::Result<ManagedTorrentHandle> {
+    let torrent = create_torrent_bytes(payload).await?;
+    let seed = session
+        .add_torrent(
+            AddTorrent::from_bytes(torrent),
+            Some(AddTorrentOptions {
+                overwrite: true,
+                output_folder: Some(payload.to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+        )
+        .await?
+        .into_handle()
+        .context("expected a torrent handle")?;
+    timeout(Duration::from_secs(10), seed.wait_until_initialized()).await??;
+    anyhow::ensure!(seed.stats().finished, "seed should start out finished");
+    session.set_share_limits(&seed, limits).await;
+    Ok(seed)
+}
+
+/// Upload totals reach disk through the periodic save when the session is dropped
+/// without a clean stop. The total is set after the last save, so only the timer
+/// can have written it.
+#[tokio::test(flavor = "multi_thread")]
+async fn upload_total_saved_by_timer_survives_drop_without_stop() -> anyhow::Result<()> {
+    setup_test_logging();
+
+    let payload = create_default_random_dir_with_torrents(2, 64 * 1024, Some("policy_timer"));
+    let root = TempDir::with_prefix("policy_timer_out")?;
+    let persist = TempDir::with_prefix("policy_timer_state")?;
+    let limits = ShareLimits {
+        max_ratio: Some(3.0),
+        max_seeding_time: None,
+    };
+
+    let kill = tokio_util::sync::CancellationToken::new();
+    let session = create_session_saving_every(
+        payload.path(),
+        persist.path(),
+        Duration::from_millis(100),
+        kill.clone(),
+    )
+    .await?;
+    let seed = add_finished_seed(&session, payload.path(), limits).await?;
+    let id = seed.id();
+    let total = seed.stats().total_bytes;
+
+    // Recorded after the save that set the limits, so only the timer can persist it.
+    seed.shared()
+        .uploaded_bytes_base
+        .store(total, Ordering::Relaxed);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Kill without stop(): the session's tasks end with no final save.
+    kill.cancel();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(seed);
+    drop(session);
+
+    let session = create_session(root.path(), Some(persist.path())).await?;
+    let restored = handle_by_id(&session, id)?;
+    timeout(Duration::from_secs(10), restored.wait_until_initialized()).await??;
+    assert_eq!(
+        restored.uploaded_bytes(),
+        total,
+        "the upload total must reach disk through the timer"
+    );
+
+    session.stop().await;
+    Ok(())
+}
+
+/// Share limits set with `set_share_limits` are saved at once, so they survive a
+/// drop without a clean stop even when the periodic save never runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn share_limits_saved_on_set_survive_drop_without_stop() -> anyhow::Result<()> {
+    setup_test_logging();
+
+    let payload = create_default_random_dir_with_torrents(2, 64 * 1024, Some("policy_setlimits"));
+    let root = TempDir::with_prefix("policy_setlimits_out")?;
+    let persist = TempDir::with_prefix("policy_setlimits_state")?;
+    let limits = ShareLimits {
+        max_ratio: Some(2.5),
+        max_seeding_time: Some(Duration::from_secs(7200)),
+    };
+
+    // An hour between timer saves, so the save in `set_share_limits` is the only one.
+    let kill = tokio_util::sync::CancellationToken::new();
+    let session = create_session_saving_every(
+        payload.path(),
+        persist.path(),
+        Duration::from_secs(3600),
+        kill.clone(),
+    )
+    .await?;
+    let seed = add_finished_seed(&session, payload.path(), limits).await?;
+    let id = seed.id();
+    kill.cancel();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(seed);
+    drop(session);
+
+    let session = create_session(root.path(), Some(persist.path())).await?;
+    let restored = handle_by_id(&session, id)?;
+    timeout(Duration::from_secs(10), restored.wait_until_initialized()).await??;
+    assert_eq!(
+        session.share_limits(&restored),
+        limits,
+        "limits set on the session must be saved without a stop"
+    );
 
     session.stop().await;
     Ok(())

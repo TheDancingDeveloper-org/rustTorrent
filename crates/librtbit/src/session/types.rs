@@ -298,6 +298,11 @@ pub struct SessionOptions {
     /// all remembered torrents will continue where they left off.
     pub persistence: Option<SessionPersistenceConfig>,
 
+    /// How often a running session saves each torrent's state (upload totals, share
+    /// limits, queue flags), so a kill loses at most this much. `None` means 60
+    /// seconds. Has no effect without persistence.
+    pub persist_interval: Option<Duration>,
+
     /// The peer ID to use. If not specified, a random one will be generated.
     pub peer_id: Option<Id20>,
 
