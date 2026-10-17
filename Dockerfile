@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Multi-stage build: compile rtbit with webui from source, output minimal scratch image.
 
-FROM rust:alpine AS builder
+FROM rust:1.99-alpine AS builder
 
 RUN apk update && apk add clang lld npm pkgconf musl-dev openssl-dev openssl-libs-static curl git
 
@@ -49,3 +49,9 @@ VOLUME /home/rtbit/completed
 
 EXPOSE 3030
 EXPOSE 4240
+
+# Liveness probe against the unauthenticated /healthz route. The port is taken
+# from RTBIT_HTTP_API_LISTEN_ADDR so an overridden listen address still probes
+# the right socket. Needs the /healthz route registered in the HTTP API router.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -q -O /dev/null "http://127.0.0.1:${RTBIT_HTTP_API_LISTEN_ADDR##*:}/healthz"

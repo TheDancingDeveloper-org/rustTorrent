@@ -21,7 +21,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: indexarr
-      POSTGRES_PASSWORD: indexarr
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env or the shell}
       POSTGRES_DB: indexarr
     volumes:
       - indexarr-pgdata:/var/lib/postgresql/data
@@ -41,7 +41,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      INDEXARR_DB_URL: postgresql+asyncpg://indexarr:indexarr@postgres:5432/indexarr
+      INDEXARR_DB_URL: postgresql+asyncpg://indexarr:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env or the shell}@postgres:5432/indexarr
       INDEXARR_DB_BACKEND: postgresql
       INDEXARR_HOST: "0.0.0.0"
       INDEXARR_PORT: "8080"
