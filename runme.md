@@ -19,7 +19,7 @@ To start the app/stack, you have a few options:
   Then open http://localhost:3030.
 
   Mock UI (no backend at all):
-  cd ../libs/librtbit/webui && npm run dev:mock
+  cd crates/librtbit/webui && npm run dev:mock
   Opens http://localhost:3032/mock.html with 1000 fake torrents.
 
 Release and CI process:
