@@ -215,9 +215,10 @@ export const ActionBar: React.FC<ActionBarProps> = ({ hideFilters }) => {
 
           {/* Status filter */}
           <select
+            aria-label="Status filter"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-            className="py-1 px-2 text-sm bg-surface border border-divider rounded focus:outline-none focus:border-primary"
+            className="py-1 px-2 text-sm bg-surface border border-divider rounded focus-ring focus:border-primary"
           >
             {(Object.keys(STATUS_FILTER_LABELS) as StatusFilter[]).map(
               (status) => (
@@ -229,20 +230,23 @@ export const ActionBar: React.FC<ActionBarProps> = ({ hideFilters }) => {
           </select>
 
           {/* Search input */}
-          <div className="relative">
+          <div className="relative w-48 max-w-full min-w-0 shrink">
             <GoSearch className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-tertiary" />
             <input
               type="text"
               data-search-input
+              aria-label="Filter torrents"
               value={localSearch}
               onChange={handleSearchChange}
-              placeholder="Search..."
-              className="pl-7 pr-7 py-1 w-48 text-sm bg-surface border border-divider rounded focus:outline-none focus:border-primary placeholder:text-tertiary"
+              placeholder="Filter torrents…"
+              className="pl-7 pr-7 py-1 w-full text-sm bg-surface border border-divider rounded-lg focus-ring focus:border-primary placeholder:text-tertiary"
             />
             {localSearch && (
               <button
+                type="button"
                 onClick={clearSearch}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-tertiary hover:text-secondary rounded cursor-pointer"
+                aria-label="Clear search"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-tertiary hover:text-secondary rounded cursor-pointer"
               >
                 <GoX className="w-3.5 h-3.5" />
               </button>
