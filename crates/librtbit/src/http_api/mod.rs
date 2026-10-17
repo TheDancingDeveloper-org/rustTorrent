@@ -125,6 +125,16 @@ async fn admit(role: auth::Role, mut request: axum::extract::Request, next: Next
     next.run(request).await
 }
 
+/// Auth endpoints that need no session. Logout is one: it only revokes the refresh token it is
+/// sent, which the caller can only hold if it was issued to them, and it must work for a
+/// read-only caller (whose POSTs are otherwise refused) and after the access token has expired.
+fn is_public_auth_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/auth/login" | "/auth/refresh" | "/auth/logout" | "/auth/status" | "/auth/setup"
+    )
+}
+
 /// Paths reachable before any credentials exist: the setup status and setup endpoints,
 /// and the static web UI that hosts the setup page. Everything else waits for setup.
 fn is_pre_setup_path(path: &str) -> bool {
@@ -255,11 +265,7 @@ impl HttpApi {
                     async move {
                         // Always skip auth for these public endpoints
                         let path = request.uri().path();
-                        if path == "/auth/login"
-                            || path == "/auth/refresh"
-                            || path == "/auth/status"
-                            || path == "/auth/setup"
-                        {
+                        if is_public_auth_path(path) {
                             return Ok(next.run(request).await);
                         }
 
@@ -430,7 +436,24 @@ impl HttpApi {
 
 #[cfg(test)]
 mod tests {
-    use super::is_pre_setup_path;
+    use super::{is_pre_setup_path, is_public_auth_path};
+
+    #[test]
+    fn logout_needs_no_session_but_other_auth_writes_do() {
+        for path in [
+            "/auth/login",
+            "/auth/refresh",
+            "/auth/logout",
+            "/auth/status",
+            "/auth/setup",
+        ] {
+            assert!(is_public_auth_path(path), "{path}");
+        }
+        assert!(!is_public_auth_path("/auth/change_credentials"));
+        assert!(!is_public_auth_path("/auth/api_keys"));
+        assert!(!is_public_auth_path("/auth/logout/extra"));
+        assert!(!is_public_auth_path("/torrents"));
+    }
 
     #[test]
     fn only_setup_status_and_web_ui_are_reachable_before_setup() {

@@ -1297,7 +1297,7 @@ fn run_auth_command(opts: &AuthOpts) -> anyhow::Result<()> {
             let password = read_password_from_stdin()?;
 
             let dir = credentials_dir();
-            let store = CredentialStore::load(dir.clone())
+            let store = CredentialStore::open(dir.clone())
                 .with_context(|| format!("cannot read credentials in {}", dir.display()))?;
             store.set_read_only_user(&account.username, &password)?;
             println!("stored read-only user {}", account.username);
@@ -1305,7 +1305,7 @@ fn run_auth_command(opts: &AuthOpts) -> anyhow::Result<()> {
         }
         AuthSubcommand::RemoveReadOnlyUser => {
             let dir = credentials_dir();
-            let store = CredentialStore::load(dir.clone())
+            let store = CredentialStore::open(dir.clone())
                 .with_context(|| format!("cannot read credentials in {}", dir.display()))?;
             if store.remove_read_only_user()? {
                 println!("removed the read-only user");
