@@ -77,6 +77,11 @@ export interface UIStore {
   // Keyboard shortcut reference overlay ("?")
   shortcutHelpOpen: boolean;
   setShortcutHelpOpen: (open: boolean) => void;
+
+  // Text for the polite live region. seq changes on every call so a repeated
+  // message is still announced.
+  announcement: { text: string; seq: number };
+  announce: (text: string) => void;
 }
 
 export const useUIStore = create<UIStore>((set, get) => ({
@@ -261,4 +266,10 @@ export const useUIStore = create<UIStore>((set, get) => ({
 
   shortcutHelpOpen: false,
   setShortcutHelpOpen: (open) => set({ shortcutHelpOpen: open }),
+
+  announcement: { text: "", seq: 0 },
+  announce: (text) =>
+    set((state) => ({
+      announcement: { text, seq: state.announcement.seq + 1 },
+    })),
 }));

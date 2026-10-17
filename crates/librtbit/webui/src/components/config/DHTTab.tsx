@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useState } from "react";
 import { APIContext } from "../../context";
 import { DhtStats } from "../../api-types";
 import { Spinner } from "../Spinner";
+import { RestartNotes } from "./SettingNotes";
 
 const InfoRow = ({ label, value }: { label: string; value: string }) => (
   <div className="flex items-center">
@@ -47,6 +48,7 @@ export const DHTTab: React.FC = () => {
           <InfoRow key={key} label={formatLabel(key)} value={String(value)} />
         );
       })}
+      <RestartNotes tab="dht" />
       <div className="mt-4 text-secondary text-xs">
         DHT settings are configured via CLI arguments at startup.
       </div>

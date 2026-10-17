@@ -5,6 +5,7 @@ import { APIContext } from "../../context";
 import { BsFolder2Open, BsFolderFill, BsFileEarmark } from "react-icons/bs";
 import { GoArrowUp } from "react-icons/go";
 import { Spinner } from "../Spinner";
+import { RestartNotes } from "./SettingNotes";
 
 export interface FoldersTabProps {
   downloadFolder: string;
@@ -199,6 +200,9 @@ export const FoldersTab: React.FC<FoldersTabProps> = ({
           placeholder="/path/to/completed (optional)"
         />
       </Fieldset>
+      <div className="mt-4 pt-3 border-t border-divider">
+        <RestartNotes tab="folders" />
+      </div>
     </div>
   );
 };

@@ -42,3 +42,7 @@ export function isBoolean(value: unknown): value is boolean {
 export function isStringOrNull(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
+
+export function isNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}

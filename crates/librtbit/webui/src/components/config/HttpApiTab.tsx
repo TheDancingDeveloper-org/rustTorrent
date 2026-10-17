@@ -1,4 +1,5 @@
 import React from "react";
+import { RestartNotes } from "./SettingNotes";
 
 const InfoRow = ({ label, value }: { label: string; value: string }) => (
   <div className="flex items-center">
@@ -12,6 +13,7 @@ export const HttpApiTab: React.FC = () => {
     <div className="space-y-3 py-2">
       <InfoRow label="API URL" value={window.location.origin} />
       <InfoRow label="Swagger UI" value="/swagger/" />
+      <RestartNotes tab="http-api" />
       <div className="mt-4 text-secondary text-xs">
         HTTP API settings (listen address, read-only mode, basic auth) are
         configured via CLI arguments at startup.

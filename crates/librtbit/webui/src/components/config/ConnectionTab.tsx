@@ -1,5 +1,6 @@
 import React from "react";
 import { useStatsStore } from "../../stores/statsStore";
+import { RestartNotes } from "./SettingNotes";
 import {
   ConnectionStatSingle,
   ConnectionStatsPerFamily,
@@ -102,6 +103,9 @@ export const ConnectionTab: React.FC = () => {
         </div>
       </div>
 
+      <div className="mt-6">
+        <RestartNotes tab="connections" />
+      </div>
       <div className="mt-4 text-secondary text-xs">
         Connection settings (listen port, TCP/uTP, UPnP, SOCKS proxy, encryption
         mode) are configured via CLI arguments at startup.

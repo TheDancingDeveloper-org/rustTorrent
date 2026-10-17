@@ -48,3 +48,63 @@ test("sort column survives a reload", async ({ page }) => {
     page.getByRole("columnheader", { name: /Name/ }),
   ).toHaveAttribute("aria-sort", /ascending|descending/);
 });
+
+test("settings search finds an individual setting and jumps to its tab", async ({
+  page,
+}) => {
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog).toBeVisible();
+
+  await dialog
+    .getByRole("searchbox", { name: "Search settings" })
+    .fill("alt download");
+  await dialog.getByRole("button", { name: /Alt download limit/ }).click();
+  await expect(
+    dialog.getByText("Alternative Speed Limits", { exact: true }),
+  ).toBeVisible();
+});
+
+test("settings search marks restart-required settings", async ({ page }) => {
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await dialog
+    .getByRole("searchbox", { name: "Search settings" })
+    .fill("listen port");
+  await expect(
+    dialog.getByRole("button", { name: /Listen port.*Restart required/ }),
+  ).toBeVisible();
+});
+
+test("the shortcut dialog is named by its title", async ({ page }) => {
+  await page.keyboard.press("?");
+  await expect(
+    page.getByRole("dialog", { name: "Keyboard shortcuts" }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+});
+
+test("a pause is announced in the live region", async ({ page }) => {
+  await page.getByRole("button", { name: /^Downloading/ }).click();
+  await page.locator("tbody tr").first().click();
+  // A focused row claims Space for its own selection, so move focus off it
+  await page.evaluate(() =>
+    (document.activeElement as HTMLElement | null)?.blur(),
+  );
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("status")).toContainText("Paused");
+});
+
+test("the detail pane keeps its tab across a reload", async ({ page }) => {
+  await page.locator("tbody tr").first().click();
+  await page
+    .locator("button", { hasText: /^Peers$/ })
+    .last()
+    .click();
+  await page.reload();
+  await expect(page.locator("tbody tr").first()).toBeVisible();
+  await page.locator("tbody tr").first().click();
+  await expect(
+    page.locator("button", { hasText: /^Peers$/ }).last(),
+  ).toHaveClass(/border-primary/);
+});
