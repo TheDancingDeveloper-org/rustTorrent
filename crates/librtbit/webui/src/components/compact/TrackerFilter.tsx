@@ -46,7 +46,9 @@ export const TrackerFilter: React.FC = () => {
     <button
       key={key ?? "__all__"}
       onClick={() => setTrackerFilter(key)}
-      className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded text-sm cursor-pointer transition-colors ${
+      aria-pressed={trackerFilter === key}
+      aria-label={`${label}, ${count} ${count === 1 ? "torrent" : "torrents"}`}
+      className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded text-sm cursor-pointer transition-colors focus-ring ${
         trackerFilter === key ? activeItemClass : inactiveItemClass
       }`}
     >
@@ -72,9 +74,9 @@ export const TrackerFilter: React.FC = () => {
   return (
     <div>
       <div className="px-3 pt-3 pb-1">
-        <h3 className="text-xs font-semibold text-tertiary uppercase tracking-wider">
+        <h2 className="text-xs font-semibold text-tertiary uppercase tracking-wider">
           Trackers
-        </h3>
+        </h2>
       </div>
       <div className="px-1.5 pb-2">
         {item(

@@ -95,9 +95,9 @@ export const CategoryFilter: React.FC = () => {
   return (
     <div>
       <div className="px-3 pt-3 pb-1 flex items-center justify-between">
-        <h3 className="text-xs font-semibold text-tertiary uppercase tracking-wider">
+        <h2 className="text-xs font-semibold text-tertiary uppercase tracking-wider">
           Categories
-        </h3>
+        </h2>
         <button
           onClick={() => setShowNewInput(true)}
           className="text-tertiary hover:text-primary cursor-pointer"
@@ -132,7 +132,9 @@ export const CategoryFilter: React.FC = () => {
         {/* All */}
         <button
           onClick={() => setCategoryFilter(null)}
-          className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded text-sm cursor-pointer transition-colors ${
+          aria-pressed={categoryFilter === null}
+          aria-label={`All, ${categoryCounts.total} ${categoryCounts.total === 1 ? "torrent" : "torrents"}`}
+          className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded text-sm cursor-pointer transition-colors focus-ring ${
             categoryFilter === null ? activeItemClass : inactiveItemClass
           }`}
         >
@@ -150,7 +152,9 @@ export const CategoryFilter: React.FC = () => {
         {/* Uncategorized */}
         <button
           onClick={() => setCategoryFilter("")}
-          className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded text-sm cursor-pointer transition-colors ${
+          aria-pressed={categoryFilter === ""}
+          aria-label={`Uncategorized, ${categoryCounts.uncategorized} ${categoryCounts.uncategorized === 1 ? "torrent" : "torrents"}`}
+          className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded text-sm cursor-pointer transition-colors focus-ring ${
             categoryFilter === "" ? activeItemClass : inactiveItemClass
           }`}
         >
@@ -166,25 +170,30 @@ export const CategoryFilter: React.FC = () => {
         </button>
 
         {/* Each category */}
-        {categoryNames.map((name) => (
-          <button
-            key={name}
-            onClick={() => setCategoryFilter(name)}
-            className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded text-sm cursor-pointer transition-colors ${
-              categoryFilter === name ? activeItemClass : inactiveItemClass
-            }`}
-          >
-            <BsTagFill className={iconClass} />
-            <span className="flex-1 text-left truncate">{name}</span>
-            <span
-              className={`text-xs tabular-nums ${
-                categoryFilter === name ? "text-primary" : "text-tertiary"
+        {categoryNames.map((name) => {
+          const count = categoryCounts.counts[name] ?? 0;
+          return (
+            <button
+              key={name}
+              onClick={() => setCategoryFilter(name)}
+              aria-pressed={categoryFilter === name}
+              aria-label={`${name}, ${count} ${count === 1 ? "torrent" : "torrents"}`}
+              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded text-sm cursor-pointer transition-colors focus-ring ${
+                categoryFilter === name ? activeItemClass : inactiveItemClass
               }`}
             >
-              {categoryCounts.counts[name] ?? 0}
-            </span>
-          </button>
-        ))}
+              <BsTagFill className={iconClass} />
+              <span className="flex-1 text-left truncate">{name}</span>
+              <span
+                className={`text-xs tabular-nums ${
+                  categoryFilter === name ? "text-primary" : "text-tertiary"
+                }`}
+              >
+                {count}
+              </span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
