@@ -44,7 +44,7 @@ rust-tls = [
 ]
 storage_middleware = ["lru"]
 storage_examples = []
-tracing-subscriber-utils = ["tracing-subscriber"]
+tracing-subscriber-utils = ["tracing-subscriber", "dep:tracing-appender"]
 postgres = ["sqlx", "home"]
 async-bt = ["async-backtrace"]
 watch = ["notify"]
@@ -102,6 +102,7 @@ size_format = "1"
 rand = "0.10"
 argon2 = "0.5"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["json", "fmt", "env-filter"], optional = true }
+tracing-appender = { version = "0.2.5", optional = true }
 uuid = { version = "1", features = ["v4"] }
 futures = "0.3"
 url = { version = "2", default-features = false, features = ["serde"] }
