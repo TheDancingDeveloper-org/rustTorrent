@@ -19,6 +19,12 @@ upgrade notes in each release describe what to back up and check.
   `documentation/` was merged into `docs/`. The layout of each path is described
   in `docs/REPOSITORY-LAYOUT.md`.
 
+### Fixed
+
+- An invalid CORS allow regexp is now logged as a warning instead of being
+  silently ignored. The regexp can be set with `RTBIT_CORS_ALLOW_REGEXP`; the
+  bare `CORS_ALLOW_REGEXP` is still read as a fallback.
+
 ## [0.1.0-rc.1]
 
 First release candidate for 0.1.0. Intended for validation; back up the

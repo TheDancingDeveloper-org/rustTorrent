@@ -11,7 +11,7 @@ use http::{HeaderMap, StatusCode};
 use librqbit_dualstack_sockets::TcpListener;
 use std::sync::Arc;
 use tower_http::trace::{DefaultOnFailure, DefaultOnResponse, OnFailure};
-use tracing::{Span, debug, debug_span, info};
+use tracing::{Span, debug, debug_span, info, warn};
 
 use axum::Router;
 
@@ -208,9 +208,18 @@ impl HttpApi {
                 b"tauri://localhost",
             ];
 
-            let allow_regex = std::env::var("CORS_ALLOW_REGEXP")
+            // RTBIT_CORS_ALLOW_REGEXP is the canonical name; the bare CORS_ALLOW_REGEXP
+            // is still read so existing deployments keep working.
+            let allow_regex = std::env::var("RTBIT_CORS_ALLOW_REGEXP")
+                .or_else(|_| std::env::var("CORS_ALLOW_REGEXP"))
                 .ok()
-                .and_then(|value| regex::bytes::Regex::new(&value).ok());
+                .and_then(|value| match regex::bytes::Regex::new(&value) {
+                    Ok(re) => Some(re),
+                    Err(err) => {
+                        warn!("ignoring invalid CORS allow regexp: {err}");
+                        None
+                    }
+                });
 
             tower_http::cors::CorsLayer::default()
                 .allow_origin(AllowOrigin::predicate(move |v, _| {
