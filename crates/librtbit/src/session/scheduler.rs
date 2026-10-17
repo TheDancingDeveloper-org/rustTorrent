@@ -217,9 +217,11 @@ fn unix_now() -> u64 {
 }
 
 impl Session {
-    /// Set the share limits for one torrent. Enforced by the next policy pass.
-    pub fn set_share_limits(&self, handle: &ManagedTorrentHandle, limits: ShareLimits) {
+    /// Set the share limits for one torrent. Enforced by the next policy pass, and
+    /// saved right away so they survive a restart.
+    pub async fn set_share_limits(&self, handle: &ManagedTorrentHandle, limits: ShareLimits) {
         *handle.shared().share_limits.write() = limits;
+        self.try_update_persistence_metadata(handle).await;
     }
 
     /// Get the share limits for one torrent.

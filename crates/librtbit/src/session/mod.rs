@@ -8,6 +8,9 @@ mod types;
 pub use on_complete::{CompletedTorrent, OnCompleteHook};
 pub(crate) use scheduler::PolicyFlags;
 pub use scheduler::ShareLimits;
+
+/// How often a running session saves torrent state when no interval is configured.
+const PERSIST_INTERVAL: Duration = Duration::from_secs(60);
 pub use types::{
     AddTorrent, AddTorrentOptions, AddTorrentResponse, ListOnlyResponse, SessionOptions,
     SessionPersistenceConfig,
@@ -214,6 +217,7 @@ impl Session {
                 .peer_id
                 .unwrap_or_else(|| generate_azereus_style(*b"rQ", crate_version!()));
             let token = opts.cancellation_token.take().unwrap_or_default();
+            let persist_interval = opts.persist_interval.unwrap_or(PERSIST_INTERVAL);
 
             #[cfg(feature = "disable-upload")]
             if opts.disable_upload {
@@ -589,6 +593,7 @@ impl Session {
             session.start_speed_estimator_updater();
             session.spawn_alt_speed_scheduler();
             session.spawn_policy_scheduler();
+            session.spawn_persist_scheduler(persist_interval);
 
             Ok(session)
         }
@@ -642,11 +647,10 @@ impl Session {
             .values()
             .cloned()
             .collect::<Vec<_>>();
+        // Save before pausing, so the record keeps each torrent's running state and
+        // this run's upload total. Pausing then only moves the total into the base.
+        self.persist_all().await;
         for torrent in torrents {
-            // Save before pausing, so the record keeps each torrent's running state
-            // and this run's upload total. Pausing then only moves the total into
-            // the base counter.
-            self.try_update_persistence_metadata(&torrent).await;
             if let Err(e) = torrent.pause() {
                 debug!("error pausing torrent: {e:#}");
             }
@@ -1167,6 +1171,38 @@ impl Session {
 
         info!(id, "deleted torrent");
         Ok(())
+    }
+
+    /// Save every torrent's state to the persistence store. Upload totals and share
+    /// limits are current on disk afterwards.
+    pub async fn persist_all(&self) {
+        let torrents = self.with_torrents(|it| it.map(|(_, h)| h.clone()).collect::<Vec<_>>());
+        for torrent in &torrents {
+            self.try_update_persistence_metadata(torrent).await;
+        }
+    }
+
+    /// Save every torrent's state on a timer, so upload totals reach disk even if
+    /// the process is killed without a clean stop.
+    fn spawn_persist_scheduler(self: &Arc<Self>, interval: Duration) {
+        if self.persistence.is_none() {
+            return;
+        }
+        let weak = Arc::downgrade(self);
+        self.spawn(
+            debug_span!(parent: self.rs(), "persist_scheduler"),
+            "persist_scheduler",
+            async move {
+                loop {
+                    tokio::time::sleep(interval).await;
+                    let session = match weak.upgrade() {
+                        Some(s) => s,
+                        None => return Ok(()),
+                    };
+                    session.persist_all().await;
+                }
+            },
+        );
     }
 
     pub(crate) async fn try_update_persistence_metadata(&self, handle: &ManagedTorrentHandle) {

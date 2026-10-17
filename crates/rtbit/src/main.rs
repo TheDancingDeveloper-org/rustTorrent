@@ -752,6 +752,7 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
                 ..Default::default()
             }),
         // This will be overridden by "server start" below if needed.
+        persist_interval: None,
         persistence: None,
         peer_id: None,
         listen,
@@ -921,7 +922,11 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
                 )
                 .await?;
 
-                http_api_fut.await
+                let result = http_api_fut.await;
+                // The signal handler cancels the HTTP API, so this also runs on
+                // SIGINT and SIGTERM. Save torrent state before the process exits.
+                session.stop().await;
+                result
             }
         },
         SubCommand::Download(download_opts) => {
