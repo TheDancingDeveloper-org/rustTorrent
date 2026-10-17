@@ -1,7 +1,10 @@
 import { ChangeEventHandler } from "react";
+import { settingLabel } from "../config/settingsRegistry";
 
 export const FormInput: React.FC<{
   value: string;
+  // Registry id of the setting: supplies the label and marks the field for settings search
+  setting?: string;
   label?: string;
   autoFocus?: boolean;
   name: string;
@@ -18,14 +21,15 @@ export const FormInput: React.FC<{
   disabled,
   onChange,
   onKeyDown,
+  setting,
   label,
   help,
   inputType,
   placeholder,
 }) => {
   return (
-    <div className="flex flex-col gap-2 mb-2">
-      <label htmlFor={name}>{label}</label>
+    <div className="flex flex-col gap-2 mb-2" data-setting-id={setting}>
+      <label htmlFor={name}>{setting ? settingLabel(setting) : label}</label>
       <input
         autoFocus={autoFocus}
         type={inputType}

@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { settingLabel } from "./settingsRegistry";
 import { AuthAPI } from "../../http-api";
 import { useAuthStore } from "../../stores/authStore";
 
@@ -85,9 +86,9 @@ export const SecurityTab: React.FC = () => {
         </div>
       )}
 
-      <div>
+      <div data-setting-id="current-password">
         <label className="block text-sm font-medium text-secondary mb-1">
-          Current Password
+          {settingLabel("current-password")}
         </label>
         <input
           type="password"
@@ -101,9 +102,9 @@ export const SecurityTab: React.FC = () => {
 
       <hr className="border-divider" />
 
-      <div>
+      <div data-setting-id="new-username">
         <label className="block text-sm font-medium text-secondary mb-1">
-          New Username (optional)
+          {settingLabel("new-username")}
         </label>
         <input
           type="text"
@@ -115,9 +116,9 @@ export const SecurityTab: React.FC = () => {
         />
       </div>
 
-      <div>
+      <div data-setting-id="new-password">
         <label className="block text-sm font-medium text-secondary mb-1">
-          New Password (optional)
+          {settingLabel("new-password")}
         </label>
         <input
           type="password"
@@ -129,9 +130,9 @@ export const SecurityTab: React.FC = () => {
         />
       </div>
 
-      <div>
+      <div data-setting-id="confirm-password">
         <label className="block text-sm font-medium text-secondary mb-1">
-          Confirm New Password
+          {settingLabel("confirm-password")}
         </label>
         <input
           type="password"

@@ -1,8 +1,11 @@
 import { ChangeEventHandler } from "react";
+import { settingLabel } from "../config/settingsRegistry";
 
 export const FormCheckbox: React.FC<{
   checked: boolean;
-  label: string;
+  // Registry id of the setting: supplies the label and marks the field for settings search
+  setting?: string;
+  label?: string;
   name: string;
   help?: string;
   disabled?: boolean;
@@ -16,14 +19,16 @@ export const FormCheckbox: React.FC<{
   name,
   disabled,
   onChange,
+  setting,
   label,
   help,
   inputType,
   children,
   labelLink,
 }) => {
+  const text = setting ? settingLabel(setting) : label;
   return (
-    <div className={`flex gap-3 items-start`}>
+    <div className={`flex gap-3 items-start`} data-setting-id={setting}>
       <div className="flex">
         <input
           type={inputType || "checkbox"}
@@ -42,10 +47,10 @@ export const FormCheckbox: React.FC<{
             target="_blank"
             className="text-primary hover:underline"
           >
-            {label}
+            {text}
           </a>
         ) : (
-          <label htmlFor={name}>{label}</label>
+          <label htmlFor={name}>{text}</label>
         )}
 
         {help && <div className="text-sm text-secondary mb-3">{help}</div>}

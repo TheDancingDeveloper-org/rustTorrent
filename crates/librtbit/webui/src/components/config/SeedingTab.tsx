@@ -59,7 +59,7 @@ export const SeedingTab: React.FC = () => {
       <Fieldset label="Seed Ratio Limit">
         <FormCheckbox
           checked={ratioEnabled}
-          label="Limit seed ratio globally"
+          setting="seed-ratio-enabled"
           name="ratio_limit_enabled"
           help="Stop seeding when the upload/download ratio reaches this value."
           onChange={() => {
@@ -72,7 +72,7 @@ export const SeedingTab: React.FC = () => {
         {ratioEnabled && (
           <div className="mt-2 ml-6">
             <FormInput
-              label="Ratio limit"
+              setting="seed-ratio-limit"
               name="ratio_limit"
               inputType="number"
               value={
@@ -94,7 +94,7 @@ export const SeedingTab: React.FC = () => {
       <Fieldset label="Seed Time Limit">
         <FormCheckbox
           checked={timeEnabled}
-          label="Limit seeding time globally"
+          setting="seed-time-enabled"
           name="time_limit_enabled"
           help="Stop seeding after this amount of time."
           onChange={() => {
@@ -107,7 +107,7 @@ export const SeedingTab: React.FC = () => {
         {timeEnabled && (
           <div className="mt-2 ml-6">
             <FormInput
-              label="Time limit (hours)"
+              setting="seed-time-limit"
               name="time_limit_hours"
               inputType="number"
               value={String(timeLimitHours)}

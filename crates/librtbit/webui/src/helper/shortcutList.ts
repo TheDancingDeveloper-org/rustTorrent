@@ -6,6 +6,14 @@ export interface ShortcutEntry {
   action: string;
 }
 
+// Key labels quoted in tooltips and menus, so they read the same as the overlay.
+export const KEY_HINT = {
+  run: "Space",
+  remove: "Delete",
+  settings: "Ctrl/⌘+,",
+  logs: "Ctrl/⌘+L",
+} as const;
+
 export const SHORTCUTS: readonly ShortcutEntry[] = [
   { keys: "Ctrl/⌘ + A", action: "Select all visible torrents" },
   { keys: "Ctrl/⌘ + F", action: "Focus the search box" },

@@ -65,6 +65,18 @@ test("settings search finds an individual setting and jumps to its tab", async (
   ).toBeVisible();
 });
 
+test("settings search focuses the matched field, not just its tab", async ({
+  page,
+}) => {
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await dialog
+    .getByRole("searchbox", { name: "Search settings" })
+    .fill("peer limit");
+  await dialog.getByRole("button", { name: /Peer limit/ }).click();
+  await expect(dialog.locator('input[name="peer_limit"]')).toBeFocused();
+});
+
 test("settings search marks restart-required settings", async ({ page }) => {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Settings" });

@@ -119,7 +119,7 @@ export const RateLimitsTab: React.FC<RateLimitsTabProps> = ({
     <>
       <Fieldset label="Speed Limits">
         <FormInput
-          label="Download rate limit"
+          setting="download-rate-limit"
           name="download_bps"
           inputType="number"
           value={downloadBps?.toString() ?? ""}
@@ -130,7 +130,7 @@ export const RateLimitsTab: React.FC<RateLimitsTabProps> = ({
           help={formatLimitHelp(downloadBps, "download")}
         />
         <FormInput
-          label="Upload rate limit"
+          setting="upload-rate-limit"
           name="upload_bps"
           inputType="number"
           value={uploadBps?.toString() ?? ""}
@@ -141,7 +141,7 @@ export const RateLimitsTab: React.FC<RateLimitsTabProps> = ({
           help={formatLimitHelp(uploadBps, "upload")}
         />
         <FormInput
-          label="Peer limit"
+          setting="peer-limit"
           name="peer_limit"
           inputType="number"
           value={peerLimit?.toString() ?? ""}
@@ -152,7 +152,7 @@ export const RateLimitsTab: React.FC<RateLimitsTabProps> = ({
           help={`Maximum number of peers per torrent (current: ${peerLimit ?? "default"})`}
         />
         <FormInput
-          label="Concurrent init limit"
+          setting="concurrent-init-limit"
           name="concurrent_init_limit"
           inputType="number"
           value={concurrentInitLimit?.toString() ?? ""}
@@ -168,7 +168,7 @@ export const RateLimitsTab: React.FC<RateLimitsTabProps> = ({
         <Fieldset label="Alternative Speed Limits">
           <FormCheckbox
             checked={altEnabled}
-            label="Enable alternative speed limits"
+            setting="alt-speed-enabled"
             name="alt_speed_enabled"
             help="When enabled, alternative speed limits override the normal limits above."
             onChange={() => handleAltToggle(!altEnabled)}
@@ -177,7 +177,7 @@ export const RateLimitsTab: React.FC<RateLimitsTabProps> = ({
           {altEnabled && (
             <div className="mt-3 space-y-2 ml-6">
               <FormInput
-                label="Alt download limit (KB/s)"
+                setting="alt-download-limit"
                 name="alt_download_rate"
                 inputType="number"
                 value={
@@ -196,7 +196,7 @@ export const RateLimitsTab: React.FC<RateLimitsTabProps> = ({
                 help="Alternative download speed limit in KB/s (0 or empty = unlimited)"
               />
               <FormInput
-                label="Alt upload limit (KB/s)"
+                setting="alt-upload-limit"
                 name="alt_upload_rate"
                 inputType="number"
                 value={
@@ -220,7 +220,7 @@ export const RateLimitsTab: React.FC<RateLimitsTabProps> = ({
           <div className="mt-4">
             <FormCheckbox
               checked={schedule.enabled}
-              label="Enable schedule"
+              setting="speed-schedule"
               name="alt_schedule_enabled"
               help="Automatically enable alternative speed limits during scheduled times."
               onChange={() => {

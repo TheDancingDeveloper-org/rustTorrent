@@ -6,6 +6,7 @@ import { BsFolder2Open, BsFolderFill, BsFileEarmark } from "react-icons/bs";
 import { GoArrowUp } from "react-icons/go";
 import { Spinner } from "../Spinner";
 import { RestartNotes } from "./SettingNotes";
+import { settingLabel } from "./settingsRegistry";
 
 export interface FoldersTabProps {
   downloadFolder: string;
@@ -130,18 +131,18 @@ const DirectoryBrowser: React.FC<{
 
 // Folder input with browse button
 const FolderInput: React.FC<{
-  label: string;
+  setting: string;
   name: string;
   value: string;
   help?: string;
   placeholder?: string;
   onChange: (value: string) => void;
-}> = ({ label, name, value, help, placeholder, onChange }) => {
+}> = ({ setting, name, value, help, placeholder, onChange }) => {
   const [browserOpen, setBrowserOpen] = useState(false);
 
   return (
-    <div className="flex flex-col gap-2 mb-2">
-      <label htmlFor={name}>{label}</label>
+    <div className="flex flex-col gap-2 mb-2" data-setting-id={setting}>
+      <label htmlFor={name}>{settingLabel(setting)}</label>
       <div className="flex gap-2">
         <input
           type="text"
@@ -182,7 +183,7 @@ export const FoldersTab: React.FC<FoldersTabProps> = ({
     <div className="py-2">
       <Fieldset label="Download Location">
         <FolderInput
-          label="Default download folder"
+          setting="download-folder"
           name="download_folder"
           value={downloadFolder}
           onChange={onDownloadFolderChange}
@@ -192,7 +193,7 @@ export const FoldersTab: React.FC<FoldersTabProps> = ({
       </Fieldset>
       <Fieldset label="Move on Completion">
         <FolderInput
-          label="Completed folder"
+          setting="completed-folder"
           name="completed_folder"
           value={completedFolder}
           onChange={onCompletedFolderChange}

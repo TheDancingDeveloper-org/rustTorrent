@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { settingLabel } from "./settingsRegistry";
 import { RssAPI } from "../../http-api";
 
 interface RSSTabProps {
@@ -60,8 +61,10 @@ export const RSSTab: React.FC<RSSTabProps> = ({
         <h4 className="text-xs font-semibold uppercase text-tertiary mb-2">
           Settings
         </h4>
-        <div className={rowCls}>
-          <label className={labelCls}>Feed History Limit</label>
+        <div className={rowCls} data-setting-id="feed-history-limit">
+          <label className={labelCls}>
+            {settingLabel("feed-history-limit")}
+          </label>
           <input
             type="number"
             className={inputCls}

@@ -23,7 +23,7 @@ export const QueueTab: React.FC<QueueTabProps> = ({
     <div className="py-2">
       <Fieldset label="Queue Limits">
         <FormInput
-          label="Max active downloads"
+          setting="max-active-downloads"
           name="max_active_downloads"
           inputType="number"
           value={maxActiveDownloads?.toString() ?? ""}
@@ -34,7 +34,7 @@ export const QueueTab: React.FC<QueueTabProps> = ({
           help="Maximum number of active downloading torrents (0 or empty = unlimited)"
         />
         <FormInput
-          label="Max active uploads"
+          setting="max-active-uploads"
           name="max_active_uploads"
           inputType="number"
           value={maxActiveUploads?.toString() ?? ""}
@@ -45,7 +45,7 @@ export const QueueTab: React.FC<QueueTabProps> = ({
           help="Maximum number of active seeding torrents (0 or empty = unlimited)"
         />
         <FormInput
-          label="Max active total"
+          setting="max-active-total"
           name="max_active_total"
           inputType="number"
           value={maxActiveTotal?.toString() ?? ""}
