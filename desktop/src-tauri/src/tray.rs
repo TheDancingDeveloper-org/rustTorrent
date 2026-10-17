@@ -15,10 +15,11 @@ use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tracing::warn;
 
+#[cfg(feature = "self-update")]
+use crate::updates;
 use crate::{
     EngineState,
     launch::{self, LaunchTarget},
-    updates,
 };
 
 pub const TRAY_ID: &str = "main";
@@ -66,6 +67,7 @@ pub fn setup(app: &AppHandle) -> anyhow::Result<()> {
     let autostart = CheckMenuItemBuilder::with_id("autostart", "Start at login")
         .checked(app.autolaunch().is_enabled().unwrap_or(false))
         .build(app)?;
+    #[cfg(feature = "self-update")]
     let updates = MenuItemBuilder::with_id("updates", "Check for Updates…").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
@@ -77,11 +79,10 @@ pub fn setup(app: &AppHandle) -> anyhow::Result<()> {
         .item(&pause)
         .item(&browser)
         .separator()
-        .item(&autostart)
-        .item(&updates)
-        .separator()
-        .item(&quit)
-        .build()?;
+        .item(&autostart);
+    #[cfg(feature = "self-update")]
+    let menu = menu.item(&updates);
+    let menu = menu.separator().item(&quit).build()?;
 
     app.manage(TrayItems {
         speed,
@@ -125,6 +126,7 @@ fn on_menu_event(app: &AppHandle, id: &str) {
             }
         }
         "autostart" => toggle_autostart(app),
+        #[cfg(feature = "self-update")]
         "updates" => updates::check_for_updates(app.clone()),
         "quit" => confirm_quit(app),
         _ => {}
