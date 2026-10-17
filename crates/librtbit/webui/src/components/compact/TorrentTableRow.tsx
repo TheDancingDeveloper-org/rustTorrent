@@ -16,6 +16,8 @@ interface TorrentTableRowProps {
   rowIndex: number;
   /** The one row in the grid that takes Tab focus (roving tabindex) */
   active: boolean;
+  /** Returns true once if a keyboard move is waiting for the active row to take focus */
+  consumeRowFocus: () => boolean;
   onRowFocus: (index: number) => void;
   onRowClick: (id: number, e: React.MouseEvent) => void;
   onContextMenu: (id: number, e: React.MouseEvent) => void;
@@ -69,6 +71,7 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
   odd,
   rowIndex,
   active,
+  consumeRowFocus,
   onRowFocus,
   onRowClick,
   onContextMenu,
@@ -77,15 +80,14 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
 }) => {
   const rowRef = useRef<HTMLTableRowElement>(null);
 
-  // Keyboard navigation moves the active row; take DOM focus when focus is already in the grid,
-  // so rows that mount or scroll into view don't steal focus from elsewhere on the page
+  // A keyboard move asks the new active row to take focus. The row may not be mounted yet
+  // (Virtuoso renders it after scrolling), and the previous row may have unmounted with focus
+  // on the body, so the request is consumed by whichever active row mounts or updates.
+  // Rows that scroll into view without a request don't steal focus.
   useEffect(() => {
     if (!active || !rowRef.current) return;
-    const grid = rowRef.current.closest('[role="grid"]');
-    if (grid?.contains(document.activeElement)) {
-      rowRef.current.focus({ preventScroll: true });
-    }
-  }, [active]);
+    if (consumeRowFocus()) rowRef.current.focus({ preventScroll: true });
+  }, [active, consumeRowFocus]);
   const stats = torrent.stats;
   const state = stats?.state ?? "";
   const error = stats?.error ?? null;

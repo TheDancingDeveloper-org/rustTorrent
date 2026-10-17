@@ -171,6 +171,7 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
   const [activeIndex, setActiveIndex] = useState(0);
   const gridRef = useRef<HTMLDivElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const pendingRowFocus = useRef(false);
 
   const setSortColumn = useCallback((column: TableSortColumn) => {
     setSortColumnState((prevColumn) => {
@@ -325,6 +326,13 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
 
   const handleRowFocus = useCallback((index: number) => {
     setActiveIndex(index);
+    pendingRowFocus.current = false;
+  }, []);
+
+  const consumeRowFocus = useCallback(() => {
+    const pending = pendingRowFocus.current;
+    pendingRowFocus.current = false;
+    return pending;
   }, []);
 
   // Grid keys: arrows move (and select) the row, Space toggles, Enter opens details, Shift+F10 / ContextMenu opens the menu
@@ -338,6 +346,9 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
     const id = ids[current];
     const moveTo = (index: number) => {
       e.preventDefault();
+      if (index === current) return;
+      // Ask the row that becomes active to take focus once it has rendered
+      pendingRowFocus.current = true;
       setActiveIndex(index);
       selectTorrent(ids[index]);
       virtuosoRef.current?.scrollIntoView({ index });
@@ -461,6 +472,7 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
           odd={index % 2 === 1}
           rowIndex={index}
           active={index === focusIndex}
+          consumeRowFocus={consumeRowFocus}
           onRowFocus={handleRowFocus}
           onRowClick={handleRowClick}
           onContextMenu={handleRowContextMenu}
@@ -473,6 +485,7 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
       filteredTorrents,
       selectedTorrentIds,
       focusIndex,
+      consumeRowFocus,
       handleRowFocus,
       handleRowClick,
       handleRowContextMenu,
