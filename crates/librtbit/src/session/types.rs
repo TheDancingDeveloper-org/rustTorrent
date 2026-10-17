@@ -93,6 +93,11 @@ pub struct AddTorrentOptions {
     /// Start in paused state.
     #[serde(default)]
     pub paused: bool,
+    /// Store incomplete files under `.part` names. `None` follows the session
+    /// setting (see `Session::set_use_part_files`). Restored torrents set this
+    /// to the choice they were added with.
+    #[serde(skip)]
+    pub part_files: Option<bool>,
     /// A regex to only download files matching it.
     pub only_files_regex: Option<String>,
     /// An explicit list of file IDs to download.

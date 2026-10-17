@@ -13,8 +13,13 @@ use librtbit_core::magnet::Magnet;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    AddTorrent, AddTorrentOptions, bitv_factory::BitVFactory, category::TorrentCategory,
-    session::PolicyFlags, session::TorrentId, torrent_state::ManagedTorrentHandle,
+    AddTorrent, AddTorrentOptions,
+    bitv_factory::BitVFactory,
+    category::TorrentCategory,
+    session::PolicyFlags,
+    session::ShareLimits,
+    session::TorrentId,
+    torrent_state::{ManagedTorrentHandle, ManagedTorrentShared},
 };
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -54,6 +59,20 @@ pub struct SerializedTorrent {
     held_for_disk: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     share_paused: bool,
+    /// Share limits as set on the torrent. Absent in older state, which means no limits.
+    #[serde(default, skip_serializing_if = "ShareLimits::is_unset")]
+    share_limits: ShareLimits,
+    /// Bytes uploaded across earlier runs. Absent in older state, which reads as zero.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    uploaded_bytes: u64,
+    /// Whether incomplete files were stored under `.part` names. Absent in older
+    /// state, which falls back to the session setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    part_files: Option<bool>,
+}
+
+fn is_zero(v: &u64) -> bool {
+    *v == 0
 }
 
 impl SerializedTorrent {
@@ -61,12 +80,16 @@ impl SerializedTorrent {
         &self.info_hash
     }
 
-    /// The policy flags to reapply once the torrent is added back.
-    pub(crate) fn policy_flags(&self) -> PolicyFlags {
-        PolicyFlags {
-            queued: self.queued,
-            held_for_disk: self.held_for_disk,
-            share_paused: self.share_paused,
+    /// The per-torrent state to reapply once the torrent is added back.
+    pub(crate) fn restored_state(&self) -> RestoredState {
+        RestoredState {
+            policy: PolicyFlags {
+                queued: self.queued,
+                held_for_disk: self.held_for_disk,
+                share_paused: self.share_paused,
+            },
+            share_limits: self.share_limits,
+            uploaded_bytes: self.uploaded_bytes,
         }
     }
 
@@ -82,6 +105,7 @@ impl SerializedTorrent {
 
     pub fn into_add_torrent(self) -> anyhow::Result<(AddTorrent<'static>, AddTorrentOptions)> {
         let category = self.category.clone();
+        let part_files = self.part_files;
         let trackers = self.trackers.into_iter().collect::<Vec<_>>();
         let add_torrent = if !self.torrent_bytes.is_empty() {
             AddTorrent::TorrentFileBytes(self.torrent_bytes)
@@ -110,6 +134,7 @@ impl SerializedTorrent {
         };
         let opts = AddTorrentOptions {
             paused: self.is_paused,
+            part_files,
             output_folder,
             output_folder_root,
             only_files: self.only_files,
@@ -123,6 +148,35 @@ impl SerializedTorrent {
 
         Ok((add_torrent, opts))
     }
+}
+
+/// Per-torrent state that the session reapplies after adding a torrent back.
+pub(crate) struct RestoredState {
+    policy: PolicyFlags,
+    share_limits: ShareLimits,
+    uploaded_bytes: u64,
+}
+
+impl RestoredState {
+    pub(crate) fn apply(self, shared: &ManagedTorrentShared) {
+        self.policy.store(shared);
+        *shared.share_limits.write() = self.share_limits;
+        shared
+            .uploaded_bytes_base
+            .store(self.uploaded_bytes, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// The persisted fields that come from the shared state of a live handle.
+pub(crate) fn runtime_fields(
+    torrent: &ManagedTorrentHandle,
+) -> (PolicyFlags, ShareLimits, u64, Option<bool>) {
+    (
+        PolicyFlags::read(torrent.shared()),
+        *torrent.shared().share_limits.read(),
+        torrent.uploaded_bytes(),
+        Some(torrent.shared().options.part_files),
+    )
 }
 
 // TODO: make this info_hash first, ID-second.

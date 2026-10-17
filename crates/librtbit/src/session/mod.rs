@@ -561,7 +561,7 @@ impl Session {
                                 Some(st) => {
                                     let (id, st) = st?;
                                     let span = add_torrent_span(st.info_hash());
-                                    let policy = st.policy_flags();
+                                    let restored = st.restored_state();
                                     let (add_torrent, mut opts) = st.into_add_torrent()?;
                                     opts.preferred_id = Some(id);
                                     let fut = session.add_torrent(add_torrent, Some(opts));
@@ -572,7 +572,7 @@ impl Session {
                                     let fut = async move {
                                         let resp = fut.await?;
                                         if let AddTorrentResponse::Added(_, handle) = &resp {
-                                            policy.store(handle.shared());
+                                            restored.apply(handle.shared());
                                         }
                                         Ok::<_, anyhow::Error>(resp)
                                     };
@@ -643,6 +643,10 @@ impl Session {
             .cloned()
             .collect::<Vec<_>>();
         for torrent in torrents {
+            // Save before pausing, so the record keeps each torrent's running state
+            // and this run's upload total. Pausing then only moves the total into
+            // the base counter.
+            self.try_update_persistence_metadata(&torrent).await;
             if let Err(e) = torrent.pause() {
                 debug!("error pausing torrent: {e:#}");
             }
@@ -988,9 +992,10 @@ impl Session {
                     output_folder_root,
                     initial_peers: opts.initial_peers.clone().unwrap_or_default(),
                     peer_limit: opts.peer_limit.or(self.peer_limit),
-                    part_files: self
-                        .use_part_files
-                        .load(std::sync::atomic::Ordering::Relaxed),
+                    part_files: opts.part_files.unwrap_or_else(|| {
+                        self.use_part_files
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                    }),
                     #[cfg(feature = "disable-upload")]
                     _disable_upload: self._disable_upload,
                 },
@@ -1017,6 +1022,7 @@ impl Session {
                 queued: std::sync::atomic::AtomicBool::new(false),
                 held_for_disk: std::sync::atomic::AtomicBool::new(false),
                 share_paused: std::sync::atomic::AtomicBool::new(false),
+                uploaded_bytes_base: std::sync::atomic::AtomicU64::new(0),
             });
 
             let initializing = Arc::new(TorrentStateInitializing::new(

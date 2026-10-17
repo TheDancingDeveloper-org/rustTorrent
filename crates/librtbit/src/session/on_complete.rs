@@ -14,6 +14,9 @@ use super::{Session, TorrentId};
 /// How long a webhook POST may take before it is abandoned.
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long the on-complete command may run before it is killed.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Configuration for the on-complete hook. Both fields are optional; the hook
 /// is inert when neither is set.
 #[derive(Debug, Clone, Default)]
@@ -94,24 +97,7 @@ impl CompletedTorrent {
 /// Run every configured action for one completed torrent. Errors are logged.
 pub(crate) async fn run(hook: OnCompleteHook, client: reqwest::Client, event: CompletedTorrent) {
     if let Some(command) = hook.command {
-        let env = event.env();
-        let id = event.id;
-        let result = tokio::task::spawn_blocking(move || {
-            std::process::Command::new("sh")
-                .arg("-c")
-                .arg(&command)
-                .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
-                .status()
-        })
-        .await;
-        match result {
-            Ok(Ok(status)) if status.success() => {
-                info!(id, "on-complete command finished");
-            }
-            Ok(Ok(status)) => warn!(id, ?status, "on-complete command exited unsuccessfully"),
-            Ok(Err(e)) => warn!(id, "failed to start on-complete command: {e:#}"),
-            Err(e) => warn!(id, "on-complete command task failed: {e:#}"),
-        }
+        run_command(&command, &event.env(), event.id, COMMAND_TIMEOUT).await;
     }
 
     if let Some(url) = hook.webhook_url {
@@ -133,9 +119,40 @@ pub(crate) async fn run(hook: OnCompleteHook, client: reqwest::Client, event: Co
     }
 }
 
+/// Run the shell command with the event's environment. The child is killed if it
+/// outlives `timeout`, so a hung script cannot hold resources indefinitely.
+async fn run_command(
+    command: &str,
+    env: &[(&'static str, String)],
+    id: TorrentId,
+    timeout: Duration,
+) {
+    let mut child = tokio::process::Command::new("sh");
+    child
+        .arg("-c")
+        .arg(command)
+        .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
+        .kill_on_drop(true);
+    match tokio::time::timeout(timeout, child.status()).await {
+        Ok(Ok(status)) if status.success() => {
+            info!(id, "on-complete command finished");
+        }
+        Ok(Ok(status)) => warn!(id, ?status, "on-complete command exited unsuccessfully"),
+        Ok(Err(e)) => warn!(id, "failed to start on-complete command: {e:#}"),
+        Err(_) => warn!(id, ?timeout, "on-complete command timed out and was killed"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn command_is_killed_after_timeout() {
+        let started = std::time::Instant::now();
+        run_command("sleep 30", &[], 1, Duration::from_millis(200)).await;
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
 
     fn sample(name: Option<&str>) -> CompletedTorrent {
         CompletedTorrent::new(
