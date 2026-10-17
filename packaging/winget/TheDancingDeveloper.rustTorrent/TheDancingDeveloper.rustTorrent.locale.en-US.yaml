@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+PackageIdentifier: TheDancingDeveloper.rustTorrent
+PackageVersion: REPLACE_WITH_VERSION
+PackageLocale: en-US
+Publisher: TheDancingDeveloper
+PublisherUrl: https://github.com/TheDancingDeveloper-org
+PackageName: rustTorrent
+PackageUrl: https://github.com/TheDancingDeveloper-org/rustTorrent
+License: Apache-2.0
+LicenseUrl: https://github.com/TheDancingDeveloper-org/rustTorrent/blob/main/LICENSE
+ShortDescription: A modern BitTorrent client written in Rust, with a web UI and HTTP API.
+Tags:
+  - bittorrent
+  - torrent
+  - rust
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0
