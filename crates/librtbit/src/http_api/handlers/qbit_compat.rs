@@ -623,7 +623,7 @@ async fn h_auth_login(
     super::super::auth::ClientAddr(client): super::super::auth::ClientAddr,
     body: Bytes,
 ) -> impl IntoResponse {
-    use super::super::auth::{Verdict, busy_response, verify_credentials};
+    use super::super::auth::{Role, Verdict, busy_response, verify_credentials};
 
     let limiter = &state.api_state.login_limiter;
     if let Some(wait) = limiter.check(client, Instant::now()) {
@@ -646,7 +646,13 @@ async fn h_auth_login(
         .filter(|store| store.has_credentials());
     let verdict = match (stored_credentials, &state.api_state.opts.basic_auth) {
         (Some(store), _) => {
-            verify_credentials(limiter, Arc::clone(store), form.username, form.password).await
+            match verify_credentials(limiter, Arc::clone(store), form.username, form.password).await
+            {
+                // The compat session carries no role, so a read-only account is refused here
+                // rather than given write access through it.
+                Verdict::Valid(Role::ReadOnly) => Verdict::Invalid,
+                other => other,
+            }
         }
         (None, Some((expected_user, expected_pass))) => {
             if super::super::constant_time_eq(form.username.as_bytes(), expected_user.as_bytes())
@@ -655,7 +661,7 @@ async fn h_auth_login(
                     expected_pass.as_bytes(),
                 )
             {
-                Verdict::Valid
+                Verdict::Valid(Role::Admin)
             } else {
                 Verdict::Invalid
             }
@@ -664,7 +670,7 @@ async fn h_auth_login(
         // With a store, setup has not happened yet and login must fail.
         (None, None) => {
             if state.api_state.opts.credential_store.is_none() {
-                Verdict::Valid
+                Verdict::Valid(Role::Admin)
             } else {
                 Verdict::Invalid
             }
@@ -673,7 +679,7 @@ async fn h_auth_login(
 
     match verdict {
         Verdict::Busy => busy_response(),
-        Verdict::Valid => {
+        Verdict::Valid(_) => {
             limiter.record_success(client);
             let sid = state.sessions.create_session();
             let cookie = format!("SID={sid}; Path=/; HttpOnly; SameSite=Strict");

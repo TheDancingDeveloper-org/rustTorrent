@@ -4,26 +4,80 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 use argon2::password_hash::SaltString;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tracing::warn;
 
 const ACCESS_TOKEN_TTL: Duration = Duration::from_secs(15 * 60); // 15 minutes
 const REFRESH_TOKEN_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60); // 30 days
 
-struct TokenEntry {
-    expires_at: Instant,
+/// Prefix on API keys, so `Authorization: Bearer` can tell a key from a session token.
+pub const API_KEY_PREFIX: &str = "rtb_";
+
+/// What a caller may do. A read-only caller may only use GET, HEAD and OPTIONS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    Admin,
+    ReadOnly,
+}
+
+impl Role {
+    pub fn allows_method(self, method: &http::Method) -> bool {
+        match self {
+            Role::Admin => true,
+            Role::ReadOnly => matches!(
+                *method,
+                http::Method::GET | http::Method::HEAD | http::Method::OPTIONS
+            ),
+        }
+    }
+}
+
+/// The role an authenticated request runs as. The auth middleware puts it in the request
+/// extensions, for handlers that must check it.
+#[derive(Debug, Clone, Copy)]
+pub struct Caller(pub Role);
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Tokens and keys are stored by their SHA-256, so a copy of the file cannot be replayed.
+fn sha256_hex(value: &str) -> String {
+    hex::encode(Sha256::digest(value.as_bytes()))
+}
+
+/// A session token as persisted. Times are Unix seconds, because an `Instant` means nothing
+/// after a restart.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+struct SessionRecord {
+    role: Role,
+    expires_at: u64,
+}
+
+/// The contents of `sessions.json`. Keys are the SHA-256 of each token.
+#[derive(Default, Serialize, Deserialize)]
+struct SessionFile {
+    #[serde(default)]
+    access: HashMap<String, SessionRecord>,
+    #[serde(default)]
+    refresh: HashMap<String, SessionRecord>,
 }
 
 #[derive(Default)]
 pub struct TokenStore {
-    access_tokens: RwLock<HashMap<String, TokenEntry>>,
-    refresh_tokens: RwLock<HashMap<String, TokenEntry>>,
+    sessions: RwLock<SessionFile>,
+    /// Where sessions are saved. None keeps them in memory only.
+    file_path: Option<PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -32,6 +86,35 @@ pub struct TokenResponse {
     pub refresh_token: String,
     pub token_type: &'static str,
     pub expires_in: u64,
+    pub role: Role,
+}
+
+/// Issues a new access and refresh token for `role` into `file`.
+fn issue_tokens(file: &mut SessionFile, role: Role) -> TokenResponse {
+    let access_token = generate_token();
+    let refresh_token = generate_token();
+    let now = now_unix();
+    file.access.insert(
+        sha256_hex(&access_token),
+        SessionRecord {
+            role,
+            expires_at: now + ACCESS_TOKEN_TTL.as_secs(),
+        },
+    );
+    file.refresh.insert(
+        sha256_hex(&refresh_token),
+        SessionRecord {
+            role,
+            expires_at: now + REFRESH_TOKEN_TTL.as_secs(),
+        },
+    );
+    TokenResponse {
+        access_token,
+        refresh_token,
+        token_type: "Bearer",
+        expires_in: ACCESS_TOKEN_TTL.as_secs(),
+        role,
+    }
 }
 
 #[derive(Deserialize)]
@@ -56,76 +139,208 @@ fn generate_token() -> String {
 }
 
 impl TokenStore {
+    /// A store whose sessions last only as long as the process.
     pub fn new() -> Self {
-        Self {
-            access_tokens: RwLock::new(HashMap::new()),
-            refresh_tokens: RwLock::new(HashMap::new()),
-        }
+        Self::default()
     }
 
-    pub fn create_tokens(&self) -> TokenResponse {
-        let access_token = generate_token();
-        let refresh_token = generate_token();
-        let now = Instant::now();
-
-        self.access_tokens.write().insert(
-            access_token.clone(),
-            TokenEntry {
-                expires_at: now + ACCESS_TOKEN_TTL,
-            },
-        );
-        self.refresh_tokens.write().insert(
-            refresh_token.clone(),
-            TokenEntry {
-                expires_at: now + REFRESH_TOKEN_TTL,
-            },
-        );
-
-        TokenResponse {
-            access_token,
-            refresh_token,
-            token_type: "Bearer",
-            expires_in: ACCESS_TOKEN_TTL.as_secs(),
-        }
-    }
-
-    pub fn validate_access_token(&self, token: &str) -> bool {
-        let tokens = self.access_tokens.read();
-        tokens
-            .get(token)
-            .is_some_and(|entry| entry.expires_at > Instant::now())
-    }
-
-    pub fn refresh(&self, refresh_token: &str) -> Option<TokenResponse> {
-        let valid = {
-            let tokens = self.refresh_tokens.read();
-            tokens
-                .get(refresh_token)
-                .is_some_and(|entry| entry.expires_at > Instant::now())
+    /// A store whose sessions are saved to `sessions.json` in `config_dir`, so logins survive a
+    /// restart. A file that cannot be read starts empty, which only signs everyone out.
+    pub fn load(config_dir: PathBuf) -> Self {
+        let file_path = config_dir.join("sessions.json");
+        let mut file = match std::fs::read_to_string(&file_path) {
+            Ok(contents) => serde_json::from_str(&contents).unwrap_or_else(|e| {
+                warn!("ignoring unreadable {}: {e}", file_path.display());
+                SessionFile::default()
+            }),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => SessionFile::default(),
+            Err(e) => {
+                warn!("cannot read {}: {e}", file_path.display());
+                SessionFile::default()
+            }
         };
+        let now = now_unix();
+        file.access.retain(|_, record| record.expires_at > now);
+        file.refresh.retain(|_, record| record.expires_at > now);
+        Self {
+            sessions: RwLock::new(file),
+            file_path: Some(file_path),
+        }
+    }
 
-        if !valid {
+    /// Saves the sessions. The caller holds the write lock, so saves never interleave.
+    fn persist(&self, file: &SessionFile) {
+        let Some(path) = &self.file_path else {
+            return;
+        };
+        let written = serde_json::to_vec(file)
+            .map_err(io::Error::other)
+            .and_then(|json| write_private_file(path, &json));
+        if let Err(e) = written {
+            warn!("could not save sessions to {}: {e}", path.display());
+        }
+    }
+
+    pub fn create_tokens(&self, role: Role) -> TokenResponse {
+        let mut file = self.sessions.write();
+        let tokens = issue_tokens(&mut file, role);
+        self.persist(&file);
+        tokens
+    }
+
+    /// The role of `token` if it is a live access token.
+    pub fn validate_access_token(&self, token: &str) -> Option<Role> {
+        let now = now_unix();
+        self.sessions
+            .read()
+            .access
+            .get(&sha256_hex(token))
+            .filter(|record| record.expires_at > now)
+            .map(|record| record.role)
+    }
+
+    /// Trades a live refresh token for a new pair with the same role. The old refresh token is
+    /// revoked, so each one works once.
+    pub fn refresh(&self, refresh_token: &str) -> Option<TokenResponse> {
+        let mut file = self.sessions.write();
+        let record = file.refresh.remove(&sha256_hex(refresh_token))?;
+        if record.expires_at <= now_unix() {
+            self.persist(&file);
             return None;
         }
-
-        // Revoke the old refresh token (rotation)
-        self.refresh_tokens.write().remove(refresh_token);
-
-        Some(self.create_tokens())
+        let tokens = issue_tokens(&mut file, record.role);
+        self.persist(&file);
+        Some(tokens)
     }
 
     pub fn revoke_refresh_token(&self, refresh_token: &str) {
-        self.refresh_tokens.write().remove(refresh_token);
+        let mut file = self.sessions.write();
+        if file.refresh.remove(&sha256_hex(refresh_token)).is_some() {
+            self.persist(&file);
+        }
     }
 
     pub fn cleanup_expired(&self) {
-        let now = Instant::now();
-        self.access_tokens
-            .write()
-            .retain(|_, entry| entry.expires_at > now);
-        self.refresh_tokens
-            .write()
-            .retain(|_, entry| entry.expires_at > now);
+        let now = now_unix();
+        let mut file = self.sessions.write();
+        let before = file.access.len() + file.refresh.len();
+        file.access.retain(|_, record| record.expires_at > now);
+        file.refresh.retain(|_, record| record.expires_at > now);
+        if file.access.len() + file.refresh.len() != before {
+            self.persist(&file);
+        }
+    }
+}
+
+/// An API key as listed. The key itself is only ever shown once, when it is created.
+#[derive(Serialize)]
+pub struct ApiKeyInfo {
+    pub id: String,
+    pub name: String,
+    pub role: Role,
+    /// Unix seconds.
+    pub created_at: u64,
+}
+
+/// An API key as stored in `api-keys.json`. Only the SHA-256 of the key is kept.
+#[derive(Clone, Serialize, Deserialize)]
+struct ApiKeyRecord {
+    id: String,
+    name: String,
+    role: Role,
+    key_hash: String,
+    created_at: u64,
+}
+
+impl From<&ApiKeyRecord> for ApiKeyInfo {
+    fn from(record: &ApiKeyRecord) -> Self {
+        Self {
+            id: record.id.clone(),
+            name: record.name.clone(),
+            role: record.role,
+            created_at: record.created_at,
+        }
+    }
+}
+
+/// Long-lived keys for automation, sent as `Authorization: Bearer rtb_...`.
+pub struct ApiKeyStore {
+    keys: RwLock<Vec<ApiKeyRecord>>,
+    file_path: PathBuf,
+}
+
+impl ApiKeyStore {
+    /// Loads `api-keys.json` from `config_dir`. A corrupt file is an error, as for the
+    /// credentials: the server refuses to start rather than silently dropping keys.
+    pub fn load(config_dir: PathBuf) -> anyhow::Result<Self> {
+        let file_path = config_dir.join("api-keys.json");
+        let keys = match std::fs::read_to_string(&file_path) {
+            Ok(contents) => serde_json::from_str(&contents).with_context(|| {
+                format!(
+                    "{} is corrupt; refusing to start. Fix or remove the file",
+                    file_path.display()
+                )
+            })?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => {
+                return Err(e).with_context(|| format!("cannot read {}", file_path.display()));
+            }
+        };
+        Ok(Self {
+            keys: RwLock::new(keys),
+            file_path,
+        })
+    }
+
+    fn save(&self, keys: &[ApiKeyRecord]) -> io::Result<()> {
+        let json = serde_json::to_vec_pretty(keys).map_err(io::Error::other)?;
+        write_private_file(&self.file_path, &json)
+    }
+
+    /// Creates a key with `role`. Returns its metadata and the key itself.
+    pub fn create(&self, name: &str, role: Role) -> io::Result<(ApiKeyInfo, String)> {
+        let key = format!("{API_KEY_PREFIX}{}", generate_token());
+        let record = ApiKeyRecord {
+            id: hex::encode(rand::random::<[u8; 8]>()),
+            name: name.to_owned(),
+            role,
+            key_hash: sha256_hex(&key),
+            created_at: now_unix(),
+        };
+        let info = ApiKeyInfo::from(&record);
+        let mut keys = self.keys.write();
+        let mut next = keys.clone();
+        next.push(record);
+        self.save(&next)?;
+        *keys = next;
+        Ok((info, key))
+    }
+
+    pub fn list(&self) -> Vec<ApiKeyInfo> {
+        self.keys.read().iter().map(ApiKeyInfo::from).collect()
+    }
+
+    /// Deletes key `id`. Returns false if there is no such key.
+    pub fn delete(&self, id: &str) -> io::Result<bool> {
+        let mut keys = self.keys.write();
+        let Some(index) = keys.iter().position(|record| record.id == id) else {
+            return Ok(false);
+        };
+        let mut next = keys.clone();
+        next.remove(index);
+        self.save(&next)?;
+        *keys = next;
+        Ok(true)
+    }
+
+    /// The role of `token` if it is one of the stored keys.
+    pub fn authenticate(&self, token: &str) -> Option<Role> {
+        let hash = sha256_hex(token);
+        self.keys
+            .read()
+            .iter()
+            .find(|record| record.key_hash == hash)
+            .map(|record| record.role)
     }
 }
 
@@ -279,7 +494,8 @@ impl LoginLimiter {
 
 /// Outcome of checking a login against the stored credentials.
 pub enum Verdict {
-    Valid,
+    /// The login matched an account, with the role that account has.
+    Valid(Role),
     Invalid,
     /// No verification slot was free, so nothing was checked and no failure is recorded.
     Busy,
@@ -296,16 +512,15 @@ pub async fn verify_credentials(
     let Some(slot) = limiter.try_verify_slot() else {
         return Verdict::Busy;
     };
-    let valid = tokio::task::spawn_blocking(move || {
+    let role = tokio::task::spawn_blocking(move || {
         let _slot = slot;
-        store.validate(&username, &password)
+        store.authenticate(&username, &password)
     })
     .await
-    .unwrap_or(false);
-    if valid {
-        Verdict::Valid
-    } else {
-        Verdict::Invalid
+    .unwrap_or(None);
+    match role {
+        Some(role) => Verdict::Valid(role),
+        None => Verdict::Invalid,
     }
 }
 
@@ -355,6 +570,16 @@ struct CredentialFile {
     /// migrated to a hash on the first successful login, and is never written back.
     #[serde(default, rename = "password", skip_serializing_if = "Option::is_none")]
     legacy_password: Option<String>,
+    /// The optional read-only account, added with `rtbit auth set-read-only-user`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    read_only: Option<ReadOnlyFile>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct ReadOnlyFile {
+    username: String,
+    /// Argon2 PHC string.
+    password_hash: String,
 }
 
 pub struct CredentialStore {
@@ -460,39 +685,114 @@ impl CredentialStore {
     }
 
     /// Stores `username` with an argon2 hash of `password`, replacing any existing credentials.
+    /// Stores `username` with an argon2 hash of `password`, replacing the admin account. The
+    /// read-only account is kept.
     pub fn set_credentials(&self, username: &str, password: &str) -> io::Result<()> {
         let hash = hash_password(password)?;
+        let mut guard = self.credentials.write();
+        let read_only = guard.as_ref().and_then(|creds| creds.read_only.clone());
+        if read_only
+            .as_ref()
+            .is_some_and(|account| account.username == username)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the admin username must differ from the read-only username",
+            ));
+        }
         let file = CredentialFile {
             username: username.to_owned(),
             password_hash: Some(hash),
             legacy_password: None,
+            read_only,
         };
         let json = serde_json::to_vec_pretty(&file).map_err(io::Error::other)?;
-        let mut guard = self.credentials.write();
         write_private_file(&self.file_path, &json)?;
         *guard = Some(file);
         let _ = std::fs::remove_file(self.setup_token_path());
         Ok(())
     }
 
-    pub fn validate(&self, username: &str, password: &str) -> bool {
-        let Some(creds) = self.credentials.read().clone() else {
-            return false;
+    /// Adds or replaces the read-only account. Setup must already have made the admin account,
+    /// and the two usernames must differ.
+    pub fn set_read_only_user(&self, username: &str, password: &str) -> io::Result<()> {
+        let hash = hash_password(password)?;
+        let mut guard = self.credentials.write();
+        let Some(current) = guard.clone() else {
+            return Err(io::Error::other(
+                "finish first-run setup before adding a read-only user",
+            ));
         };
-        let username_ok = super::constant_time_eq(username.as_bytes(), creds.username.as_bytes());
+        if current.username == username {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the read-only username must differ from the admin username",
+            ));
+        }
+        let file = CredentialFile {
+            read_only: Some(ReadOnlyFile {
+                username: username.to_owned(),
+                password_hash: hash,
+            }),
+            ..current
+        };
+        let json = serde_json::to_vec_pretty(&file).map_err(io::Error::other)?;
+        write_private_file(&self.file_path, &json)?;
+        *guard = Some(file);
+        Ok(())
+    }
 
-        if let Some(hash) = &creds.password_hash {
-            // The password is always checked, so a wrong username takes as long as a right one.
-            return verify_password(password, hash) && username_ok;
+    /// Removes the read-only account. Returns false if there was none.
+    pub fn remove_read_only_user(&self) -> io::Result<bool> {
+        let mut guard = self.credentials.write();
+        let Some(current) = guard.clone() else {
+            return Ok(false);
+        };
+        if current.read_only.is_none() {
+            return Ok(false);
+        }
+        let file = CredentialFile {
+            read_only: None,
+            ..current
+        };
+        let json = serde_json::to_vec_pretty(&file).map_err(io::Error::other)?;
+        write_private_file(&self.file_path, &json)?;
+        *guard = Some(file);
+        Ok(true)
+    }
+
+    /// The username of the read-only account, if there is one.
+    pub fn read_only_username(&self) -> Option<String> {
+        self.credentials
+            .read()
+            .as_ref()
+            .and_then(|creds| creds.read_only.as_ref())
+            .map(|account| account.username.clone())
+    }
+
+    /// The role that `username` and `password` log in as, or None if neither account matches.
+    pub fn authenticate(&self, username: &str, password: &str) -> Option<Role> {
+        let creds = self.credentials.read().clone()?;
+        let admin_user_ok = super::constant_time_eq(username.as_bytes(), creds.username.as_bytes());
+        // The password is always checked, so a wrong username takes as long as a right one.
+        let admin_pass_ok = match &creds.password_hash {
+            Some(hash) => verify_password(password, hash),
+            None => {
+                let legacy = creds.legacy_password.as_deref().unwrap_or_default();
+                super::constant_time_eq(password.as_bytes(), legacy.as_bytes())
+            }
+        };
+        if admin_user_ok && admin_pass_ok {
+            if creds.password_hash.is_none() {
+                self.migrate_legacy_password(password);
+            }
+            return Some(Role::Admin);
         }
 
-        let legacy = creds.legacy_password.as_deref().unwrap_or_default();
-        let password_ok = super::constant_time_eq(password.as_bytes(), legacy.as_bytes());
-        if username_ok && password_ok {
-            self.migrate_legacy_password(password);
-            return true;
-        }
-        false
+        let account = creds.read_only.as_ref()?;
+        (super::constant_time_eq(username.as_bytes(), account.username.as_bytes())
+            && verify_password(password, &account.password_hash))
+        .then_some(Role::ReadOnly)
     }
 
     /// Replaces a legacy plaintext entry with a hash of the password that just matched.
@@ -518,6 +818,7 @@ impl CredentialStore {
             username: creds.username.clone(),
             password_hash: Some(hash),
             legacy_password: None,
+            read_only: creds.read_only.clone(),
         };
         let written = serde_json::to_vec_pretty(&migrated)
             .map_err(io::Error::other)
@@ -571,8 +872,8 @@ fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
 // --- HTTP Handlers ---
 
 use axum::{
-    Json,
-    extract::{ConnectInfo, State},
+    Extension, Json,
+    extract::{ConnectInfo, Path as UrlPath, State},
     response::{IntoResponse, Response},
 };
 use http::StatusCode;
@@ -651,7 +952,7 @@ pub async fn h_auth_setup(
         Ok(_) => {
             // Create tokens for the new user so they're immediately logged in
             if let Some(ts) = &state.opts.token_store {
-                let tokens = ts.create_tokens();
+                let tokens = ts.create_tokens(Role::Admin);
                 return (StatusCode::OK, Json(tokens)).into_response();
             }
             StatusCode::OK.into_response()
@@ -675,17 +976,28 @@ mod tests {
     #[test]
     fn token_refresh_rotates_and_logout_revokes() {
         let store = TokenStore::new();
-        let original = store.create_tokens();
-        assert!(store.validate_access_token(&original.access_token));
+        let original = store.create_tokens(Role::Admin);
+        assert_eq!(
+            store.validate_access_token(&original.access_token),
+            Some(Role::Admin)
+        );
 
         let replacement = store
             .refresh(&original.refresh_token)
             .expect("valid refresh token");
         assert!(store.refresh(&original.refresh_token).is_none());
-        assert!(store.validate_access_token(&replacement.access_token));
+        assert_eq!(
+            store.validate_access_token(&replacement.access_token),
+            Some(Role::Admin)
+        );
 
         store.revoke_refresh_token(&replacement.refresh_token);
         assert!(store.refresh(&replacement.refresh_token).is_none());
+    }
+
+    /// True when `username` and `password` log in as the admin account.
+    fn admin_logs_in(store: &CredentialStore, username: &str, password: &str) -> bool {
+        store.authenticate(username, password) == Some(Role::Admin)
     }
 
     #[test]
@@ -697,16 +1009,28 @@ mod tests {
         store
             .set_credentials("test-user", "correct horse battery staple")
             .expect("write credentials");
-        assert!(store.validate("test-user", "correct horse battery staple"));
-        assert!(!store.validate("test-user", "wrong"));
-        assert!(!store.validate("wrong", "correct horse battery staple"));
+        assert!(admin_logs_in(
+            &store,
+            "test-user",
+            "correct horse battery staple"
+        ));
+        assert!(!admin_logs_in(&store, "test-user", "wrong"));
+        assert!(!admin_logs_in(
+            &store,
+            "wrong",
+            "correct horse battery staple"
+        ));
 
         let on_disk = std::fs::read_to_string(&path).expect("credentials file");
         assert!(!on_disk.contains("correct horse battery staple"));
         assert!(on_disk.contains("$argon2id$"));
 
         let reloaded = CredentialStore::load(temp.path().to_path_buf()).expect("reload");
-        assert!(reloaded.validate("test-user", "correct horse battery staple"));
+        assert!(admin_logs_in(
+            &reloaded,
+            "test-user",
+            "correct horse battery staple"
+        ));
         assert_eq!(reloaded.username().as_deref(), Some("test-user"));
 
         #[cfg(unix)]
@@ -744,7 +1068,7 @@ mod tests {
         CredentialStore::reset_credentials(temp.path().to_path_buf(), "admin", "new-pass")
             .expect("reset");
         let store = CredentialStore::load(temp.path().to_path_buf()).expect("load after reset");
-        assert!(store.validate("admin", "new-pass"));
+        assert!(admin_logs_in(&store, "admin", "new-pass"));
         assert!(store.setup_token().is_none());
     }
 
@@ -757,7 +1081,7 @@ mod tests {
 
         let store = CredentialStore::load(temp.path().to_path_buf()).expect("load legacy");
         assert!(store.has_credentials());
-        assert!(!store.validate("admin", "wrong"));
+        assert!(!admin_logs_in(&store, "admin", "wrong"));
         assert!(
             std::fs::read_to_string(&path)
                 .expect("credentials file")
@@ -765,15 +1089,15 @@ mod tests {
             "a failed login must not rewrite the file"
         );
 
-        assert!(store.validate("admin", "legacy-pass"));
+        assert!(admin_logs_in(&store, "admin", "legacy-pass"));
         let migrated = std::fs::read_to_string(&path).expect("credentials file");
         assert!(!migrated.contains("legacy-pass"));
         assert!(!migrated.contains("\"password\""));
         assert!(migrated.contains("$argon2id$"));
 
         let reloaded = CredentialStore::load(temp.path().to_path_buf()).expect("reload");
-        assert!(reloaded.validate("admin", "legacy-pass"));
-        assert!(!reloaded.validate("admin", "wrong"));
+        assert!(admin_logs_in(&reloaded, "admin", "legacy-pass"));
+        assert!(!admin_logs_in(&reloaded, "admin", "wrong"));
     }
 
     #[test]
@@ -940,6 +1264,150 @@ mod tests {
         store.set_credentials("admin", "pass").expect("set");
         assert!(!token_file.exists(), "setup must spend the token file");
     }
+
+    #[test]
+    fn sessions_survive_a_restart_but_are_stored_hashed() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let store = TokenStore::load(temp.path().to_path_buf());
+        let tokens = store.create_tokens(Role::ReadOnly);
+
+        let on_disk =
+            std::fs::read_to_string(temp.path().join("sessions.json")).expect("sessions file");
+        assert!(!on_disk.contains(&tokens.access_token));
+        assert!(!on_disk.contains(&tokens.refresh_token));
+
+        let reloaded = TokenStore::load(temp.path().to_path_buf());
+        assert_eq!(
+            reloaded.validate_access_token(&tokens.access_token),
+            Some(Role::ReadOnly)
+        );
+        let refreshed = reloaded
+            .refresh(&tokens.refresh_token)
+            .expect("refresh after restart");
+        assert_eq!(refreshed.role, Role::ReadOnly);
+        assert!(reloaded.refresh(&tokens.refresh_token).is_none());
+    }
+
+    #[test]
+    fn expired_sessions_are_not_loaded() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let expired = SessionRecord {
+            role: Role::Admin,
+            expires_at: 1,
+        };
+        let mut file = SessionFile::default();
+        file.access.insert(sha256_hex("old-token"), expired);
+        file.refresh.insert(sha256_hex("old-refresh"), expired);
+        std::fs::write(
+            temp.path().join("sessions.json"),
+            serde_json::to_vec(&file).expect("json"),
+        )
+        .expect("write sessions");
+
+        let store = TokenStore::load(temp.path().to_path_buf());
+        assert_eq!(store.validate_access_token("old-token"), None);
+        assert!(store.refresh("old-refresh").is_none());
+    }
+
+    #[test]
+    fn unreadable_sessions_file_starts_signed_out() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        std::fs::write(temp.path().join("sessions.json"), "not json").expect("write");
+        let store = TokenStore::load(temp.path().to_path_buf());
+        let tokens = store.create_tokens(Role::Admin);
+        assert_eq!(
+            store.validate_access_token(&tokens.access_token),
+            Some(Role::Admin)
+        );
+    }
+
+    #[test]
+    fn read_only_role_may_only_read() {
+        let get = http::Method::GET;
+        let post = http::Method::POST;
+        assert!(Role::ReadOnly.allows_method(&get));
+        assert!(Role::ReadOnly.allows_method(&http::Method::HEAD));
+        assert!(Role::ReadOnly.allows_method(&http::Method::OPTIONS));
+        assert!(!Role::ReadOnly.allows_method(&post));
+        assert!(!Role::ReadOnly.allows_method(&http::Method::DELETE));
+        assert!(Role::Admin.allows_method(&post));
+        assert!(Role::Admin.allows_method(&http::Method::DELETE));
+    }
+
+    #[test]
+    fn api_keys_authenticate_persist_and_delete() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let keys = ApiKeyStore::load(temp.path().to_path_buf()).expect("load");
+        let (info, key) = keys
+            .create("backup script", Role::ReadOnly)
+            .expect("create");
+        assert!(key.starts_with(API_KEY_PREFIX));
+        assert_eq!(keys.authenticate(&key), Some(Role::ReadOnly));
+        assert_eq!(keys.authenticate(&format!("{key}x")), None);
+        assert_eq!(keys.list().len(), 1);
+
+        let on_disk = std::fs::read_to_string(temp.path().join("api-keys.json")).expect("file");
+        assert!(!on_disk.contains(&key), "the key itself must not be stored");
+
+        let reloaded = ApiKeyStore::load(temp.path().to_path_buf()).expect("reload");
+        assert_eq!(reloaded.authenticate(&key), Some(Role::ReadOnly));
+
+        assert!(reloaded.delete(&info.id).expect("delete"));
+        assert_eq!(reloaded.authenticate(&key), None);
+        assert!(!reloaded.delete(&info.id).expect("second delete"));
+    }
+
+    #[test]
+    fn corrupt_api_key_file_refuses_to_load() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        std::fs::write(temp.path().join("api-keys.json"), "not json").expect("write");
+        assert!(ApiKeyStore::load(temp.path().to_path_buf()).is_err());
+    }
+
+    #[test]
+    fn read_only_account_logs_in_as_read_only_and_survives_admin_changes() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let store = CredentialStore::load(temp.path().to_path_buf()).expect("load");
+        store.set_credentials("admin", "admin-pass").expect("admin");
+        store
+            .set_read_only_user("viewer", "view-pass")
+            .expect("viewer");
+
+        assert_eq!(
+            store.authenticate("viewer", "view-pass"),
+            Some(Role::ReadOnly)
+        );
+        assert_eq!(store.authenticate("viewer", "admin-pass"), None);
+        assert_eq!(store.authenticate("admin", "view-pass"), None);
+        assert_eq!(store.authenticate("admin", "admin-pass"), Some(Role::Admin));
+
+        store
+            .set_credentials("admin", "new-admin-pass")
+            .expect("rotate");
+        assert_eq!(store.read_only_username().as_deref(), Some("viewer"));
+        let reloaded = CredentialStore::load(temp.path().to_path_buf()).expect("reload");
+        assert_eq!(
+            reloaded.authenticate("viewer", "view-pass"),
+            Some(Role::ReadOnly)
+        );
+
+        assert!(
+            store.set_read_only_user("admin", "x").is_err(),
+            "the read-only username must differ from the admin one"
+        );
+        assert!(store.set_credentials("viewer", "x").is_err());
+
+        assert!(store.remove_read_only_user().expect("remove"));
+        assert_eq!(store.authenticate("viewer", "view-pass"), None);
+        assert!(!store.remove_read_only_user().expect("second remove"));
+    }
+
+    #[test]
+    fn read_only_account_needs_first_run_setup() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let store = CredentialStore::load(temp.path().to_path_buf()).expect("load");
+        assert!(store.set_read_only_user("viewer", "view-pass").is_err());
+    }
 }
 
 // --- Change Credentials ---
@@ -979,8 +1447,10 @@ pub async fn h_auth_change_credentials(
             .await;
             match verdict {
                 Verdict::Busy => return busy_response(),
-                Verdict::Valid => (username, true),
-                Verdict::Invalid => (username, false),
+                Verdict::Valid(Role::Admin) => (username, true),
+                // A read-only account cannot have matched the admin username, so this is only
+                // ever a wrong password. It is refused like one.
+                Verdict::Valid(Role::ReadOnly) | Verdict::Invalid => (username, false),
             }
         }
         None => match &state.opts.basic_auth {
@@ -1041,7 +1511,7 @@ pub async fn h_auth_login(
             if super::constant_time_eq(req.username.as_bytes(), u.as_bytes())
                 && super::constant_time_eq(req.password.as_bytes(), p.as_bytes())
             {
-                Verdict::Valid
+                Verdict::Valid(Role::Admin)
             } else {
                 Verdict::Invalid
             }
@@ -1052,14 +1522,17 @@ pub async fn h_auth_login(
         }
     };
 
-    match verdict {
+    let role = match verdict {
         Verdict::Busy => return busy_response(),
         Verdict::Invalid => {
             state.login_limiter.record_failure(client, Instant::now());
             return (StatusCode::UNAUTHORIZED, "invalid credentials").into_response();
         }
-        Verdict::Valid => state.login_limiter.record_success(client),
-    }
+        Verdict::Valid(role) => {
+            state.login_limiter.record_success(client);
+            role
+        }
+    };
 
     let token_store = match &state.opts.token_store {
         Some(ts) => ts,
@@ -1069,7 +1542,7 @@ pub async fn h_auth_login(
     };
 
     token_store.cleanup_expired();
-    let tokens = token_store.create_tokens();
+    let tokens = token_store.create_tokens(role);
     (StatusCode::OK, Json(tokens)).into_response()
 }
 
@@ -1108,4 +1581,89 @@ pub async fn h_auth_logout(
         ts.revoke_refresh_token(&req.refresh_token);
     }
     StatusCode::NO_CONTENT
+}
+
+// --- API keys ---
+
+/// Refuses the request unless its caller is an admin. Key management is admin-only, whatever
+/// the method.
+fn require_admin(caller: Caller) -> Option<Response> {
+    (caller.0 != Role::Admin)
+        .then(|| (StatusCode::FORBIDDEN, "API keys need an admin account").into_response())
+}
+
+#[derive(Deserialize)]
+pub struct CreateApiKeyRequest {
+    pub name: String,
+    /// Defaults to `read_only`, the least privilege.
+    #[serde(default)]
+    pub role: Option<Role>,
+}
+
+#[derive(Serialize)]
+pub struct CreatedApiKey {
+    #[serde(flatten)]
+    pub info: ApiKeyInfo,
+    /// The key itself. This is the only response that contains it.
+    pub key: String,
+}
+
+pub async fn h_api_keys_list(
+    State(state): State<ApiState>,
+    Extension(caller): Extension<Caller>,
+) -> impl IntoResponse {
+    if let Some(refusal) = require_admin(caller) {
+        return refusal;
+    }
+    match &state.opts.api_keys {
+        Some(keys) => Json(keys.list()).into_response(),
+        None => (StatusCode::NOT_FOUND, "API keys not available").into_response(),
+    }
+}
+
+pub async fn h_api_key_create(
+    State(state): State<ApiState>,
+    Extension(caller): Extension<Caller>,
+    Json(req): Json<CreateApiKeyRequest>,
+) -> impl IntoResponse {
+    if let Some(refusal) = require_admin(caller) {
+        return refusal;
+    }
+    let Some(keys) = &state.opts.api_keys else {
+        return (StatusCode::NOT_FOUND, "API keys not available").into_response();
+    };
+    let name = req.name.trim();
+    if name.is_empty() || name.chars().count() > 64 {
+        return (StatusCode::BAD_REQUEST, "name must be 1 to 64 characters").into_response();
+    }
+    match keys.create(name, req.role.unwrap_or(Role::ReadOnly)) {
+        Ok((info, key)) => (StatusCode::CREATED, Json(CreatedApiKey { info, key })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to save API keys: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn h_api_key_delete(
+    State(state): State<ApiState>,
+    Extension(caller): Extension<Caller>,
+    UrlPath(id): UrlPath<String>,
+) -> impl IntoResponse {
+    if let Some(refusal) = require_admin(caller) {
+        return refusal;
+    }
+    let Some(keys) = &state.opts.api_keys else {
+        return (StatusCode::NOT_FOUND, "API keys not available").into_response();
+    };
+    match keys.delete(&id) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such API key").into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to save API keys: {e}"),
+        )
+            .into_response(),
+    }
 }
