@@ -40,7 +40,7 @@ export const FormCheckbox: React.FC<{
           <a
             href={labelLink}
             target="_blank"
-            className="text-blue-600 dark:text-blue-500 hover:underline"
+            className="text-primary hover:underline"
           >
             {label}
           </a>
@@ -48,11 +48,7 @@ export const FormCheckbox: React.FC<{
           <label htmlFor={name}>{label}</label>
         )}
 
-        {help && (
-          <div className="text-sm text-slate-500 dark:text-slate-300 mb-3">
-            {help}
-          </div>
-        )}
+        {help && <div className="text-sm text-secondary mb-3">{help}</div>}
       </div>
       {children}
     </div>

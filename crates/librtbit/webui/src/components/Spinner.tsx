@@ -6,10 +6,10 @@ export const Spinner = ({
   className?: string;
 }) => {
   return (
-    <div className={`flex gap-2 items-center ${className}`}>
+    <div role="status" className={`flex gap-2 items-center ${className}`}>
       <svg
         aria-hidden="true"
-        className="w-8 h-8 text-border animate-spin fill-primary"
+        className="w-8 h-8 text-border animate-spin fill-primary motion-reduce:animate-none motion-reduce:opacity-60"
         viewBox="0 0 100 101"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"

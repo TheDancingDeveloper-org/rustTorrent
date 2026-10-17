@@ -1,25 +1,34 @@
-import { MouseEventHandler } from "react";
+import { MouseEvent, ReactNode } from "react";
+
+// Literal lookup so Tailwind can see every class name at build time.
+const colorClassNames = {
+  primary: "text-primary",
+  secondary: "text-secondary",
+  success: "text-success",
+  warning: "text-warning",
+  error: "text-error",
+} as const;
+
+export type IconButtonColor = keyof typeof colorClassNames;
 
 export const IconButton: React.FC<{
   onClick: () => void;
+  label?: string;
   disabled?: boolean;
   className?: string;
-  color?: string;
-  children: any;
+  color?: IconButtonColor;
+  children: ReactNode;
   href?: string;
-  title?: string;
-}> = (props) => {
-  const {
-    onClick,
-    disabled,
-    color,
-    children,
-    className,
-    href,
-    title,
-    ...otherProps
-  } = props;
-  const onClickStopPropagation: MouseEventHandler<HTMLAnchorElement> = (e) => {
+}> = ({ onClick, label, disabled, color, children, className, href }) => {
+  const classes = [
+    "p-1.5 flex items-center justify-center cursor-pointer",
+    "disabled:cursor-not-allowed disabled:opacity-50",
+    "focus-ring touch-target",
+    colorClassNames[color ?? "primary"],
+    className ?? "",
+  ].join(" ");
+
+  const onActivate = (e: MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
     if (disabled) {
@@ -27,16 +36,32 @@ export const IconButton: React.FC<{
     }
     onClick();
   };
-  const colorClassName = color ? `text-${color}` : "";
+
+  if (href) {
+    return (
+      <a
+        className={classes}
+        href={href}
+        onClick={onActivate}
+        aria-label={label}
+        aria-disabled={disabled || undefined}
+        title={label}
+      >
+        {children}
+      </a>
+    );
+  }
+
   return (
-    <a
-      className={`p-1 text-blue-500 flex items-center justify-center cursor-pointer ${colorClassName} ${className}`}
-      onClick={onClickStopPropagation}
-      href={href ?? "#"}
-      title={title}
-      {...otherProps}
+    <button
+      type="button"
+      className={classes}
+      disabled={disabled}
+      onClick={onActivate}
+      aria-label={label}
+      title={label}
     >
       {children}
-    </a>
+    </button>
   );
 };
