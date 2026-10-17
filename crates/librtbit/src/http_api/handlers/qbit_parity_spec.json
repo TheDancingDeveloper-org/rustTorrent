@@ -53,7 +53,7 @@
       "endpoint": "app/preferences",
       "method": "GET",
       "status": "partial",
-      "notes": "Small subset of preference fields."
+      "notes": "Small subset of preference fields. Seeding-limit fields are reported disabled with qBittorrent default values; rtbit does not enforce them globally."
     },
     {
       "endpoint": "app/processInfo",
@@ -83,7 +83,7 @@
       "endpoint": "app/setPreferences",
       "method": "POST",
       "status": "partial",
-      "notes": "Only announce_port is settable; other fields rejected."
+      "notes": "announce_port is applied when present (must be 1-65535). Other fields are accepted and ignored, so whole-object read-modify-write clients succeed."
     },
     {
       "endpoint": "app/shutdown",
@@ -94,7 +94,7 @@
       "endpoint": "app/version",
       "method": "GET",
       "status": "partial",
-      "notes": "Returns a hardcoded version string, not a real qBittorrent version."
+      "notes": "Returns a fixed 5.x-line version string (v5.0.0) matching the advertised WebAPI version; not a real qBittorrent build."
     },
     {
       "endpoint": "app/webapiVersion",
@@ -347,7 +347,7 @@
       "endpoint": "torrents/addTags",
       "method": "POST",
       "status": "partial",
-      "notes": "In-memory tag store (not persisted across restarts); rtbit has no native tags."
+      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags."
     },
     {
       "endpoint": "torrents/addTrackers",
@@ -362,7 +362,8 @@
     {
       "endpoint": "torrents/bottomPrio",
       "method": "POST",
-      "status": "missing"
+      "status": "partial",
+      "notes": "No-op: rtbit has no download queue and app/preferences reports queueing_enabled=false, so the request succeeds without changing anything."
     },
     {
       "endpoint": "torrents/categories",
@@ -383,12 +384,13 @@
       "endpoint": "torrents/createTags",
       "method": "POST",
       "status": "partial",
-      "notes": "In-memory tag store (not persisted across restarts); rtbit has no native tags."
+      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags."
     },
     {
       "endpoint": "torrents/decreasePrio",
       "method": "POST",
-      "status": "missing"
+      "status": "partial",
+      "notes": "No-op: rtbit has no download queue and app/preferences reports queueing_enabled=false, so the request succeeds without changing anything."
     },
     {
       "endpoint": "torrents/delete",
@@ -399,7 +401,7 @@
       "endpoint": "torrents/deleteTags",
       "method": "POST",
       "status": "partial",
-      "notes": "In-memory tag store (not persisted across restarts); rtbit has no native tags."
+      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags."
     },
     {
       "endpoint": "torrents/downloadFile",
@@ -454,7 +456,8 @@
     {
       "endpoint": "torrents/increasePrio",
       "method": "POST",
-      "status": "missing"
+      "status": "partial",
+      "notes": "No-op: rtbit has no download queue and app/preferences reports queueing_enabled=false, so the request succeeds without changing anything."
     },
     {
       "endpoint": "torrents/info",
@@ -517,7 +520,7 @@
       "endpoint": "torrents/removeTags",
       "method": "POST",
       "status": "partial",
-      "notes": "In-memory tag store (not persisted across restarts); rtbit has no native tags."
+      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags."
     },
     {
       "endpoint": "torrents/removeTrackers",
@@ -590,7 +593,8 @@
     {
       "endpoint": "torrents/setForceStart",
       "method": "POST",
-      "status": "missing"
+      "status": "partial",
+      "notes": "Routed to torrents/start (resume). rtbit has no queue, so force-start has no separate state."
     },
     {
       "endpoint": "torrents/setLocation",
@@ -625,7 +629,7 @@
       "endpoint": "torrents/setTags",
       "method": "POST",
       "status": "partial",
-      "notes": "In-memory tag store (not persisted across restarts); rtbit has no native tags."
+      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags."
     },
     {
       "endpoint": "torrents/setUploadLimit",
@@ -649,7 +653,7 @@
       "endpoint": "torrents/tags",
       "method": "GET",
       "status": "partial",
-      "notes": "In-memory tag store (not persisted across restarts); rtbit has no native tags."
+      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags."
     },
     {
       "endpoint": "torrents/toggleFirstLastPiecePrio",
@@ -664,7 +668,8 @@
     {
       "endpoint": "torrents/topPrio",
       "method": "POST",
-      "status": "missing"
+      "status": "partial",
+      "notes": "No-op: rtbit has no download queue and app/preferences reports queueing_enabled=false, so the request succeeds without changing anything."
     },
     {
       "endpoint": "torrents/trackers",
