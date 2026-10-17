@@ -74,6 +74,15 @@ jobs:
           cp target/x86_64-pc-windows-gnu/release-github/rtbit.exe "release-artifacts/rtbit-$tag-windows-x86_64.exe"
           cp target/release-github/rtbit_amd64.deb "release-artifacts/rtbit-$tag-amd64.deb"
           cp target/release-github/rtbit-x86_64.rpm "release-artifacts/rtbit-$tag-x86_64.rpm"
+          # Unit files, sysusers entry and default config, laid out at their
+          # install paths. The AUR package unpacks this as-is.
+          stage=$(mktemp -d)
+          install -Dm644 packaging/linux/rtbit.service "$stage/usr/lib/systemd/system/rtbit.service"
+          install -Dm644 systemd/rtbit.service "$stage/usr/lib/systemd/user/rtbit.service"
+          install -Dm644 systemd/rtbit.socket "$stage/usr/lib/systemd/user/rtbit.socket"
+          install -Dm644 packaging/linux/rtbit.sysusers.conf "$stage/usr/lib/sysusers.d/rtbit.conf"
+          install -Dm644 systemd/rtbit.conf "$stage/etc/rtbit/rtbit.conf"
+          tar --owner=0 --group=0 --numeric-owner -C "$stage" -czf "release-artifacts/rtbit-$tag-service-files.tar.gz" .
           (cd release-artifacts && sha256sum rtbit-*) > "release-artifacts/SHA256SUMS-$tag.txt"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -138,6 +147,16 @@ jobs:
           tag="${{ inputs.tag || github.ref_name }}"
           test -n "$tag"
           packaging/scripts/verify-release.sh "$tag" release-artifacts
+      - name: Render AUR PKGBUILD
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          packaging/scripts/render-aur.sh "$tag" release-artifacts rendered/aur
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: channel-aur
+          path: rendered/aur/
+          if-no-files-found: error
 
   publish:
     needs: [build, sign, channels]
