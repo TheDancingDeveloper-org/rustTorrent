@@ -79,7 +79,7 @@ const getAuthHeaders = (): Record<string, string> => {
 
 // Try to refresh the token, returns true if successful
 const tryRefreshToken = async (): Promise<boolean> => {
-  const { refreshToken, setTokens, clearTokens } = useAuthStore.getState();
+  const { refreshToken, setTokens, expireSession } = useAuthStore.getState();
   if (!refreshToken) return false;
 
   try {
@@ -90,14 +90,14 @@ const tryRefreshToken = async (): Promise<boolean> => {
       body: JSON.stringify({ refresh_token: refreshToken }),
     });
     if (!response.ok) {
-      clearTokens();
+      expireSession();
       return false;
     }
     const tokens: TokenResponse = await response.json();
     setTokens(tokens.access_token, tokens.refresh_token, tokens.expires_in);
     return true;
   } catch {
-    clearTokens();
+    expireSession();
     return false;
   }
 };
@@ -124,7 +124,7 @@ const makeBinaryRequest = async (path: string): Promise<ArrayBuffer> => {
       });
       if (retry.ok) return retry.arrayBuffer();
     }
-    useAuthStore.getState().clearTokens();
+    useAuthStore.getState().expireSession();
     throw new Error("Authentication required");
   }
 
@@ -203,7 +203,7 @@ const makeRequest = async (
       }
     }
     // Refresh failed or retry failed
-    useAuthStore.getState().clearTokens();
+    useAuthStore.getState().expireSession();
     error.status = 401;
     error.statusText = "401 Unauthorized";
     error.text = "Session expired. Please log in again.";
