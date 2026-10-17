@@ -10,6 +10,7 @@ import { TrackersTab } from "./TrackersTab";
 import { SpeedTab } from "./SpeedTab";
 import { TabButton, TabList } from "../Tabs";
 import { LogStream } from "../LogStream";
+import { loadViewPref, oneOf, saveViewPref } from "../../helper/viewPrefs";
 
 type TabId = "overview" | "files" | "peers" | "trackers" | "speed" | "logs";
 
@@ -28,7 +29,12 @@ export const DetailPane: React.FC = () => {
     (state) => state.detailPaneRequestedTab,
   );
   const setDetailPaneTab = useUIStore((state) => state.setDetailPaneTab);
-  const [activeTab, setActiveTab] = useState<TabId>("overview");
+  const [activeTab, setActiveTab] = useState<TabId>(() =>
+    loadViewPref<TabId>("detailPaneTab", "overview", oneOf(VALID_TABS)),
+  );
+  useEffect(() => {
+    saveViewPref("detailPaneTab", activeTab);
+  }, [activeTab]);
 
   // Respond to programmatic tab switch requests
   useEffect(() => {

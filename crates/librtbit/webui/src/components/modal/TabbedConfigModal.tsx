@@ -6,12 +6,13 @@ import { Button } from "../buttons/Button";
 import { ErrorComponent } from "../ErrorComponent";
 import { ErrorWithLabel } from "../../rtbit-web";
 import { TabButton, TabList } from "../Tabs";
+import { RestartRequiredBadge } from "../config/SettingNotes";
+import type { SettingDefinition } from "../config/settingsRegistry";
+import { matchSettings } from "../../helper/settingsSearch";
 
 export interface ConfigTab {
   id: string;
   label: string;
-  // Extra words the settings search matches, e.g. the names of fields on the tab
-  keywords?: string;
   content: ReactNode;
 }
 
@@ -20,6 +21,8 @@ export interface TabbedConfigModalProps {
   onClose?: () => void;
   title: string;
   tabs: ConfigTab[];
+  // Individual settings to search by label; each one names the tab it lives on
+  settings?: readonly SettingDefinition[];
   initialTab?: string;
   onSave: () => void | Promise<void>;
   onReset?: () => void;
@@ -34,6 +37,7 @@ export const TabbedConfigModal: React.FC<TabbedConfigModalProps> = ({
   onClose,
   title,
   tabs,
+  settings = [],
   initialTab,
   onSave,
   onReset,
@@ -45,15 +49,20 @@ export const TabbedConfigModal: React.FC<TabbedConfigModalProps> = ({
   const [currentTab, setCurrentTab] = useState(initialTab || tabs[0]?.id);
   const [query, setQuery] = useState("");
 
-  const needle = query.trim().toLowerCase();
-  const visibleTabs = needle
-    ? tabs.filter((tab) =>
-        `${tab.label} ${tab.keywords ?? ""}`.toLowerCase().includes(needle),
-      )
+  const searching = query.trim() !== "";
+  const matches = matchSettings(settings, tabs, query);
+  const matchedTabIds = new Set<string>(matches.map((s) => s.tab));
+  const visibleTabs = searching
+    ? tabs.filter((tab) => matchedTabIds.has(tab.id))
     : tabs;
   const activeTab = visibleTabs.some((tab) => tab.id === currentTab)
     ? currentTab
     : visibleTabs[0]?.id;
+
+  const jumpTo = (setting: SettingDefinition) => {
+    setCurrentTab(setting.tab);
+    setQuery("");
+  };
 
   return (
     <Modal
@@ -74,6 +83,30 @@ export const TabbedConfigModal: React.FC<TabbedConfigModalProps> = ({
             className="w-full mb-3 px-2 py-1.5 rounded-md border border-divider bg-surface text-text"
           />
         )}
+        {searching && (
+          <ul aria-label="Matching settings" className="mb-3 space-y-1">
+            {matches.map((setting) => (
+              <li key={setting.id}>
+                <button
+                  type="button"
+                  onClick={() => jumpTo(setting)}
+                  className="w-full text-left px-2 py-1 rounded hover:bg-surface cursor-pointer flex items-center gap-2 text-sm"
+                >
+                  <span className="text-primary">{setting.label}</span>
+                  <span className="text-tertiary">
+                    {tabs.find((t) => t.id === setting.tab)?.label}
+                  </span>
+                  {setting.restartRequired && <RestartRequiredBadge />}
+                </button>
+              </li>
+            ))}
+            {matches.length === 0 && (
+              <li className="text-secondary text-sm px-2">
+                No settings match "{query.trim()}".
+              </li>
+            )}
+          </ul>
+        )}
         {tabs.length > 1 && (
           <TabList className="mb-4">
             {visibleTabs.map((tab) => (
@@ -86,9 +119,6 @@ export const TabbedConfigModal: React.FC<TabbedConfigModalProps> = ({
               />
             ))}
           </TabList>
-        )}
-        {needle && visibleTabs.length === 0 && (
-          <p className="text-secondary text-sm">No settings match "{query}".</p>
         )}
         {tabs.map((tab) => (
           <div key={tab.id} className={tab.id === activeTab ? "" : "hidden"}>

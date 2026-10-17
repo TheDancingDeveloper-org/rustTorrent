@@ -30,6 +30,7 @@ import { useTorrentStore } from "../stores/torrentStore";
 import { useErrorStore } from "../stores/errorStore";
 import { useIsLargeScreen } from "../hooks/useIsLargeScreen";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
+import { useAnnouncements } from "../hooks/useAnnouncements";
 import {
   ErrorDetails,
   STATE_LIVE,
@@ -44,6 +45,7 @@ import { MagnetInput } from "./buttons/MagnetInput";
 import { FileInput } from "./buttons/FileInput";
 import { ConfigModal } from "./config/ConfigModal";
 import { ShortcutHelp } from "./ShortcutHelp";
+import { LiveAnnouncer } from "./LiveAnnouncer";
 import { TorrentDetailsModal } from "./modal/TorrentDetailsModal";
 import { DeleteTorrentModal } from "./modal/DeleteTorrentModal";
 
@@ -252,6 +254,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     },
   };
   useKeyboardShortcuts(keyboardActions);
+  useAnnouncements();
 
   const runBulkAction = async (
     action: (id: number) => Promise<void>,
@@ -609,6 +612,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       )}
 
       <ShortcutHelp />
+      <LiveAnnouncer />
     </div>
   );
 };

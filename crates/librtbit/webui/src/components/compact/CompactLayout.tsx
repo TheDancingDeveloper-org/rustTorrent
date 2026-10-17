@@ -3,6 +3,7 @@ import { TorrentListItem } from "../../api-types";
 import { TorrentTable } from "./TorrentTable";
 import { DetailPane } from "./DetailPane";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
+import { isNumber, loadViewPref, saveViewPref } from "../../helper/viewPrefs";
 
 const DETAIL_PANE_MIN_HEIGHT = 100;
 const DETAIL_PANE_MAX_HEIGHT = 600;
@@ -20,9 +21,18 @@ export const CompactLayout: React.FC<CompactLayoutProps> = ({
   // Keyboard shortcuts (Ctrl+A, Ctrl+F, Escape)
   useKeyboardShortcuts();
 
-  const [detailPaneHeight, setDetailPaneHeight] = useState(
-    DETAIL_PANE_DEFAULT_HEIGHT,
+  const [detailPaneHeight, setDetailPaneHeight] = useState(() =>
+    Math.max(
+      DETAIL_PANE_MIN_HEIGHT,
+      Math.min(
+        DETAIL_PANE_MAX_HEIGHT,
+        loadViewPref("detailPaneHeight", DETAIL_PANE_DEFAULT_HEIGHT, isNumber),
+      ),
+    ),
   );
+  useEffect(() => {
+    saveViewPref("detailPaneHeight", Math.round(detailPaneHeight));
+  }, [detailPaneHeight]);
   const [isDragging, setIsDragging] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
