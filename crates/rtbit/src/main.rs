@@ -10,7 +10,9 @@ use std::{
 };
 
 use anyhow::{Context, bail};
-use clap::{ArgAction, CommandFactory, Parser, ValueEnum, builder::BoolishValueParser};
+use clap::{
+    ArgAction, CommandFactory, FromArgMatches, Parser, ValueEnum, builder::BoolishValueParser,
+};
 use clap_complete::Shell;
 use librqbit_dualstack_sockets::TcpListener;
 use librtbit::{
@@ -28,6 +30,8 @@ use librtbit::{
 };
 use size_format::SizeFormatterBinary as SF;
 use tokio_util::sync::CancellationToken;
+
+mod config_file;
 use tracing::{debug_span, error, info, trace_span, warn};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -69,6 +73,11 @@ fn parse_umask(value: &str) -> anyhow::Result<libc::mode_t> {
 #[derive(Parser)]
 #[command(version, author, about)]
 struct Opts {
+    /// A TOML config file of non-secret settings. Command-line flags and environment variables
+    /// take precedence over it. See `rtbit config dump`.
+    #[arg(long, env = "RTBIT_CONFIG")]
+    config: Option<PathBuf>,
+
     /// The console log level: trace, debug, info (default), warn or error.
     /// If RUST_LOG is set it takes precedence, e.g. RUST_LOG=librtbit=debug,info.
     #[arg(value_enum, short = 'v', env = "RTBIT_LOG_LEVEL_CONSOLE")]
@@ -514,6 +523,21 @@ enum SubCommand {
     Completions(CompletionsOpts),
     /// Manage the HTTP API login credentials.
     Auth(AuthOpts),
+    /// Inspect the effective configuration.
+    Config(ConfigOpts),
+}
+
+#[derive(Parser)]
+struct ConfigOpts {
+    #[clap(subcommand)]
+    subcommand: ConfigSubcommand,
+}
+
+#[derive(Parser)]
+enum ConfigSubcommand {
+    /// Print the effective settings as TOML, with the config file, environment and flags merged.
+    /// Secrets are never printed, so the output is safe to share.
+    Dump,
 }
 
 #[derive(Parser)]
@@ -603,7 +627,8 @@ fn main() -> anyhow::Result<()> {
         unsafe { std::env::set_var("RUST_BACKTRACE", "1") };
     }
 
-    let opts = Opts::parse();
+    let matches = Opts::command().get_matches();
+    let mut opts = Opts::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
 
     if let SubCommand::Completions(completions_opts) = &opts.subcommand {
         clap_complete::generate(
@@ -617,6 +642,15 @@ fn main() -> anyhow::Result<()> {
 
     if let SubCommand::Auth(auth_opts) = &opts.subcommand {
         return run_auth_command(auth_opts);
+    }
+
+    if let Some(path) = opts.config.clone() {
+        let file = config_file::load(&path)?;
+        config_file::apply(&mut opts, &matches, &file)?;
+    }
+
+    if let SubCommand::Config(config_opts) = &opts.subcommand {
+        return run_config_command(&opts, config_opts);
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -1154,6 +1188,7 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
         }
         SubCommand::Completions(_) => unreachable!(),
         SubCommand::Auth(_) => unreachable!(),
+        SubCommand::Config(_) => unreachable!(),
     }
 }
 
@@ -1220,6 +1255,16 @@ fn log_startup_banner(listen_addr: SocketAddr, basic_auth_user: Option<&str>, in
     for (label, value) in lines {
         info!("{label:>18}: {value}");
     }
+}
+
+/// Runs `rtbit config ...`.
+fn run_config_command(opts: &Opts, config_opts: &ConfigOpts) -> anyhow::Result<()> {
+    match config_opts.subcommand {
+        ConfigSubcommand::Dump => {
+            print!("{}", toml::to_string_pretty(&config_file::dump(opts))?);
+        }
+    }
+    Ok(())
 }
 
 /// Directory holding `credentials.json`. It uses data_dir (not config_dir) so it lands
