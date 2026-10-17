@@ -4,6 +4,7 @@
 mod config;
 mod launch;
 mod tray;
+#[cfg(feature = "self-update")]
 mod updates;
 
 use std::{
@@ -417,7 +418,7 @@ fn run_app() {
     let argv: Vec<String> = std::env::args().collect();
     let start_hidden = launch::starts_hidden(&argv);
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // Must be first. A second instance hands its argv (a .torrent or magnet:
         // link to open) to this one and exits here, before it starts an engine
         // that would fight for the same ports.
@@ -433,8 +434,10 @@ fn run_app() {
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             Some(vec![launch::AUTOSTART_ARG]),
-        ))
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        ));
+    #[cfg(feature = "self-update")]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    builder
         .invoke_handler(tauri::generate_handler![cmd_open_in_browser])
         .setup(move |app| {
             // The engine starts here, after the single-instance check above, and

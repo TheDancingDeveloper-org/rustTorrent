@@ -26,11 +26,10 @@ modules:
   - name: rtbit-desktop
     buildsystem: simple
     build-commands:
-      # The in-app updater downloads and replaces the binary, which the
-      # sandbox forbids. Flatpak updates arrive through the Flatpak remote,
-      # so the updater's config is removed before the build.
-      - python3 -c "import json,pathlib; p=pathlib.Path('desktop/src-tauri/tauri.conf.json'); c=json.loads(p.read_text()); c.get('plugins',{}).pop('updater',None); p.write_text(json.dumps(c, indent=2))"
-      - cargo build --release --manifest-path desktop/src-tauri/Cargo.toml --offline
+      # The in-app updater is a cargo feature (self-update), off here: the
+      # sandbox forbids replacing the binary, and updates arrive through the
+      # Flatpak remote.
+      - cargo build --release --manifest-path desktop/src-tauri/Cargo.toml --offline --no-default-features
       - install -Dm755 target/release/rtbit-desktop /app/bin/rtbit-desktop
       - install -Dm644 packaging/flatpak/io.github.TheDancingDeveloper.rustTorrent.desktop /app/share/applications/io.github.TheDancingDeveloper.rustTorrent.desktop
       - install -Dm644 io.github.TheDancingDeveloper.rustTorrent.metainfo.xml /app/share/metainfo/io.github.TheDancingDeveloper.rustTorrent.metainfo.xml
