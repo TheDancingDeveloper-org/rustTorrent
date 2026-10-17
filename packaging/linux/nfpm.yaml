@@ -1,0 +1,48 @@
+# nfpm config for the rtbit .deb and .rpm packages.
+# Built in CI from the release-github binary; VERSION, ARCH and BINARY are
+# set by the caller, e.g.:
+#   VERSION=0.1.0 ARCH=amd64 BINARY=target/release-github/rtbit \
+#     nfpm package --packager deb --config packaging/linux/nfpm.yaml
+name: rtbit
+arch: "${ARCH}"
+platform: linux
+version: "${VERSION}"
+section: net
+priority: optional
+maintainer: "AusAgentSmith <admin@rusttorrent.dev>"
+description: |
+  A modern BitTorrent client written in Rust.
+  Fast, lightweight, with a web UI, HTTP API, and Docker support.
+vendor: rusttorrent
+homepage: https://github.com/TheDancingDeveloper-org/rustTorrent
+license: "Apache-2.0"
+
+contents:
+  - src: "${BINARY}"
+    dst: /usr/bin/rtbit
+    file_info:
+      mode: 0755
+
+  - src: packaging/linux/rtbit.service
+    dst: /usr/lib/systemd/system/rtbit.service
+    file_info:
+      mode: 0644
+
+  - src: packaging/linux/rtbit.sysusers.conf
+    dst: /usr/lib/sysusers.d/rtbit.conf
+    file_info:
+      mode: 0644
+
+  - src: systemd/rtbit.conf
+    dst: /etc/rtbit/rtbit.conf
+    type: config|noreplace
+    file_info:
+      mode: 0644
+
+overrides:
+  deb:
+    scripts:
+      postinstall: packaging/linux/postinstall.sh
+  rpm:
+    scripts:
+      postinstall: packaging/linux/postinstall.sh

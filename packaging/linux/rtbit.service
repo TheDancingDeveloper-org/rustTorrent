@@ -1,0 +1,24 @@
+[Unit]
+Description=rtbit BitTorrent client
+Documentation=https://github.com/TheDancingDeveloper-org/rustTorrent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rtbit
+Group=rtbit
+EnvironmentFile=-/etc/rtbit/rtbit.conf
+ExecStart=/usr/bin/rtbit server start /var/lib/rtbit/downloads --persistence-location /var/lib/rtbit/session
+StateDirectory=rtbit
+WorkingDirectory=/var/lib/rtbit
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/rtbit
+
+[Install]
+WantedBy=multi-user.target
