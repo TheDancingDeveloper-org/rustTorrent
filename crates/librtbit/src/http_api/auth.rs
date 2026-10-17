@@ -742,14 +742,9 @@ impl CredentialStore {
     /// required. A file that exists but cannot be read or parsed is an error, so the caller
     /// refuses to start rather than silently running without authentication.
     pub fn load(config_dir: PathBuf) -> anyhow::Result<Self> {
-        let file_path = config_dir.join("credentials.json");
-        let credentials = read_credentials_file(&file_path)?;
-        let setup_token = credentials.is_none().then(generate_token);
-        let store = Self {
-            credentials: RwLock::new(credentials),
-            file_path,
-            setup_token,
-        };
+        let mut store = Self::open(config_dir)?;
+        let has_credentials = store.credentials.get_mut().is_some();
+        store.setup_token = (!has_credentials).then(generate_token);
         match &store.setup_token {
             Some(token) => store.write_setup_token_file(token),
             None => {
@@ -758,6 +753,19 @@ impl CredentialStore {
             }
         }
         Ok(store)
+    }
+
+    /// Opens `credentials.json` in `config_dir` for the `rtbit auth` commands. Unlike `load`, it
+    /// never makes a setup token or touches the setup-token file: a running server owns those,
+    /// and replacing the file would leave it holding a token the server does not accept.
+    pub fn open(config_dir: PathBuf) -> anyhow::Result<Self> {
+        let file_path = config_dir.join("credentials.json");
+        let credentials = read_credentials_file(&file_path)?;
+        Ok(Self {
+            credentials: RwLock::new(credentials),
+            file_path,
+            setup_token: None,
+        })
     }
 
     /// Where the setup token is written, next to credentials.json.
@@ -1602,6 +1610,25 @@ mod tests {
         let temp = tempfile::tempdir().expect("temporary directory");
         let store = CredentialStore::load(temp.path().to_path_buf()).expect("load");
         assert!(store.set_read_only_user("viewer", "view-pass").is_err());
+    }
+
+    #[test]
+    fn opening_for_the_cli_leaves_the_servers_setup_token_alone() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let server = CredentialStore::load(temp.path().to_path_buf()).expect("load");
+        let token = server.setup_token().expect("setup pending").to_owned();
+
+        let cli = CredentialStore::open(temp.path().to_path_buf()).expect("open");
+        assert!(cli.setup_token().is_none());
+        assert!(cli.set_read_only_user("viewer", "view-pass").is_err());
+        assert!(!cli.remove_read_only_user().expect("remove"));
+
+        let on_disk = std::fs::read_to_string(server.setup_token_path()).expect("token file");
+        assert_eq!(
+            on_disk, token,
+            "the server's setup token file must be unchanged"
+        );
+        assert!(server.setup_token_matches(&on_disk));
     }
 
     #[test]
