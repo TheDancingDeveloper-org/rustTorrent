@@ -3,7 +3,15 @@ name: Release binaries
 on:
   push:
     tags: ['v*']
+  # Manual re-publish of an existing tag, and the stable-release step of
+  # promote-release.yml, which calls this workflow once the stable tag exists.
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to publish
+        required: true
+        type: string
+  workflow_call:
     inputs:
       tag:
         description: Existing tag to publish
@@ -24,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          ref: ${{ inputs.tag || github.ref_name }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: "1.95"
@@ -53,7 +61,7 @@ jobs:
       - name: Stage and checksum artifacts
         shell: bash
         run: |
-          tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          tag="${{ inputs.tag || github.ref_name }}"
           test -n "$tag"
           rm -rf release-artifacts
           mkdir release-artifacts
@@ -109,7 +117,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          ref: ${{ inputs.tag || github.ref_name }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-artifacts-signed
@@ -118,9 +126,16 @@ jobs:
         id: artifacts
         shell: bash
         run: |
-          tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          tag="${{ inputs.tag || github.ref_name }}"
           test -n "$tag"
+          # Pre-releases (-alpha/-beta/-rc) are GitHub pre-releases and never
+          # move the download host's `latest` link, matching container.yml.
+          case "$tag" in
+            *-alpha*|*-beta*|*-rc*) prerelease=true ;;
+            *) prerelease=false ;;
+          esac
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
       - name: Publish download artifacts
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -146,7 +161,11 @@ jobs:
           tag="${{ steps.artifacts.outputs.tag }}"
           ssh "${ssh_opts[@]}" "$target" "mkdir -p $DEPLOY_DIR/$tag"
           scp "${ssh_opts[@]}" release-artifacts/* "$target:$DEPLOY_DIR/$tag/"
-          ssh "${ssh_opts[@]}" "$target" "cd $DEPLOY_DIR/$tag && ln -sfn rtbit-$tag-linux-x86_64 rtbit-linux-x86_64 && ln -sfn rtbit-$tag-windows-x86_64.exe rtbit-windows-x86_64.exe && ln -sfn $tag $DEPLOY_DIR/latest"
+          latest_link=""
+          if [[ "${{ steps.artifacts.outputs.prerelease }}" == false ]]; then
+            latest_link="&& ln -sfn $tag $DEPLOY_DIR/latest"
+          fi
+          ssh "${ssh_opts[@]}" "$target" "cd $DEPLOY_DIR/$tag && ln -sfn rtbit-$tag-linux-x86_64 rtbit-linux-x86_64 && ln -sfn rtbit-$tag-windows-x86_64.exe rtbit-windows-x86_64.exe $latest_link"
       - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -154,8 +173,18 @@ jobs:
         run: |
           tag="${{ steps.artifacts.outputs.tag }}"
           notes="RELEASE_NOTES_${tag}.md"
-          test -f "$notes"
+          # A checked-in notes file is used verbatim; a tag without one (such
+          # as a promoted stable release) gets GitHub-generated notes.
+          if test -f "$notes"; then
+            notes_args=(--notes-file "$notes")
+          else
+            notes_args=(--generate-notes)
+          fi
+          prerelease_args=()
+          if [[ "${{ steps.artifacts.outputs.prerelease }}" == true ]]; then
+            prerelease_args=(--prerelease)
+          fi
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --verify-tag --title "rustTorrent $tag" --notes-file "$notes"
+            gh release create "$tag" --verify-tag --title "rustTorrent $tag" "${notes_args[@]}" "${prerelease_args[@]}"
           fi
           gh release upload "$tag" release-artifacts/* --clobber

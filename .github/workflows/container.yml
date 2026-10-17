@@ -35,11 +35,17 @@ jobs:
         shell: bash
         run: |
           # Promotion flow: dev branch -> :dev (preview), main branch ->
-          # :staging (promoted, pre-release), v* tag -> prod (:latest/:beta/:<tag>).
+          # :staging (promoted, pre-release). A v* tag is a release:
+          #   vX.Y.Z-{alpha,beta,rc}.N -> :<tag> and :beta (soak; never :latest)
+          #   vX.Y.Z                   -> :<tag> and :latest (stable or hotfix)
           # Every build also gets an immutable :sha-<commit> tag.
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then
             case "$GITHUB_REF_NAME" in v[0-9]*) ;; *) exit 1 ;; esac
-            printf 'tags=%s\n' "$IMAGE:$GITHUB_REF_NAME,$IMAGE:latest,$IMAGE:beta,$IMAGE:sha-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            case "$GITHUB_REF_NAME" in
+              *-alpha*|*-beta*|*-rc*) moving=beta ;;
+              *) moving=latest ;;
+            esac
+            printf 'tags=%s\n' "$IMAGE:$GITHUB_REF_NAME,$IMAGE:$moving,$IMAGE:sha-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           elif [[ "$GITHUB_REF_NAME" == main ]]; then
             printf 'tags=%s\n' "$IMAGE:staging,$IMAGE:sha-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           elif [[ "$GITHUB_REF_NAME" == dev ]]; then

@@ -22,10 +22,11 @@ Promotion flow: **`dev` → `main` → cut release (`v*` tag) → prod.**
   Pushing `main` runs CI and publishes `…:staging` (+ `sha-<commit>`) and
   deploys the website. `main` is protected and its version stays at the current
   beta until a release is cut.
-- **`v*` tag** (cut from `main`) is the release lever → prod: builds the
-  binaries + `.deb`, publishes them to the download host and the GitHub release,
-  and publishes the multi-arch prod image tagged `…:<tag>`, `…:latest`, `…:beta`
-  (+ `sha-<commit>`).
+- **`v*` tag** (cut from `main`) is the release lever. A pre-release tag
+  (`-alpha`/`-beta`/`-rc`) publishes the image as `…:<tag>` and `…:beta` and a
+  GitHub pre-release. A stable tag publishes `…:<tag>` and `…:latest`. Both
+  publish the binaries to the download host and the GitHub release (+ `sha-<commit>`).
+  The soak-then-promote flow is in [RELEASING.md](../RELEASING.md).
 
 Nothing auto-deploys the running prod service from these workflows; publication
 is to GHCR + the download host, and the deployment platform (Komodo) pulls the
@@ -53,12 +54,14 @@ Release tags build:
 
 Tag releases publish artifacts to the download host and create the canonical
 GitHub release. The container workflow publishes the multi-arch GHCR image.
+Promotion of a soaked pre-release to stable is the manual `promote-release.yml`
+workflow; see [RELEASING.md](../RELEASING.md).
 
 Release notes are checked in as `RELEASE_NOTES_<tag>.md`; the GitHub release
 workflow uses that file verbatim and uploads the binaries and checksums.
 
-GitHub publishes every tagged build as a full release (`prerelease: false`),
-including tags whose semantic version contains `alpha`, `beta`, or `rc`.
+GitHub marks a tag whose semantic version contains `alpha`, `beta`, or `rc` as a
+pre-release, and any other tag as a stable release.
 The Docker image must keep `org.opencontainers.image.source` set to
 `https://github.com/TheDancingDeveloper-org/rustTorrent`. GitHub uses that OCI source
 metadata to associate the GHCR container package with the public repository so
