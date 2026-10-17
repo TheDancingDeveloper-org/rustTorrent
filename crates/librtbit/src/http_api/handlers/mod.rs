@@ -1,5 +1,6 @@
 pub(crate) mod configure;
 pub(crate) mod dht;
+pub(crate) mod healthz;
 pub(crate) mod indexarr;
 pub(crate) mod logging;
 pub(crate) mod other;
@@ -87,6 +88,7 @@ async fn h_api_root(parts: Parts) -> impl IntoResponse {
 pub fn make_api_router(state: ApiState) -> Router {
     let mut api_router = Router::new()
         .route("/", get(h_api_root))
+        .route("/healthz", get(healthz::h_healthz))
         .route("/rust_log", post(logging::h_set_rust_log))
         .route("/dht/stats", get(dht::h_dht_stats))
         .route("/dht/table", get(dht::h_dht_table))

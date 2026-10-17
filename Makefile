@@ -56,24 +56,20 @@ check-repo:
 testserver:
 	ulimit -n unlimited && cargo run -p librtbit --features http-api,tracing-subscriber-utils,webui,prometheus --example simulate_traffic
 
-@PHONY: docker-build-xx-one-platform
-docker-build-xx-one-platform:
-	docker build -f docker/Dockerfile.xx \
-		--platform $(PLATFORM) \
-		--output type=local,dest=target/cross/$(PLATFORM) . && \
+@PHONY: docker-build-one-platform
+docker-build-one-platform:
 	docker build \
 		-t ikatson/rtbit:$(shell git describe --tags)-dev-$(shell echo $(PLATFORM) | tr '/' '-') \
 		--platform $(PLATFORM) \
-		-f docker/Dockerfile \
-		target/cross/
+		-f Dockerfile .
 
 @PHONY: docker-build-amd64
 docker-build-amd64:
-	PLATFORM=linux/amd64 $(MAKE) docker-build-xx-one-platform
+	PLATFORM=linux/amd64 $(MAKE) docker-build-one-platform
 
 @PHONY: docker-build-armv7
 docker-build-armv7:
-		PLATFORM=linux/arm/v7 $(MAKE) docker-build-xx-one-platform
+		PLATFORM=linux/arm/v7 $(MAKE) docker-build-one-platform
 
 @PHONY: clean
 clean:
@@ -91,10 +87,7 @@ release-linux-current-target:
 
 @PHONY: debug-linux-docker-x86_64
 debug-linux-docker-x86_64:
-	CARGO_RELEASE_PROFILE=dev \
-	$(MAKE) release-linux-x86_64 && \
-	cp target/x86_64-unknown-linux-musl/debug/rtbit target/cross/linux/amd64/ && \
-	docker build -t ikatson/rtbit:tmp-debug -f docker/Dockerfile --platform linux/amd64 target/cross && \
+	docker build -t ikatson/rtbit:tmp-debug -f Dockerfile --platform linux/amd64 . && \
 	docker push ikatson/rtbit:tmp-debug
 
 @PHONY: release-linux-x86_64
