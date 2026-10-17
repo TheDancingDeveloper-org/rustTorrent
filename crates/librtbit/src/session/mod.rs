@@ -1,8 +1,12 @@
 mod helpers;
 mod network;
+mod on_complete;
 mod peer_sources;
+mod scheduler;
 mod types;
 
+pub use on_complete::{CompletedTorrent, OnCompleteHook};
+pub use scheduler::ShareLimits;
 pub use types::{
     AddTorrent, AddTorrentOptions, AddTorrentResponse, ListOnlyResponse, SessionOptions,
     SessionPersistenceConfig,
@@ -151,6 +155,15 @@ pub struct Session {
     pub(crate) fastresume_validation_denom: Option<u32>,
     // Move-on-complete: destination folder for finished torrents
     completed_folder: RwLock<Option<PathBuf>>,
+
+    // Run once per torrent when it finishes downloading.
+    on_complete: RwLock<OnCompleteHook>,
+
+    // Queue limits and the low-disk guard, enforced by the policy pass. 0 = off.
+    max_active_downloads: AtomicUsize,
+    max_active_seeds: AtomicUsize,
+    min_free_disk_space: std::sync::atomic::AtomicU64,
+    use_part_files: std::sync::atomic::AtomicBool,
 
     // Alternative ("turtle mode") speed limits state.
     pub(crate) alt_speed: crate::alt_speed::AltSpeedState,
@@ -482,6 +495,11 @@ impl Session {
                 fastresume_validation_denom: opts.fastresume_validation_denom,
                 category_manager,
                 completed_folder: RwLock::new(resolved_completed_folder),
+                on_complete: RwLock::new(OnCompleteHook::default()),
+                max_active_downloads: AtomicUsize::new(0),
+                max_active_seeds: AtomicUsize::new(0),
+                min_free_disk_space: std::sync::atomic::AtomicU64::new(0),
+                use_part_files: std::sync::atomic::AtomicBool::new(false),
                 alt_speed: Default::default(),
             });
 
@@ -557,6 +575,7 @@ impl Session {
 
             session.start_speed_estimator_updater();
             session.spawn_alt_speed_scheduler();
+            session.spawn_policy_scheduler();
 
             Ok(session)
         }
@@ -956,6 +975,9 @@ impl Session {
                     output_folder_root,
                     initial_peers: opts.initial_peers.clone().unwrap_or_default(),
                     peer_limit: opts.peer_limit.or(self.peer_limit),
+                    part_files: self
+                        .use_part_files
+                        .load(std::sync::atomic::Ordering::Relaxed),
                     #[cfg(feature = "disable-upload")]
                     _disable_upload: self._disable_upload,
                 },
@@ -978,6 +1000,9 @@ impl Session {
                     opts.completion_on.unwrap_or_default(),
                 ),
                 cancellation_token: parking_lot::Mutex::new(self.cancellation_token.child_token()),
+                share_limits: RwLock::new(ShareLimits::default()),
+                queued: std::sync::atomic::AtomicBool::new(false),
+                held_for_disk: std::sync::atomic::AtomicBool::new(false),
             });
 
             let initializing = Arc::new(TorrentStateInitializing::new(
@@ -1133,12 +1158,30 @@ impl Session {
     }
 
     pub async fn pause(&self, handle: &ManagedTorrentHandle) -> anyhow::Result<()> {
+        // A user pause takes the torrent out of the queue and off the disk guard's
+        // hands; it stays paused until the user resumes it.
+        handle
+            .shared()
+            .queued
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        handle
+            .shared()
+            .held_for_disk
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         handle.pause()?;
         self.try_update_persistence_metadata(handle).await;
         Ok(())
     }
 
     pub async fn unpause(self: &Arc<Self>, handle: &ManagedTorrentHandle) -> anyhow::Result<()> {
+        handle
+            .shared()
+            .queued
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        handle
+            .shared()
+            .held_for_disk
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         let peer_rx = self.make_peer_rx_managed_torrent(handle, true);
         handle.start(peer_rx, false)?;
         self.try_update_persistence_metadata(handle).await;
@@ -1261,6 +1304,12 @@ impl Session {
         self.completed_folder.read().clone()
     }
 
+    /// Enable writing incomplete files under a `.part` name. Applies to torrents added after the call.
+    pub fn set_use_part_files(&self, enabled: bool) {
+        self.use_part_files
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Set the completed folder (move-on-complete destination).
     pub fn set_completed_folder(&self, folder: Option<PathBuf>) {
         *self.completed_folder.write() = folder;
@@ -1299,6 +1348,13 @@ impl Session {
             format!("[{id}]completion_watcher"),
             async move {
                 // Wait for the torrent to finish downloading
+                if let Err(e) = handle.wait_until_initialized().await {
+                    debug!(id, "torrent errored while initializing: {e:#}");
+                    return Ok(());
+                }
+                // A torrent that is already complete when it initializes (e.g. on
+                // session restore) is not a completion event for the on-complete hook.
+                let already_complete = handle.stats().finished;
                 if let Err(e) = handle.wait_until_completed().await {
                     debug!(id, "torrent errored while waiting for completion: {e:#}");
                     return Ok(());
@@ -1319,6 +1375,10 @@ impl Session {
                     )
                     .ok();
 
+                if let Some(live) = handle.live() {
+                    live.finalize_all_files();
+                }
+
                 let session = match session.upgrade() {
                     Some(s) => s,
                     None => return Ok(()),
@@ -1330,21 +1390,41 @@ impl Session {
                 };
                 session.try_update_persistence_metadata(&handle).await;
 
-                let completed_folder = match session.completed_folder.read().clone() {
-                    Some(f) => f,
-                    None => return Ok(()),
-                };
-                let category = handle.shared().category.read().clone();
-                let completed_folder =
-                    expand_folder_template(&completed_folder, category.as_deref());
+                let completed_folder = session.completed_folder.read().clone();
+                if let Some(completed_folder) = completed_folder {
+                    let category = handle.shared().category.read().clone();
+                    let completed_folder =
+                        expand_folder_template(&completed_folder, category.as_deref());
 
-                info!(id, target_folder=?completed_folder, "torrent completed, moving to completed folder");
+                    info!(id, target_folder=?completed_folder, "torrent completed, moving to completed folder");
 
-                if let Err(e) = session
-                    .move_completed_torrent(id, &handle, completed_folder)
-                    .await
-                {
-                    error!(id, "error moving completed torrent: {e:#}");
+                    if let Err(e) = session
+                        .move_completed_torrent(id, &handle, completed_folder)
+                        .await
+                    {
+                        error!(id, "error moving completed torrent: {e:#}");
+                    }
+                }
+
+                let hook = session.on_complete_hook();
+                if !already_complete && hook.is_enabled() {
+                    let event = CompletedTorrent::new(
+                        id,
+                        handle.info_hash().as_string(),
+                        handle.name(),
+                        handle.output_folder(),
+                        completion_on,
+                    );
+                    let client = session.reqwest_client.clone();
+                    // Detached so a slow command or webhook never delays the torrent's own tasks.
+                    session.spawn(
+                        debug_span!(parent: handle.shared.span.clone(), "on_complete", id),
+                        format!("[{id}]on_complete"),
+                        async move {
+                            on_complete::run(hook, client, event).await;
+                            Ok(())
+                        },
+                    );
                 }
                 Ok(())
             },

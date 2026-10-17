@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Weak;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -117,6 +117,8 @@ pub(crate) struct ManagedTorrentOptions {
     pub output_folder_root: Option<PathBuf>,
     pub initial_peers: Vec<SocketAddr>,
     pub peer_limit: Option<usize>,
+    /// Keep files under a `.part` name until they finish downloading.
+    pub part_files: bool,
     #[cfg(feature = "disable-upload")]
     pub _disable_upload: bool,
 }
@@ -291,6 +293,15 @@ pub struct ManagedTorrentShared {
     /// Used to cancel init tasks, checking, etc. when the torrent is deleted/forgotten.
     /// Wrapped in a Mutex so it can be reset after a pause-during-init.
     pub(crate) cancellation_token: parking_lot::Mutex<CancellationToken>,
+
+    /// Share limits (ratio and seeding time) checked by the session's policy pass.
+    pub(crate) share_limits: RwLock<crate::session::ShareLimits>,
+
+    /// Set while the torrent waits for a queue slot. Queued torrents are paused.
+    pub(crate) queued: AtomicBool,
+
+    /// Set while the low-disk guard holds this download. The guard resumes it.
+    pub(crate) held_for_disk: AtomicBool,
 }
 
 impl ManagedTorrentShared {
@@ -713,6 +724,11 @@ impl ManagedTorrent {
 
     pub fn is_paused(&self) -> bool {
         self.locked.read().paused
+    }
+
+    /// True while the torrent is waiting for a download or seed slot.
+    pub fn is_queued(&self) -> bool {
+        self.shared.queued.load(Ordering::Relaxed)
     }
 
     /// Replace the current state with a fresh initializer that ignores any
