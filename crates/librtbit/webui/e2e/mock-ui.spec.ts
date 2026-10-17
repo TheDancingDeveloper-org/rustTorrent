@@ -143,6 +143,26 @@ test("selects and opens the menu for torrents with the keyboard", async ({
   await expect(rows.nth(1)).toBeFocused();
 });
 
+test("moves focus to the first and last torrent rows with Home and End", async ({
+  page,
+}) => {
+  const rowAt = (index: number) =>
+    page.locator(`[role="row"][data-row-index="${index}"]`);
+  // aria-rowcount includes the header row
+  const grid = page.getByRole("grid", { name: "Torrents" });
+  const lastIndex = Number(await grid.getAttribute("aria-rowcount")) - 2;
+  await rowAt(0).focus();
+
+  // End scrolls the list, which unmounts row 0; focus must still land on the new last row
+  await page.keyboard.press("End");
+  await expect(rowAt(lastIndex)).toBeFocused();
+  await expect(rowAt(lastIndex)).toHaveAttribute("aria-selected", "true");
+
+  await page.keyboard.press("Home");
+  await expect(rowAt(0)).toBeFocused();
+  await expect(rowAt(0)).toHaveAttribute("aria-selected", "true");
+});
+
 test("opens the torrent menu on screen from a card's More actions button", async ({
   page,
 }) => {
