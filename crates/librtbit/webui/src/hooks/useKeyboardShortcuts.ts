@@ -8,7 +8,15 @@ interface KeyboardShortcutActions {
   onToggleSidebar?: () => void;
   onOpenSettings?: () => void;
   onOpenLogs?: () => void;
+  onToggleRun?: () => void;
+  onOpenDetails?: () => void;
+  onOpenFilePicker?: () => void;
+  onFocusMagnet?: () => void;
+  onToggleHelp?: () => void;
 }
+
+// Elements that already act on Enter/Space themselves; leave those keys alone.
+const NATIVE_ACTIVATION_TAGS = new Set(["BUTTON", "A", "SUMMARY"]);
 
 /**
  * Hook that sets up keyboard shortcuts for the compact view.
@@ -30,12 +38,14 @@ export function useKeyboardShortcuts(actions?: KeyboardShortcutActions) {
       if (
         target.tagName === "INPUT" ||
         target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT" ||
         target.isContentEditable
       ) {
         return;
       }
 
-      // Ignore if a modal is open (modals have role="dialog")
+      // Ignore if a modal is open (modals have role="dialog").
+      // The shortcut overlay is itself a dialog and closes on its own keys.
       if (document.querySelector('[role="dialog"]')) {
         return;
       }
@@ -73,6 +83,33 @@ export function useKeyboardShortcuts(actions?: KeyboardShortcutActions) {
         return;
       }
 
+      // The actions below are only bound where the Toolbar supplies them. The
+      // hook is mounted in several views at once, and each copy would otherwise
+      // run the same action (a toggle would cancel itself out).
+
+      // Ctrl/Cmd+O: Choose a .torrent file
+      if (isMod && e.key === "o" && actions?.onOpenFilePicker) {
+        e.preventDefault();
+        actions.onOpenFilePicker();
+        return;
+      }
+
+      // M: Focus the magnet / URL input
+      if (!isMod && !e.altKey && (e.key === "m" || e.key === "M")) {
+        if (actions?.onFocusMagnet) {
+          e.preventDefault();
+          actions.onFocusMagnet();
+        }
+        return;
+      }
+
+      // ?: Show or hide the shortcut reference
+      if (!isMod && !e.altKey && e.key === "?" && actions?.onToggleHelp) {
+        e.preventDefault();
+        actions.onToggleHelp();
+        return;
+      }
+
       // Escape: Clear selection
       if (e.key === "Escape") {
         e.preventDefault();
@@ -80,14 +117,34 @@ export function useKeyboardShortcuts(actions?: KeyboardShortcutActions) {
         return;
       }
 
-      // Delete/Backspace: Open delete modal for selected torrents
-      if (
-        (e.key === "Delete" || e.key === "Backspace") &&
-        selectedTorrentIds.size > 0
-      ) {
+      // Delete: Open delete modal for selected torrents.
+      // Backspace is deliberately not bound, so it cannot delete by accident.
+      if (e.key === "Delete" && selectedTorrentIds.size > 0) {
         e.preventDefault();
         actions?.onDelete?.();
         return;
+      }
+
+      // Space / Enter act on the whole selection only when nothing focused
+      // has claimed the key (a focused row already does, and prevents default).
+      if (
+        (e.key === " " || e.key === "Enter") &&
+        !e.defaultPrevented &&
+        !NATIVE_ACTIVATION_TAGS.has(target.tagName) &&
+        selectedTorrentIds.size > 0
+      ) {
+        if (e.key === " " && actions?.onToggleRun) {
+          e.preventDefault();
+          actions.onToggleRun();
+          return;
+        }
+        if (e.key === "Enter" && selectedTorrentIds.size === 1) {
+          if (actions?.onOpenDetails) {
+            e.preventDefault();
+            actions.onOpenDetails();
+          }
+          return;
+        }
       }
 
       // B: Toggle sidebar

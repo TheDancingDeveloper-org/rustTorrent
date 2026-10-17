@@ -13,31 +13,53 @@ import {
 } from "../../helper/torrentFilters";
 import { Button } from "../buttons/Button";
 import { ColumnMenu } from "./ColumnMenu";
+import { loadViewPref, oneOf, saveViewPref } from "../../helper/viewPrefs";
 import { TorrentContextMenu, ContextMenuState } from "../TorrentContextMenu";
 
 // Sort columns: all sortable column IDs
-export type TableSortColumn =
-  | "id"
-  | "name"
-  | "size"
-  | "progress"
-  | "downloadedBytes"
-  | "downSpeed"
-  | "upSpeed"
-  | "uploadedBytes"
-  | "eta"
-  | "peers"
-  | "state"
-  | "ratio"
-  | "category"
-  | "seeding_time"
-  | "queue_position"
-  | "availability"
-  | "added_on"
-  | "tracker";
+const TABLE_SORT_COLUMNS = [
+  "id",
+  "name",
+  "size",
+  "progress",
+  "downloadedBytes",
+  "downSpeed",
+  "upSpeed",
+  "uploadedBytes",
+  "eta",
+  "peers",
+  "state",
+  "ratio",
+  "category",
+  "seeding_time",
+  "queue_position",
+  "availability",
+  "added_on",
+  "tracker",
+] as const;
+
+export type TableSortColumn = (typeof TABLE_SORT_COLUMNS)[number];
 
 const DEFAULT_SORT_COLUMN: TableSortColumn = "id";
 const DEFAULT_SORT_DIRECTION: SortDirection = "desc";
+
+interface TableSortPref {
+  column: TableSortColumn;
+  direction: SortDirection;
+}
+
+const isTableSortPref = (value: unknown): value is TableSortPref => {
+  if (typeof value !== "object" || value === null) return false;
+  const { column, direction } = value as Record<string, unknown>;
+  return (
+    oneOf(TABLE_SORT_COLUMNS)(column) &&
+    (direction === "asc" || direction === "desc")
+  );
+};
+const DEFAULT_SORT_PREF: TableSortPref = {
+  column: DEFAULT_SORT_COLUMN,
+  direction: DEFAULT_SORT_DIRECTION,
+};
 const RESIZE_STEP_PX = 16;
 
 function getTableSortValue(
@@ -155,11 +177,19 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
   const normalizedQuery = searchQuery.toLowerCase().trim();
 
   // Local sorting state
-  const [sortColumn, setSortColumnState] =
-    useState<TableSortColumn>(DEFAULT_SORT_COLUMN);
-  const [sortDirection, setSortDirectionState] = useState<SortDirection>(
-    DEFAULT_SORT_DIRECTION,
+  const [sortColumn, setSortColumnState] = useState<TableSortColumn>(
+    () => loadViewPref("tableSort", DEFAULT_SORT_PREF, isTableSortPref).column,
   );
+  const [sortDirection, setSortDirectionState] = useState<SortDirection>(
+    () =>
+      loadViewPref("tableSort", DEFAULT_SORT_PREF, isTableSortPref).direction,
+  );
+  useEffect(() => {
+    saveViewPref<TableSortPref>("tableSort", {
+      column: sortColumn,
+      direction: sortDirection,
+    });
+  }, [sortColumn, sortDirection]);
 
   // Resize state
   const [resizing, setResizing] = useState<{

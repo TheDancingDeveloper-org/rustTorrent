@@ -5,7 +5,6 @@ import debounce from "lodash.debounce";
 import { TorrentListItem } from "../api-types";
 import { Spinner } from "./Spinner";
 import { TorrentCard } from "./TorrentCard";
-import { TorrentDetailsModal } from "./modal/TorrentDetailsModal";
 import { useUIStore } from "../stores/uiStore";
 import {
   TorrentSortColumn,
@@ -35,11 +34,6 @@ export const CardLayout = (props: {
 
   // Keyboard shortcuts (Ctrl+A, Ctrl+F, Escape)
   useKeyboardShortcuts();
-  const detailsModalTorrentId = useUIStore(
-    (state) => state.detailsModalTorrentId,
-  );
-  const closeDetailsModal = useUIStore((state) => state.closeDetailsModal);
-
   const [localSearch, setLocalSearch] = useState(searchQuery);
   const [sortColumn, setSortColumn] =
     useState<TorrentSortColumn>(DEFAULT_SORT_COLUMN);
@@ -260,13 +254,6 @@ export const CardLayout = (props: {
             itemContent={itemContent}
           />
         </div>
-      )}
-      {detailsModalTorrentId !== null && (
-        <TorrentDetailsModal
-          torrentId={detailsModalTorrentId}
-          isOpen={true}
-          onClose={closeDetailsModal}
-        />
       )}
       {torrentContextMenu && (
         <TorrentContextMenu

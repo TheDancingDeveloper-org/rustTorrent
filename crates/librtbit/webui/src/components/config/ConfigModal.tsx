@@ -103,11 +103,13 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
         {
           id: "general",
           label: "General",
+          keywords: "version about theme dark light",
           content: <GeneralTab version={version ?? "unknown"} />,
         },
         {
           id: "folders",
           label: "Folders",
+          keywords: "download completed directory path save",
           content: (
             <FoldersTab
               downloadFolder={downloadFolder}
@@ -120,6 +122,7 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
         {
           id: "speed",
           label: "Speed",
+          keywords: "rate limit upload download bandwidth peers concurrent",
           content: (
             <RateLimitsTab
               downloadBps={limits.download_bps}
@@ -144,11 +147,13 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
         {
           id: "connections",
           label: "Connections",
+          keywords: "port listen peers tcp utp incoming",
           content: <ConnectionTab />,
         },
         {
           id: "queue",
           label: "Queue",
+          keywords: "queue active downloads uploads limit concurrent",
           content: (
             <QueueTab
               maxActiveDownloads={limits.max_active_downloads}
@@ -169,26 +174,31 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
         {
           id: "seeding",
           label: "Seeding",
+          keywords: "seed ratio share limit stop",
           content: <SeedingTab />,
         },
         {
           id: "dht",
           label: "DHT",
+          keywords: "dht bootstrap nodes peer discovery",
           content: <DHTTab />,
         },
         {
           id: "security",
           label: "Security",
+          keywords: "password auth login credentials",
           content: <SecurityTab />,
         },
         {
           id: "http-api",
           label: "HTTP API",
+          keywords: "http api web ui cors bind address port",
           content: <HttpApiTab />,
         },
         {
           id: "rss",
           label: "RSS",
+          keywords: "rss feed filter history",
           content: (
             <RSSTab
               rssHistoryLimit={rssHistoryLimit}

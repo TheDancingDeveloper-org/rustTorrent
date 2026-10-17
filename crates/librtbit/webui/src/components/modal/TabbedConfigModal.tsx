@@ -10,6 +10,8 @@ import { TabButton, TabList } from "../Tabs";
 export interface ConfigTab {
   id: string;
   label: string;
+  // Extra words the settings search matches, e.g. the names of fields on the tab
+  keywords?: string;
   content: ReactNode;
 }
 
@@ -41,6 +43,17 @@ export const TabbedConfigModal: React.FC<TabbedConfigModalProps> = ({
   error,
 }) => {
   const [currentTab, setCurrentTab] = useState(initialTab || tabs[0]?.id);
+  const [query, setQuery] = useState("");
+
+  const needle = query.trim().toLowerCase();
+  const visibleTabs = needle
+    ? tabs.filter((tab) =>
+        `${tab.label} ${tab.keywords ?? ""}`.toLowerCase().includes(needle),
+      )
+    : tabs;
+  const activeTab = visibleTabs.some((tab) => tab.id === currentTab)
+    ? currentTab
+    : visibleTabs[0]?.id;
 
   return (
     <Modal
@@ -52,20 +65,33 @@ export const TabbedConfigModal: React.FC<TabbedConfigModalProps> = ({
       <ModalBody>
         <ErrorComponent error={error ?? null} />
         {tabs.length > 1 && (
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search settings"
+            aria-label="Search settings"
+            className="w-full mb-3 px-2 py-1.5 rounded-md border border-divider bg-surface text-text"
+          />
+        )}
+        {tabs.length > 1 && (
           <TabList className="mb-4">
-            {tabs.map((tab) => (
+            {visibleTabs.map((tab) => (
               <TabButton
                 key={tab.id}
                 id={tab.id}
                 label={tab.label}
-                active={tab.id === currentTab}
+                active={tab.id === activeTab}
                 onClick={() => setCurrentTab(tab.id)}
               />
             ))}
           </TabList>
         )}
+        {needle && visibleTabs.length === 0 && (
+          <p className="text-secondary text-sm">No settings match "{query}".</p>
+        )}
         {tabs.map((tab) => (
-          <div key={tab.id} className={tab.id === currentTab ? "" : "hidden"}>
+          <div key={tab.id} className={tab.id === activeTab ? "" : "hidden"}>
             {tab.content}
           </div>
         ))}

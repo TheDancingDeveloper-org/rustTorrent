@@ -5,6 +5,22 @@ import {
   StatusFilter,
 } from "../helper/torrentFilters";
 import { CategoryInfo } from "../api-types";
+import {
+  loadViewPref,
+  saveViewPref,
+  oneOf,
+  isBoolean,
+  isStringOrNull,
+} from "../helper/viewPrefs";
+
+const STATUS_FILTERS: readonly StatusFilter[] = [
+  "all",
+  "downloading",
+  "seeding",
+  "paused",
+  "queued",
+  "error",
+];
 
 const LARGE_SCREEN_BREAKPOINT = 1024;
 
@@ -57,6 +73,10 @@ export interface UIStore {
 
   detailPaneRequestedTab: string | null;
   setDetailPaneTab: (tab: string | null) => void;
+
+  // Keyboard shortcut reference overlay ("?")
+  shortcutHelpOpen: boolean;
+  setShortcutHelpOpen: (open: boolean) => void;
 }
 
 export const useUIStore = create<UIStore>((set, get) => ({
@@ -77,8 +97,13 @@ export const useUIStore = create<UIStore>((set, get) => ({
   searchQuery: "",
   setSearchQuery: (query) => set({ searchQuery: query }),
 
-  statusFilter: "all",
+  statusFilter: loadViewPref<StatusFilter>(
+    "statusFilter",
+    "all",
+    oneOf(STATUS_FILTERS),
+  ),
   setStatusFilter: (filter) => {
+    saveViewPref("statusFilter", filter);
     set({ statusFilter: filter });
   },
 
@@ -199,15 +224,25 @@ export const useUIStore = create<UIStore>((set, get) => ({
     set({ selectedTorrentIds: new Set([newId]), lastSelectedId: newId });
   },
 
-  sidebarCollapsed: false,
+  sidebarCollapsed: loadViewPref("sidebarCollapsed", false, isBoolean),
   sidebarOpen: false,
-  trackerFilter: null,
-  categoryFilter: null,
+  trackerFilter: loadViewPref("trackerFilter", null, isStringOrNull),
+  categoryFilter: loadViewPref("categoryFilter", null, isStringOrNull),
   toggleSidebar: () =>
-    set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+    set((state) => {
+      const sidebarCollapsed = !state.sidebarCollapsed;
+      saveViewPref("sidebarCollapsed", sidebarCollapsed);
+      return { sidebarCollapsed };
+    }),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
-  setTrackerFilter: (tracker) => set({ trackerFilter: tracker }),
-  setCategoryFilter: (category) => set({ categoryFilter: category }),
+  setTrackerFilter: (tracker) => {
+    saveViewPref("trackerFilter", tracker);
+    set({ trackerFilter: tracker });
+  },
+  setCategoryFilter: (category) => {
+    saveViewPref("categoryFilter", category);
+    set({ categoryFilter: category });
+  },
 
   categories: {},
   setCategories: (categories) => set({ categories }),
@@ -223,4 +258,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
 
   detailPaneRequestedTab: null,
   setDetailPaneTab: (tab) => set({ detailPaneRequestedTab: tab }),
+
+  shortcutHelpOpen: false,
+  setShortcutHelpOpen: (open) => set({ shortcutHelpOpen: open }),
 }));
