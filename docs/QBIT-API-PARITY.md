@@ -6,9 +6,9 @@ rustTorrent ships a qBittorrent WebUI API v2 compatibility layer
 it. This document describes how parity with upstream qBittorrent is measured
 and enforced, and where we currently stand.
 
-## Current standing (upstream WebAPI 2.16.2, 2026-08-30)
+## Current standing (upstream WebAPI 2.16.2, refreshed 2026-10-17)
 
-**64 of 93 in-scope endpoints routed (~69%)** — 26 full, 38 partial — plus 2
+**69 of 93 in-scope endpoints routed (~74%)** — 26 full, 43 partial — plus 2
 legacy aliases (`torrents/pause`, `torrents/resume`) that upstream removed in
 WebAPI 2.11. 37 of the 130 upstream endpoints were descoped on 2026-08-30
 (marked `out_of_scope`, enforced as unrouted): `search/*` (Indexarr covers
@@ -16,22 +16,61 @@ discovery), `rss/*` (native `/rss` + Indexarr are the RSS story), `clientdata/*`
 SSL parameters, and qBittorrent-internal app misc (email, cookies, API keys,
 processInfo, getDirectoryContent).
 
+Counts are taken from `qbit_parity_spec.json`; `cargo test -p swarmforge
+qbit_parity -- --nocapture` prints the same scoreboard.
+
 Decisions of record: advertised `webapiVersion` stays **2.11.3** and the
 rename-family bug is now fixed *forward* (see below); the remaining heavy engine
-items (queueing, per-torrent rate limits, move-storage, reannounce, rename)
-**will be built**, not stubbed — they account for most of the 46 still-`missing`
-in-scope endpoints.
+items (a real download queue, per-torrent rate limits, move-storage, reannounce,
+rename) **will be built**, not stubbed — they account for most of the 24
+still-`missing` in-scope endpoints.
 
 | Controller | Implemented / in scope | Notes |
 |---|---|---|
-| `auth` | 2 / 2 | login/logout with SID cookies |
-| `app` | 6 / 10 | version info, `defaultSavePath`, minimal preferences (7 descoped) |
-| `torrents` | 41 / 60 | lifecycle, categories, tags, trackers (add/remove/edit), reannounce, rename (name/file/folder), setLocation/setSavePath, pieces, file prio, per-torrent + share limits, export, webseeds |
+| `auth` | 2 / 2 | login (per-client backoff) / logout with SID cookies |
+| `app` | 6 / 10 | version info (5.x line), `defaultSavePath`, minimal preferences (7 descoped) |
+| `torrents` | 46 / 60 | lifecycle, categories, tags (persisted), trackers (add/remove/edit), reannounce, rename (name/file/folder), setLocation/setSavePath, pieces, file prio, per-torrent + share limits, export, webseeds; queue-position endpoints are no-ops |
 | `transfer` | 10 / 13 | info (real session limits) + session rate limits + alt-speed mode + session pause/resume |
 | `sync` | 1 / 2 | `maindata` (full-update snapshots; no per-client rid deltas) |
 | `torrentcreator` | 4 / 4 | task API over the native `create_torrent` (in-memory tasks) |
 | `log` | 0 / 2 | no persistent log ring buffer |
 | `rss`, `search`, `clientdata` | — | descoped entirely |
+
+### Compat hardening (2026-10-17)
+
+Changes to the compat layer from the polish review (Q1–Q4, H5, the compat half
+of H4, and tag persistence):
+
+- **Version**: `app/version` returns `v5.0.0` (was `v0.0.1`). *arr apps gate
+  features on this string. `webapiVersion` is unchanged.
+- **Preferences**: `app/preferences` reports the seeding-limit fields
+  (`max_ratio_enabled`, `max_ratio`, `max_ratio_act`, `max_seeding_time_enabled`,
+  `max_seeding_time`) as disabled, using qBittorrent's default values.
+- **`app/setPreferences`**: unknown and unsupported fields are ignored, and
+  `announce_port` is optional. Read-modify-write clients that post the whole
+  preferences object now succeed. A present but invalid `announce_port` still
+  returns 400.
+- **Sessions**: a compat session expires after one hour of *inactivity* (each
+  authenticated request slides the expiry), and idle entries are pruned whenever
+  a new session is created.
+- **Login backoff**: after five failed `auth/login` attempts from one client IP,
+  each further attempt waits twice as long as the last (1s, 2s, 4s, … capped at
+  15 minutes), and the response is 429 with the wait time. A successful login
+  clears the client's record. Backoff state is in memory only. **Caveat:** behind
+  a reverse proxy every client shares the proxy's IP, so one client's failures
+  can delay the others. Use per-IP limits at the proxy if that matters.
+- **Cookies and origin**: the SID cookie is `SameSite=Strict`. POST requests
+  that carry an `Origin` header must name the same authority as `Host`, or they
+  get 403. Requests without `Origin` (native clients, curl) are unaffected.
+- **Tags**: tags are written to `qbit-tags.json` in the session data directory
+  (the default JSON persistence folder) after every change, so they survive
+  restarts. An unreadable file is logged and treated as empty. It is replaced on
+  the next tag change.
+- **Queue and force-start**: `torrents/setForceStart` is routed to resume.
+  `torrents/topPrio`, `bottomPrio`, `increasePrio` and `decreasePrio` succeed as
+  no-ops, since there is no download queue and `queueing_enabled` is `false`.
+- **Errors**: compat handlers return plain-text errors through one helper, with
+  lowercase messages. Serde parse details are no longer echoed to clients.
 
 ### Rename-family bug (fixed 2026-08-30)
 
@@ -48,8 +87,8 @@ newer *arr releases) use the post-2.11 vocabulary. This is now served:
 ### Conflict audit (2026-08-30)
 
 No hard route conflicts: the native API owns `/` and the compat layer owns
-`/api/v2`; nothing native is mounted under `/api/*`, so all 111 missing
-endpoints have free paths. Auth layering is also sound — the main
+`/api/v2`; nothing native is mounted under `/api/*`, so every endpoint that was
+then missing had a free path. Auth layering is also sound — the main
 Bearer/Basic middleware is applied before the qbit router is nested, so
 `/api/v2` correctly runs its own SID-cookie auth against the same credential
 store. **Trap**: future qbit sub-routers (`sync`, `rss`, `log`, …) must be
@@ -76,21 +115,14 @@ and the rate-limit state disagreement; all are now resolved:
 
 Still open:
 
-6. **`app/setPreferences` rejects instead of ignoring**: it uses
-   `deny_unknown_fields`, returning 400 for any field other than
-   `announce_port`. Real qBittorrent ignores unknown fields and applies the
-   rest, so any client that round-trips preferences (get → modify → set)
-   fails hard.
+6. ~~**`app/setPreferences` rejects instead of ignoring**~~ — resolved (see
+   compat hardening above).
 7. **RSS data-model gap** (affects future bridging): the native store is flat
    (feeds keyed by name, rules with one feed + one regex); qBittorrent has
    folder hierarchies (`Folder\Feed` paths) and rules keyed by name with
    `mustContain`/`mustNotContain`/`affectedFeeds[]`. A bridge needs flat-folder
    emulation and a rule-shape mapping; `rss/addFolder`/`rss/moveItem` have no
    clean mapping.
-
-Hygiene note (adjacent): `QbitSessions` never purges expired SIDs except on
-explicit logout, so the session map grows unboundedly with clients that
-re-login frequently (Sonarr does).
 
 ### Suggested parity tiers
 
@@ -103,16 +135,25 @@ done: `torrents/stop`/`start`, `sync/maindata`, `app/defaultSavePath`,
 
 Remaining work, roughly by cost:
 
-1. **Needs a new engine method** (the `will be built` items): queueing
-   (`topPrio` / `bottomPrio` / `increasePrio` / `decreasePrio`),
-   `setSuperSeeding`, `toggleSequentialDownload`, `setForceStart`,
-   `setAutoManagement`, `setDownloadPath` (incomplete-file path). And the
+1. **Needs a new engine method** (the `will be built` items): a real download
+   queue behind `topPrio` / `bottomPrio` / `increasePrio` / `decreasePrio`
+   (routed as no-ops for now), `setSuperSeeding`, `toggleSequentialDownload`,
+   `setAutoManagement`, `setDownloadPath` (incomplete-file path). Force-start
+   gets its own state once a queue exists (`setForceStart` currently resumes). And the
    **auto-enforcement** half of share limits (`setShareLimits` currently stores
    and reports the limits but does not auto-pause/remove at the threshold — a
-   periodic session task is the v2). Done since: per-torrent rate limits (`ratelimit_override` on
-   `ManagedTorrentShared`, enforced by the live limiter), `reannounce` (signals
-   the live re-discovery notify), **file/folder/display rename**, and
-   **`setLocation`/`setSavePath`** (whole-torrent relocation — see below).
+   periodic session task is the v2). Done since: per-torrent rate limits
+   (`ratelimit_override` on `ManagedTorrentShared`, enforced by the live
+   limiter), `reannounce` (signals the live re-discovery notify), **file/folder/
+   display rename** (see below), and **`setLocation`/`setSavePath`**
+   (whole-torrent relocation — see below).
+2. **Thin bridges still open**: `torrents/setComment`, web-seed mutation
+   (`addWebSeeds` / `editWebSeed` / `removeWebSeeds` — `web_seed_urls` is
+   currently immutable). (`torrentcreator/*` is now done — an in-memory task
+   store over the native `create_torrent`; tasks are not persisted.)
+3. **Probably out of scope**: `search/*` (plugin system),
+   `app/sendTestEmail`, `app/processInfo`, `clientdata/*`,
+   `torrents/SSLParameters`, `log/*`.
 
 ### Relocation (setLocation, v1, 2026-08-31)
 
@@ -157,13 +198,6 @@ implemented:
 - **v1 limitations**: renames are not persisted across restarts (re-derived
   from the immutable `.torrent` info on load), and require the torrent stopped.
   Live rename is the documented v2, gated behind the differential-test harness.
-2. **Thin bridges still open**: `torrents/setComment`, web-seed mutation
-   (`addWebSeeds` / `editWebSeed` / `removeWebSeeds` — `web_seed_urls` is
-   currently immutable). (`torrentcreator/*` is now done — an in-memory task
-   store over the native `create_torrent`; tasks are not persisted.)
-3. **Probably out of scope**: `search/*` (plugin system),
-   `app/sendTestEmail`, `app/processInfo`, `clientdata/*`,
-   `torrents/SSLParameters`, `log/*`.
 
 ## The parity checker framework
 

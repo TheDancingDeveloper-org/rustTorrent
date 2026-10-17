@@ -6,27 +6,30 @@
 
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
+    net::{IpAddr, Ipv4Addr},
     num::{NonZeroU16, NonZeroU32},
     path::Path,
     path::PathBuf,
     sync::Arc,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
     Router,
-    extract::{Multipart, Query, State},
-    response::IntoResponse,
+    extract::{ConnectInfo, Multipart, Query, Request, State},
+    middleware::Next,
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use bytes::Bytes;
-use http::{HeaderMap, StatusCode, header::SET_COOKIE};
+use http::{HeaderMap, Method, StatusCode, header::SET_COOKIE};
+use librqbit_dualstack_sockets::WrappedSocketAddr;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use crate::{
-    AddTorrent, AddTorrentOptions, CreateTorrentOptions,
+    AddTorrent, AddTorrentOptions, CreateTorrentOptions, SessionPersistenceConfig,
     api::{Api, TorrentIdOrHash},
     create_torrent,
     limits::LimitsConfig,
@@ -40,15 +43,26 @@ use super::ApiState;
 // Shared state for qBit compat layer
 // ---------------------------------------------------------------------------
 
+/// Idle time after which a compat session cookie stops being accepted. Every
+/// authenticated request refreshes the timestamp (sliding expiry).
+const SESSION_IDLE_TTL: Duration = Duration::from_secs(3600);
+
 /// In-memory session store for qBittorrent auth cookies.
 struct QbitSessions {
+    /// Session id -> time of last use.
     sessions: RwLock<HashMap<String, Instant>>,
+    idle_ttl: Duration,
 }
 
 impl QbitSessions {
     fn new() -> Self {
+        Self::with_idle_ttl(SESSION_IDLE_TTL)
+    }
+
+    fn with_idle_ttl(idle_ttl: Duration) -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),
+            idle_ttl,
         }
     }
 
@@ -56,17 +70,26 @@ impl QbitSessions {
         let sid: String = (0..32)
             .map(|_| format!("{:02x}", rand::random::<u8>()))
             .collect();
-        self.sessions.write().insert(sid.clone(), Instant::now());
+        let mut sessions = self.sessions.write();
+        // Drop idle entries here so abandoned sessions cannot accumulate.
+        sessions.retain(|_, last_used| last_used.elapsed() < self.idle_ttl);
+        sessions.insert(sid.clone(), Instant::now());
         sid
     }
 
+    /// Returns true for a live session and, if so, slides its expiry forward.
     fn validate_session(&self, sid: &str) -> bool {
-        let sessions = self.sessions.read();
-        if let Some(created) = sessions.get(sid) {
-            // Sessions expire after 1 hour
-            created.elapsed().as_secs() < 3600
-        } else {
-            false
+        let mut sessions = self.sessions.write();
+        match sessions.get_mut(sid) {
+            Some(last_used) if last_used.elapsed() < self.idle_ttl => {
+                *last_used = Instant::now();
+                true
+            }
+            Some(_) => {
+                sessions.remove(sid);
+                false
+            }
+            None => false,
         }
     }
 
@@ -75,36 +98,160 @@ impl QbitSessions {
     }
 }
 
-/// In-memory tag store for the compat layer. rtbit has no native tag concept,
-/// so tags live here (a global set plus a per-torrent, info-hash-keyed set) and
-/// are not persisted across restarts.
+/// Failed logins a client may make before backoff starts.
+const LOGIN_FREE_FAILURES: u32 = 5;
+/// Upper bound on the backoff between attempts from one client.
+const LOGIN_MAX_BACKOFF: Duration = Duration::from_secs(15 * 60);
+
+#[derive(Clone, Copy)]
+struct LoginFailures {
+    count: u32,
+    last_failure: Instant,
+}
+
+/// Per-client-IP backoff for compat `auth/login`. After `LOGIN_FREE_FAILURES`
+/// failed attempts, each further attempt must wait twice as long as the one
+/// before (1s, 2s, 4s, ... capped at `LOGIN_MAX_BACKOFF`). A successful login
+/// clears the client's record.
+#[derive(Default)]
+struct LoginThrottle {
+    failures: RwLock<HashMap<IpAddr, LoginFailures>>,
+}
+
+impl LoginThrottle {
+    fn backoff_for(count: u32) -> Duration {
+        let exponent = count.saturating_sub(LOGIN_FREE_FAILURES).min(20);
+        Duration::from_secs(1 << exponent).min(LOGIN_MAX_BACKOFF)
+    }
+
+    /// `Err(wait)` while the client is inside its backoff window.
+    fn check(&self, ip: IpAddr) -> Result<(), Duration> {
+        let failures = self.failures.read();
+        let Some(entry) = failures.get(&ip) else {
+            return Ok(());
+        };
+        if entry.count < LOGIN_FREE_FAILURES {
+            return Ok(());
+        }
+        let backoff = Self::backoff_for(entry.count);
+        let elapsed = entry.last_failure.elapsed();
+        if elapsed >= backoff {
+            Ok(())
+        } else {
+            Err(backoff - elapsed)
+        }
+    }
+
+    fn record_failure(&self, ip: IpAddr) {
+        let mut failures = self.failures.write();
+        // A client that stayed quiet for the maximum backoff starts again.
+        failures.retain(|_, entry| entry.last_failure.elapsed() < LOGIN_MAX_BACKOFF);
+        let entry = failures.entry(ip).or_insert(LoginFailures {
+            count: 0,
+            last_failure: Instant::now(),
+        });
+        entry.count = entry.count.saturating_add(1);
+        entry.last_failure = Instant::now();
+    }
+
+    fn record_success(&self, ip: IpAddr) {
+        self.failures.write().remove(&ip);
+    }
+}
+
+/// On-disk shape of the compat tag store.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
+struct PersistedTags {
+    all: BTreeSet<String>,
+    per_torrent: HashMap<String, BTreeSet<String>>,
+}
+
+/// Tag store for the compat layer. rtbit has no native tag concept, so tags
+/// live here: a global set plus a per-torrent, info-hash-keyed set. When built
+/// with a path they are loaded from that JSON file and written back after each
+/// change, so they survive restarts. Without a path they stay in memory.
 #[derive(Default)]
 struct QbitTags {
     all: RwLock<BTreeSet<String>>,
     per_torrent: RwLock<HashMap<String, BTreeSet<String>>>,
+    path: Option<PathBuf>,
 }
 
 impl QbitTags {
+    /// Load the store from `path`, or start empty if the file does not exist yet.
+    /// A file that cannot be parsed is logged and ignored rather than failing startup.
+    fn persistent(path: PathBuf) -> Self {
+        let loaded = match std::fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice::<PersistedTags>(&bytes).unwrap_or_else(|error| {
+                warn!(?path, %error, "qbit compat: ignoring unreadable tag store");
+                PersistedTags::default()
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => PersistedTags::default(),
+            Err(error) => {
+                warn!(?path, %error, "qbit compat: cannot read tag store");
+                PersistedTags::default()
+            }
+        };
+        Self {
+            all: RwLock::new(loaded.all),
+            per_torrent: RwLock::new(loaded.per_torrent),
+            path: Some(path),
+        }
+    }
+
+    /// Write the current state to disk, via a temp file so a crash mid-write
+    /// cannot leave a truncated store behind. Failures are logged, not returned:
+    /// the in-memory state stays authoritative for the running process.
+    fn persist(&self) {
+        let Some(path) = &self.path else {
+            return;
+        };
+        let snapshot = PersistedTags {
+            all: self.all.read().clone(),
+            per_torrent: self.per_torrent.read().clone(),
+        };
+        let result = serde_json::to_vec(&snapshot)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let tmp = path.with_extension("json.tmp");
+                std::fs::write(&tmp, bytes)?;
+                std::fs::rename(&tmp, path)
+            });
+        if let Err(error) = result {
+            warn!(?path, %error, "qbit compat: failed to persist tags");
+        }
+    }
+
     fn all_tags(&self) -> Vec<String> {
         self.all.read().iter().cloned().collect()
     }
 
     fn create(&self, tags: &[String]) {
-        let mut all = self.all.write();
-        all.extend(tags.iter().cloned());
+        {
+            let mut all = self.all.write();
+            all.extend(tags.iter().cloned());
+        }
+        self.persist();
     }
 
     fn delete(&self, tags: &[String]) {
-        let mut all = self.all.write();
-        let mut per = self.per_torrent.write();
-        for tag in tags {
-            all.remove(tag);
-        }
-        for set in per.values_mut() {
+        {
+            let mut all = self.all.write();
+            let mut per = self.per_torrent.write();
             for tag in tags {
-                set.remove(tag);
+                all.remove(tag);
+            }
+            for set in per.values_mut() {
+                for tag in tags {
+                    set.remove(tag);
+                }
             }
         }
+        self.persist();
     }
 
     fn add_to(&self, hashes: &[String], tags: &[String]) {
@@ -112,36 +259,45 @@ impl QbitTags {
             return;
         }
         self.create(tags);
-        let mut per = self.per_torrent.write();
-        for hash in hashes {
-            per.entry(hash.clone())
-                .or_default()
-                .extend(tags.iter().cloned());
+        {
+            let mut per = self.per_torrent.write();
+            for hash in hashes {
+                per.entry(hash.clone())
+                    .or_default()
+                    .extend(tags.iter().cloned());
+            }
         }
+        self.persist();
     }
 
     fn remove_from(&self, hashes: &[String], tags: &[String]) {
-        let mut per = self.per_torrent.write();
-        for hash in hashes {
-            if let Some(set) = per.get_mut(hash) {
-                // An empty tag list clears every tag, matching qBittorrent.
-                if tags.is_empty() {
-                    set.clear();
-                } else {
-                    for tag in tags {
-                        set.remove(tag);
+        {
+            let mut per = self.per_torrent.write();
+            for hash in hashes {
+                if let Some(set) = per.get_mut(hash) {
+                    // An empty tag list clears every tag, matching qBittorrent.
+                    if tags.is_empty() {
+                        set.clear();
+                    } else {
+                        for tag in tags {
+                            set.remove(tag);
+                        }
                     }
                 }
             }
         }
+        self.persist();
     }
 
     fn set(&self, hashes: &[String], tags: &[String]) {
         self.create(tags);
-        let mut per = self.per_torrent.write();
-        for hash in hashes {
-            per.insert(hash.clone(), tags.iter().cloned().collect());
+        {
+            let mut per = self.per_torrent.write();
+            for hash in hashes {
+                per.insert(hash.clone(), tags.iter().cloned().collect());
+            }
         }
+        self.persist();
     }
 
     fn tags_for(&self, hash: &str) -> String {
@@ -292,6 +448,7 @@ struct QbitCategory {
 pub(crate) struct QbitState {
     api_state: ApiState,
     sessions: QbitSessions,
+    login_throttle: LoginThrottle,
     tags: QbitTags,
     creator: QbitTorrentCreator,
     share_limits: QbitShareLimits,
@@ -489,6 +646,14 @@ struct QbitPreferences {
     web_ui_port: u16,
     listen_port: u16,
     announce_port: u16,
+    // Seeding limits are reported disabled: rtbit does not enforce them
+    // globally (per-torrent limits go through torrents/setShareLimits). The
+    // values are qBittorrent's defaults, which *arr apps read back as-is.
+    max_ratio_enabled: bool,
+    max_ratio: f64,
+    max_ratio_act: u8,
+    max_seeding_time_enabled: bool,
+    max_seeding_time: i64,
 }
 
 #[derive(Deserialize)]
@@ -496,10 +661,13 @@ struct SetPreferencesForm {
     json: String,
 }
 
+/// The preference fields rtbit can act on. Everything else a client sends
+/// (read-modify-write clients post the whole preferences object back) is
+/// ignored, so unknown or unsupported keys do not fail the request.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct SetPreferences {
-    announce_port: u16,
+    #[serde(default)]
+    announce_port: Option<u16>,
 }
 
 // ---------------------------------------------------------------------------
@@ -514,7 +682,28 @@ struct LoginForm {
     password: String,
 }
 
-async fn h_auth_login(State(state): State<Arc<QbitState>>, body: Bytes) -> impl IntoResponse {
+async fn h_auth_login(
+    State(state): State<Arc<QbitState>>,
+    parts: http::request::Parts,
+    body: Bytes,
+) -> impl IntoResponse {
+    // The peer address comes from the server's connect info. Without it (e.g.
+    // in-process tests) every attempt shares one bucket.
+    let client_ip = parts
+        .extensions
+        .get::<ConnectInfo<WrappedSocketAddr>>()
+        .map(|ConnectInfo(addr)| addr.0.ip())
+        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    if let Err(wait) = state.login_throttle.check(client_ip) {
+        return qbit_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            format!(
+                "too many failed login attempts; retry in {}s",
+                wait.as_secs().max(1)
+            ),
+        );
+    }
+
     let form: LoginForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
 
     let stored_credentials = state
@@ -536,10 +725,12 @@ async fn h_auth_login(State(state): State<Arc<QbitState>>, body: Bytes) -> impl 
     };
 
     if auth_ok {
+        state.login_throttle.record_success(client_ip);
         let sid = state.sessions.create_session();
-        let cookie = format!("SID={sid}; Path=/; HttpOnly");
+        let cookie = format!("SID={sid}; Path=/; HttpOnly; SameSite=Strict");
         (StatusCode::OK, [(SET_COOKIE, cookie)], "Ok.".to_string()).into_response()
     } else {
+        state.login_throttle.record_failure(client_ip);
         (StatusCode::FORBIDDEN, "Fails.".to_string()).into_response()
     }
 }
@@ -555,8 +746,12 @@ async fn h_auth_logout(State(state): State<Arc<QbitState>>, headers: HeaderMap) 
 // App info endpoints
 // ---------------------------------------------------------------------------
 
+/// Advertised application version. *arr apps gate features on this string, so
+/// it stays on the 5.x line that matches the advertised WebAPI version below.
+const COMPAT_APP_VERSION: &str = "v5.0.0";
+
 async fn h_app_version() -> &'static str {
-    "v0.0.1"
+    COMPAT_APP_VERSION
 }
 
 async fn h_app_webapi_version() -> &'static str {
@@ -599,40 +794,43 @@ async fn h_app_preferences(State(state): State<Arc<QbitState>>) -> axum::Json<Qb
         web_ui_port: state.api_state.opts.web_ui_port.unwrap_or(3030),
         listen_port: state.api_state.api.api_listen_port(),
         announce_port: state.api_state.api.api_announce_port(),
+        max_ratio_enabled: false,
+        max_ratio: 2.0,
+        max_ratio_act: 0,
+        max_seeding_time_enabled: false,
+        max_seeding_time: 1440,
     })
 }
 
+/// `app/setPreferences`. Only `announce_port` is applied. When it is present
+/// it must be a valid port; when it is absent the request still succeeds, so
+/// read-modify-write clients that post their whole preferences object work.
 async fn h_app_set_preferences(
     State(state): State<Arc<QbitState>>,
     body: Bytes,
 ) -> impl IntoResponse {
-    let form = match serde_urlencoded::from_bytes::<SetPreferencesForm>(&body) {
-        Ok(form) => form,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("invalid preferences form: {error}"),
-            );
-        }
-    };
-    let preferences = match serde_json::from_str::<SetPreferences>(&form.json) {
-        Ok(preferences) => preferences,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("invalid preferences JSON: {error}"),
-            );
-        }
-    };
-    let Some(port) = NonZeroU16::new(preferences.announce_port) else {
-        return (
+    let Ok(form) = serde_urlencoded::from_bytes::<SetPreferencesForm>(&body) else {
+        return qbit_error(
             StatusCode::BAD_REQUEST,
-            "announce_port must be between 1 and 65535".to_string(),
+            "preferences form field `json` is required",
         );
     };
-
-    state.api_state.api.api_set_announce_port(port);
-    (StatusCode::OK, String::new())
+    let Ok(preferences) = serde_json::from_str::<SetPreferences>(&form.json) else {
+        return qbit_error(
+            StatusCode::BAD_REQUEST,
+            "preferences `json` is not a valid object",
+        );
+    };
+    if let Some(announce_port) = preferences.announce_port {
+        let Some(port) = NonZeroU16::new(announce_port) else {
+            return qbit_error(
+                StatusCode::BAD_REQUEST,
+                "announce_port must be between 1 and 65535",
+            );
+        };
+        state.api_state.api.api_set_announce_port(port);
+    }
+    (StatusCode::OK, String::new()).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -1093,12 +1291,12 @@ async fn h_torrents_properties(
     let api = &state.api_state.api;
     let idx = match TorrentIdOrHash::parse(&query.hash) {
         Ok(idx) => idx,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
 
     let handle = match api.mgr_handle(idx) {
         Ok(h) => h,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
 
     let stats = handle.stats();
@@ -1221,17 +1419,17 @@ async fn h_torrents_files(
     let api = &state.api_state.api;
     let idx = match TorrentIdOrHash::parse(&query.hash) {
         Ok(idx) => idx,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
 
     let handle = match api.mgr_handle(idx) {
         Ok(h) => h,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
 
     let details = match api.api_torrent_details(idx) {
         Ok(d) => d,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
 
     let stats = handle.stats();
@@ -1321,11 +1519,11 @@ async fn h_torrents_trackers(
     let api = &state.api_state.api;
     let idx = match TorrentIdOrHash::parse(&query.hash) {
         Ok(idx) => idx,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
     let response = match api.api_tracker_status(idx) {
         Ok(r) => r,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
 
     let trackers: Vec<QbitTrackerInfo> = response
@@ -1352,11 +1550,11 @@ async fn h_torrents_piece_states(
     let api = &state.api_state.api;
     let idx = match TorrentIdOrHash::parse(&query.hash) {
         Ok(idx) => idx,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
     let (bf, len) = match api.api_dump_haves(idx) {
         Ok(v) => v,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
     // qBittorrent: 0 not downloaded, 1 downloading (requested), 2 downloaded.
     // We only distinguish have/not-have, so emit 0 or 2.
@@ -1375,11 +1573,11 @@ async fn h_torrents_piece_hashes(
     let api = &state.api_state.api;
     let idx = match TorrentIdOrHash::parse(&query.hash) {
         Ok(idx) => idx,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
     let handle = match api.mgr_handle(idx) {
         Ok(h) => h,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
     let hashes: Option<Vec<String>> = handle
         .with_metadata(|m| {
@@ -1421,16 +1619,16 @@ async fn h_torrents_export(
     let api = &state.api_state.api;
     let idx = match TorrentIdOrHash::parse(&query.hash) {
         Ok(idx) => idx,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
     let handle = match api.mgr_handle(idx) {
         Ok(h) => h,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
     match handle.with_metadata(|meta| meta.torrent_bytes.clone()) {
         Ok(bytes) => ([("content-type", "application/x-bittorrent")], bytes).into_response(),
         // Metadata not resolved yet (magnet) — no file to export.
-        Err(_) => (StatusCode::CONFLICT, "Metadata not available").into_response(),
+        Err(_) => qbit_error(StatusCode::CONFLICT, "Metadata not available"),
     }
 }
 
@@ -1446,11 +1644,11 @@ async fn h_torrents_webseeds(
     let api = &state.api_state.api;
     let idx = match TorrentIdOrHash::parse(&query.hash) {
         Ok(idx) => idx,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
     let handle = match api.mgr_handle(idx) {
         Ok(h) => h,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
     let seeds: Vec<QbitWebSeed> = handle
         .shared()
@@ -1636,6 +1834,14 @@ async fn h_torrents_start(state: State<Arc<QbitState>>, body: Bytes) -> &'static
     h_torrents_resume(state, body).await
 }
 
+/// Queue-position endpoints (`topPrio`, `bottomPrio`, `increasePrio`,
+/// `decreasePrio`). rtbit has no download queue, and `app/preferences` reports
+/// `queueing_enabled: false`, so clients should not send these. When they do,
+/// the request succeeds and changes nothing.
+async fn h_torrents_queue_noop() -> &'static str {
+    "Ok."
+}
+
 async fn h_torrents_recheck(State(state): State<Arc<QbitState>>, body: Bytes) -> &'static str {
     let form: HashesForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
     let api = &state.api_state.api;
@@ -1694,24 +1900,24 @@ async fn h_torrents_rename_file(
     let form: RenamePathForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
     let api = &state.api_state.api;
     if form.hash.is_empty() {
-        return (StatusCode::BAD_REQUEST, "hash is required").into_response();
+        return qbit_error(StatusCode::BAD_REQUEST, "hash is required");
     }
     if form.old_path.is_empty() || form.new_path.is_empty() {
-        return (StatusCode::BAD_REQUEST, "oldPath and newPath are required").into_response();
+        return qbit_error(StatusCode::BAD_REQUEST, "oldPath and newPath are required");
     }
     let idx = match TorrentIdOrHash::parse(&form.hash) {
         Ok(idx) => idx,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
     let handle = match api.mgr_handle(idx) {
         Ok(h) => h,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
     let paths = torrent_file_paths(&handle);
     let old = PathBuf::from(&form.old_path);
     let file_id = match paths.iter().position(|p| *p == old) {
         Some(id) => id,
-        None => return (StatusCode::CONFLICT, "oldPath does not exist").into_response(),
+        None => return qbit_error(StatusCode::CONFLICT, "oldPath does not exist"),
     };
     match handle.rename_files(&[(file_id, PathBuf::from(&form.new_path))]) {
         Ok(()) => (StatusCode::OK, "Ok.").into_response(),
@@ -1726,18 +1932,18 @@ async fn h_torrents_rename_folder(
     let form: RenamePathForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
     let api = &state.api_state.api;
     if form.hash.is_empty() {
-        return (StatusCode::BAD_REQUEST, "hash is required").into_response();
+        return qbit_error(StatusCode::BAD_REQUEST, "hash is required");
     }
     if form.old_path.is_empty() || form.new_path.is_empty() {
-        return (StatusCode::BAD_REQUEST, "oldPath and newPath are required").into_response();
+        return qbit_error(StatusCode::BAD_REQUEST, "oldPath and newPath are required");
     }
     let idx = match TorrentIdOrHash::parse(&form.hash) {
         Ok(idx) => idx,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
     let handle = match api.mgr_handle(idx) {
         Ok(h) => h,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
     // Rename every file whose path is under the old folder prefix.
     let old_prefix = PathBuf::from(&form.old_path);
@@ -1749,7 +1955,7 @@ async fn h_torrents_rename_folder(
         }
     }
     if renames.is_empty() {
-        return (StatusCode::CONFLICT, "no files under oldPath").into_response();
+        return qbit_error(StatusCode::CONFLICT, "no files under oldPath");
     }
     match handle.rename_files(&renames) {
         Ok(()) => (StatusCode::OK, "Ok.").into_response(),
@@ -1893,15 +2099,15 @@ async fn h_torrents_remove_trackers(
     let form: RemoveTrackersForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
     let api = &state.api_state.api;
     if form.hash.is_empty() {
-        return (StatusCode::BAD_REQUEST, "hash is required").into_response();
+        return qbit_error(StatusCode::BAD_REQUEST, "hash is required");
     }
     let idx = match TorrentIdOrHash::parse(&form.hash) {
         Ok(idx) => idx,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
     let handle = match api.mgr_handle(idx) {
         Ok(h) => h,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
     let urls: Vec<String> = form
         .urls
@@ -1933,15 +2139,15 @@ async fn h_torrents_edit_tracker(
     let form: EditTrackerForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
     let api = &state.api_state.api;
     if form.hash.is_empty() {
-        return (StatusCode::BAD_REQUEST, "hash is required").into_response();
+        return qbit_error(StatusCode::BAD_REQUEST, "hash is required");
     }
     let idx = match TorrentIdOrHash::parse(&form.hash) {
         Ok(idx) => idx,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
     let handle = match api.mgr_handle(idx) {
         Ok(h) => h,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
     // Validate newUrl *before* removing origUrl so a bad newUrl can't leave the
     // torrent with neither tracker.
@@ -1949,7 +2155,7 @@ async fn h_torrents_edit_tracker(
         .ok()
         .is_some_and(|u| matches!(u.scheme(), "http" | "https" | "udp"));
     if !valid_new {
-        return (StatusCode::BAD_REQUEST, "invalid newUrl").into_response();
+        return qbit_error(StatusCode::BAD_REQUEST, "invalid newUrl");
     }
     let removed = api
         .session()
@@ -1957,7 +2163,7 @@ async fn h_torrents_edit_tracker(
         .await
         .unwrap_or(0);
     if removed == 0 {
-        return (StatusCode::CONFLICT, "origUrl not found").into_response();
+        return qbit_error(StatusCode::CONFLICT, "origUrl not found");
     }
     match api
         .api_torrent_action_add_trackers(idx, vec![form.new_url])
@@ -1966,7 +2172,7 @@ async fn h_torrents_edit_tracker(
         Ok(_) => (StatusCode::OK, "Ok.").into_response(),
         Err(error) => {
             warn!(%error, "qbit compat: error editing tracker");
-            (StatusCode::CONFLICT, "Failed").into_response()
+            qbit_error(StatusCode::CONFLICT, "Failed")
         }
     }
 }
@@ -2270,7 +2476,7 @@ async fn h_torrents_set_location(
     let api = &state.api_state.api;
     let location = form.location.trim();
     if location.is_empty() {
-        return (StatusCode::BAD_REQUEST, "location is required").into_response();
+        return qbit_error(StatusCode::BAD_REQUEST, "location is required");
     }
     let new_root = PathBuf::from(location);
     let mut last_error = None;
@@ -2319,7 +2525,7 @@ struct CreateCategoryForm {
 async fn h_create_category(State(state): State<Arc<QbitState>>, body: Bytes) -> impl IntoResponse {
     let form: CreateCategoryForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
     if form.category.is_empty() {
-        return (StatusCode::BAD_REQUEST, "Category name required").into_response();
+        return qbit_error(StatusCode::BAD_REQUEST, "category name is required");
     }
     let save_path = (!form.save_path.is_empty()).then(|| form.save_path.into());
     match state
@@ -2336,7 +2542,7 @@ async fn h_create_category(State(state): State<Arc<QbitState>>, body: Bytes) -> 
 async fn h_edit_category(State(state): State<Arc<QbitState>>, body: Bytes) -> impl IntoResponse {
     let form: CreateCategoryForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
     if form.category.is_empty() {
-        return (StatusCode::BAD_REQUEST, "Category name required").into_response();
+        return qbit_error(StatusCode::BAD_REQUEST, "category name is required");
     }
     let save_path = (!form.save_path.is_empty()).then(|| form.save_path.into());
     match state
@@ -2507,7 +2713,7 @@ async fn h_torrentcreator_add_task(
     }
     let form: AddTaskForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
     if form.source_path.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "sourcePath is required").into_response();
+        return qbit_error(StatusCode::BAD_REQUEST, "sourcePath is required");
     }
 
     let format = if form.format.is_empty() {
@@ -2590,7 +2796,7 @@ async fn h_torrentcreator_status(
             Some(task) => {
                 axum::Json(vec![creator_task_status(query.task_id, task)]).into_response()
             }
-            None => (StatusCode::NOT_FOUND, "task not found").into_response(),
+            None => qbit_error(StatusCode::NOT_FOUND, "task not found"),
         };
     }
     let all: Vec<CreatorTaskStatus> = state
@@ -2617,8 +2823,8 @@ async fn h_torrentcreator_torrent_file(
             Some(bytes) => ([("content-type", "application/x-bittorrent")], bytes).into_response(),
             None => (StatusCode::INTERNAL_SERVER_ERROR, "no torrent bytes").into_response(),
         },
-        Some(_) => (StatusCode::CONFLICT, "task has not finished").into_response(),
-        None => (StatusCode::NOT_FOUND, "task not found").into_response(),
+        Some(_) => qbit_error(StatusCode::CONFLICT, "task has not finished"),
+        None => qbit_error(StatusCode::NOT_FOUND, "task not found"),
     }
 }
 
@@ -2653,16 +2859,66 @@ fn extract_sid(headers: &HeaderMap) -> Option<String> {
         })
 }
 
+/// Plain-text error response used by every compat handler, so clients always
+/// get the same shape: the status code and a short sentence in the body.
+fn qbit_error(status: StatusCode, message: impl Into<String>) -> Response {
+    (status, message.into()).into_response()
+}
+
+/// Rejects cross-site POSTs. Browsers always send `Origin` on cross-origin
+/// POSTs, and it must name the same authority as `Host`. Requests without an
+/// `Origin` (native *arr clients, curl) are not browser requests and pass.
+fn origin_allowed(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(http::header::ORIGIN) else {
+        return true;
+    };
+    let Some(origin) = origin.to_str().ok() else {
+        return false;
+    };
+    let Some(host) = headers
+        .get(http::header::HOST)
+        .and_then(|host| host.to_str().ok())
+    else {
+        return false;
+    };
+    // `null` and anything without a scheme separator fail the split.
+    origin
+        .split_once("://")
+        .and_then(|(_, rest)| rest.split('/').next())
+        .is_some_and(|authority| authority.eq_ignore_ascii_case(host))
+}
+
+async fn reject_cross_origin_posts(request: Request, next: Next) -> Response {
+    if request.method() == Method::POST && !origin_allowed(request.headers()) {
+        return qbit_error(StatusCode::FORBIDDEN, "cross-origin request rejected");
+    }
+    next.run(request).await
+}
+
 // ---------------------------------------------------------------------------
 // Router construction
 // ---------------------------------------------------------------------------
+
+/// Tag store backed by `qbit-tags.json` in the session data directory, next to
+/// the session persistence files. Falls back to memory if that directory cannot
+/// be resolved.
+fn qbit_tag_store() -> QbitTags {
+    match SessionPersistenceConfig::default_json_persistence_folder() {
+        Ok(dir) => QbitTags::persistent(dir.join("qbit-tags.json")),
+        Err(error) => {
+            warn!(%error, "qbit compat: no data directory for tags, keeping them in memory");
+            QbitTags::default()
+        }
+    }
+}
 
 /// Build the qBittorrent v2 API router. Should be nested at `/api/v2`.
 pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
     let qbit_state = Arc::new(QbitState {
         api_state: api_state.clone(),
         sessions: QbitSessions::new(),
-        tags: QbitTags::default(),
+        login_throttle: LoginThrottle::default(),
+        tags: qbit_tag_store(),
         creator: QbitTorrentCreator::default(),
         share_limits: QbitShareLimits::default(),
     });
@@ -2697,6 +2953,11 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
         .route("/resume", post(h_torrents_resume))
         .route("/stop", post(h_torrents_stop))
         .route("/start", post(h_torrents_start))
+        .route("/setForceStart", post(h_torrents_start))
+        .route("/topPrio", post(h_torrents_queue_noop))
+        .route("/bottomPrio", post(h_torrents_queue_noop))
+        .route("/increasePrio", post(h_torrents_queue_noop))
+        .route("/decreasePrio", post(h_torrents_queue_noop))
         .route("/recheck", post(h_torrents_recheck))
         .route("/reannounce", post(h_torrents_reannounce))
         .route("/rename", post(h_torrents_rename))
@@ -2798,16 +3059,18 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
     Router::new()
         .nest("/auth", auth_router)
         .merge(protected_router)
+        .layer(axum::middleware::from_fn(reject_cross_origin_posts))
         .with_state(qbit_state)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{net::Ipv4Addr, path::Path, sync::Arc};
+    use std::{net::Ipv4Addr, path::Path, sync::Arc, time::Duration};
 
     use axum::response::IntoResponse;
     use bytes::Bytes;
     use http::StatusCode;
+    use tower::ServiceExt;
 
     use crate::{
         AddTorrent, AddTorrentOptions, Api, CreateTorrentOptions, ListenerMode, Session,
@@ -2819,9 +3082,10 @@ mod tests {
     };
 
     use super::{
-        CreatorStatus, QbitSessions, QbitShareLimits, QbitState, QbitTags, QbitTorrentCreator,
-        h_app_preferences, h_app_set_preferences, h_torrentcreator_add_task, h_torrents_recheck,
-        matches_category, qbit_file_name,
+        CreatorStatus, LoginThrottle, QbitSessions, QbitShareLimits, QbitState, QbitTags,
+        QbitTorrentCreator, h_app_preferences, h_app_set_preferences, h_app_version,
+        h_torrentcreator_add_task, h_torrents_recheck, matches_category, origin_allowed,
+        qbit_file_name,
     };
 
     async fn qbit_state() -> (Arc<QbitState>, Arc<Session>, tempfile::TempDir) {
@@ -2860,6 +3124,7 @@ mod tests {
             Arc::new(QbitState {
                 api_state,
                 sessions: QbitSessions::new(),
+                login_throttle: LoginThrottle::default(),
                 tags: QbitTags::default(),
                 creator: QbitTorrentCreator::default(),
                 share_limits: QbitShareLimits::default(),
@@ -2901,12 +3166,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_preferences_rejects_invalid_and_unsupported_fields() {
+    async fn set_preferences_ignores_unsupported_fields_and_missing_port() {
+        let (state, session, _output) = qbit_state().await;
+        // A read-modify-write client posting its whole preferences object back.
+        let body = Bytes::from(
+            "json=%7B%22save_path%22%3A%22%2Ftmp%22%2C%22dl_limit%22%3A0%2C%22max_ratio%22%3A1.5%7D",
+        );
+        let response = h_app_set_preferences(axum::extract::State(state.clone()), body)
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(session.announce_port(), Some(4241));
+    }
+
+    #[tokio::test]
+    async fn set_preferences_rejects_invalid_announce_port_and_malformed_form() {
         let (state, session, _output) = qbit_state().await;
         let invalid_bodies = [
             "json=%7B%22announce_port%22%3A0%7D",
             "json=%7B%22announce_port%22%3A65536%7D",
-            "json=%7B%22save_path%22%3A%22%2Ftmp%22%7D",
             "json=not-json",
             "announce_port=4241",
         ];
@@ -2921,6 +3199,171 @@ mod tests {
             assert_eq!(response.status(), StatusCode::BAD_REQUEST, "body={body}");
         }
         assert_eq!(session.announce_port(), Some(4241));
+    }
+
+    #[tokio::test]
+    async fn app_version_is_on_the_5x_line() {
+        assert!(h_app_version().await.starts_with("v5."));
+    }
+
+    #[tokio::test]
+    async fn preferences_report_seeding_limits_as_disabled() {
+        let (state, _session, _output) = qbit_state().await;
+        let preferences =
+            serde_json::to_value(h_app_preferences(axum::extract::State(state)).await.0).unwrap();
+        assert_eq!(preferences["max_ratio_enabled"], false);
+        assert_eq!(preferences["max_seeding_time_enabled"], false);
+        assert!(preferences["max_ratio"].is_f64());
+        assert!(preferences["max_ratio_act"].is_u64());
+        assert!(preferences["max_seeding_time"].is_i64());
+    }
+
+    #[test]
+    fn sessions_slide_forward_on_use_and_prune_idle_entries() {
+        let sessions = QbitSessions::with_idle_ttl(Duration::from_millis(300));
+        let live = sessions.create_session();
+        std::thread::sleep(Duration::from_millis(200));
+        // Still inside the idle window, so this use slides the expiry forward.
+        assert!(sessions.validate_session(&live));
+        std::thread::sleep(Duration::from_millis(200));
+        // 400ms since creation, but only 200ms since last use.
+        assert!(sessions.validate_session(&live));
+
+        let stale = sessions.create_session();
+        std::thread::sleep(Duration::from_millis(400));
+        // `live` and `stale` have both been idle longer than the TTL, so creating
+        // a new session prunes them and only `fresh` remains.
+        let fresh = sessions.create_session();
+        assert_eq!(sessions.sessions.read().len(), 1);
+        assert!(!sessions.sessions.read().contains_key(&stale));
+        assert!(sessions.validate_session(&fresh));
+    }
+
+    #[test]
+    fn login_throttle_backs_off_after_repeated_failures_per_client() {
+        let throttle = LoginThrottle::default();
+        let ip: std::net::IpAddr = "192.0.2.10".parse().unwrap();
+        let other: std::net::IpAddr = "192.0.2.11".parse().unwrap();
+        for _ in 0..4 {
+            throttle.record_failure(ip);
+        }
+        assert!(throttle.check(ip).is_ok());
+        throttle.record_failure(ip);
+        assert!(throttle.check(ip).is_err());
+        assert!(throttle.check(other).is_ok());
+        throttle.record_success(ip);
+        assert!(throttle.check(ip).is_ok());
+    }
+
+    #[test]
+    fn login_backoff_doubles_and_is_capped() {
+        assert_eq!(LoginThrottle::backoff_for(5), Duration::from_secs(1));
+        assert_eq!(LoginThrottle::backoff_for(6), Duration::from_secs(2));
+        assert_eq!(LoginThrottle::backoff_for(7), Duration::from_secs(4));
+        assert_eq!(
+            LoginThrottle::backoff_for(u32::MAX),
+            Duration::from_secs(900)
+        );
+    }
+
+    #[test]
+    fn origin_check_allows_same_origin_and_non_browser_clients() {
+        let headers = |origin: Option<&str>, host: Option<&str>| {
+            let mut map = http::HeaderMap::new();
+            if let Some(origin) = origin {
+                map.insert(http::header::ORIGIN, origin.parse().unwrap());
+            }
+            if let Some(host) = host {
+                map.insert(http::header::HOST, host.parse().unwrap());
+            }
+            map
+        };
+        assert!(origin_allowed(&headers(None, None)));
+        assert!(origin_allowed(&headers(None, Some("10.0.0.2:3030"))));
+        assert!(origin_allowed(&headers(
+            Some("http://10.0.0.2:3030"),
+            Some("10.0.0.2:3030")
+        )));
+        assert!(origin_allowed(&headers(
+            Some("HTTP://Example.TEST:3030/path"),
+            Some("example.test:3030")
+        )));
+        assert!(!origin_allowed(&headers(
+            Some("https://evil.example"),
+            Some("10.0.0.2:3030")
+        )));
+        assert!(!origin_allowed(&headers(
+            Some("null"),
+            Some("10.0.0.2:3030")
+        )));
+        assert!(!origin_allowed(&headers(
+            Some("http://10.0.0.2:3030"),
+            None
+        )));
+    }
+
+    #[tokio::test]
+    async fn cross_origin_login_post_is_rejected_by_the_router() {
+        let (state, _session, _output) = qbit_state().await;
+        let router = super::make_qbit_router(state.api_state.clone());
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/auth/login")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .header("host", "10.0.0.2:3030")
+            .header("origin", "https://evil.example")
+            .body(axum::body::Body::from("username=a&password=b"))
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn queue_and_force_start_routes_succeed() {
+        let (state, _session, _output) = qbit_state().await;
+        let router = super::make_qbit_router(state.api_state.clone());
+        for action in [
+            "topPrio",
+            "bottomPrio",
+            "increasePrio",
+            "decreasePrio",
+            "setForceStart",
+        ] {
+            let request = http::Request::builder()
+                .method("POST")
+                .uri(format!("/torrents/{action}"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(axum::body::Body::from("hashes=all&value=true"))
+                .unwrap();
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{action}");
+        }
+    }
+
+    #[test]
+    fn tags_survive_a_restart_when_persisted() {
+        let dir = tempfile::TempDir::with_prefix("qbit_tags").unwrap();
+        let path = dir.path().join("nested").join("qbit-tags.json");
+        let hash = "a".repeat(40);
+        {
+            let tags = QbitTags::persistent(path.clone());
+            tags.create(&["movies".to_string()]);
+            tags.add_to(std::slice::from_ref(&hash), &["hd".to_string()]);
+        }
+        let reloaded = QbitTags::persistent(path);
+        assert_eq!(
+            reloaded.all_tags(),
+            vec!["hd".to_string(), "movies".to_string()]
+        );
+        assert_eq!(reloaded.tags_for(&hash), "hd");
+    }
+
+    #[test]
+    fn unreadable_tag_store_starts_empty() {
+        let dir = tempfile::TempDir::with_prefix("qbit_tags_bad").unwrap();
+        let path = dir.path().join("qbit-tags.json");
+        std::fs::write(&path, b"{ not json").unwrap();
+        assert!(QbitTags::persistent(path).all_tags().is_empty());
     }
 
     #[tokio::test]
