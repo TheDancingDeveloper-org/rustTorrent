@@ -289,12 +289,19 @@ impl HttpApi {
                         if let Some(token) =
                             bearer.filter(|_| token_store.is_some() || api_keys.is_some())
                         {
+                            let current = |role: auth::Role| {
+                                auth::fingerprint_for(
+                                    credential_store.as_deref(),
+                                    basic_auth.as_ref(),
+                                    role,
+                                )
+                            };
                             let role = if token.starts_with(auth::API_KEY_PREFIX) {
                                 api_keys.as_ref().and_then(|keys| keys.authenticate(token))
                             } else {
                                 token_store
                                     .as_ref()
-                                    .and_then(|ts| ts.validate_access_token(token))
+                                    .and_then(|ts| ts.validate_access_token(token, &current))
                             };
                             return match role {
                                 Some(role) => Ok(admit(role, request, next).await),
