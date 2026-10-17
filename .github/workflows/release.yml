@@ -157,6 +157,16 @@ jobs:
           name: channel-aur
           path: rendered/aur/
           if-no-files-found: error
+      - name: Render Homebrew formula
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          packaging/scripts/render-homebrew.sh "$tag" release-artifacts rendered/homebrew
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: channel-homebrew
+          path: rendered/homebrew/
+          if-no-files-found: error
 
   publish:
     needs: [build, sign, channels]
