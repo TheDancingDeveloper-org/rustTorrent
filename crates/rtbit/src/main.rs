@@ -10,7 +10,7 @@ use std::{
 };
 
 use anyhow::{Context, bail};
-use clap::{CommandFactory, Parser, ValueEnum};
+use clap::{ArgAction, CommandFactory, Parser, ValueEnum, builder::BoolishValueParser};
 use clap_complete::Shell;
 use librqbit_dualstack_sockets::TcpListener;
 use librtbit::{
@@ -55,11 +55,12 @@ fn parse_umask(value: &str) -> anyhow::Result<libc::mode_t> {
         })
     }
     if value.len() != 3 {
-        bail!("expected 3 digits")
+        bail!("expected 3 octal digits (e.g. 022), got {value:?}")
     }
     let mut output = 0;
     for digit in value.as_bytes() {
-        let digit = parse_oct_digit(*digit).context("expected 3 digits")?;
+        let digit = parse_oct_digit(*digit)
+            .with_context(|| format!("expected 3 octal digits (e.g. 022), got {value:?}"))?;
         output = output * 8 + digit;
     }
     Ok(output)
@@ -68,7 +69,8 @@ fn parse_umask(value: &str) -> anyhow::Result<libc::mode_t> {
 #[derive(Parser)]
 #[command(version, author, about)]
 struct Opts {
-    /// The console loglevel
+    /// The console log level: trace, debug, info (default), warn or error.
+    /// If RUST_LOG is set it takes precedence, e.g. RUST_LOG=librtbit=debug,info.
     #[arg(value_enum, short = 'v', env = "RTBIT_LOG_LEVEL_CONSOLE")]
     log_level: Option<LogLevel>,
 
@@ -76,13 +78,25 @@ struct Opts {
     #[arg(long = "log-file", env = "RTBIT_LOG_FILE")]
     log_file: Option<String>,
 
-    /// The value for RUST_LOG in the log file
+    /// The RUST_LOG-style filter for the log file (see --log-file).
+    /// Defaults to info, so the file does not fill up with librtbit debug output.
+    /// Use e.g. "info,librtbit=debug" when debugging.
     #[arg(
         long = "log-file-rust-log",
-        default_value = "librtbit=debug,info",
+        default_value = "info",
         env = "RTBIT_LOG_FILE_RUST_LOG"
     )]
     log_file_rust_log: String,
+
+    /// How long to wait for a graceful shutdown after SIGINT/SIGTERM before exiting anyway,
+    /// e.g. 30s. A second signal exits immediately. Gives session state a chance to flush.
+    #[arg(
+        long = "shutdown-timeout",
+        value_parser = humantime::parse_duration,
+        default_value = "30s",
+        env = "RTBIT_SHUTDOWN_TIMEOUT"
+    )]
+    shutdown_timeout: Duration,
 
     /// The interval to poll trackers, e.g. 30s.
     /// Trackers send the refresh interval when we connect to them. Often this is
@@ -299,6 +313,59 @@ struct Opts {
     /// Disable trackers (for debugging DHT, LSD and --initial-peers)
     #[arg(long = "disable-trackers", env = "RTBIT_TRACKERS_DISABLE")]
     disable_trackers: bool,
+
+    /// Browse torrents from an external Indexarr instance. Needs --indexarr-url.
+    /// Accepts true/false, yes/no, on/off or 1/0 (also via RTBIT_INDEXARR_ENABLED).
+    #[arg(
+        long = "indexarr-enabled",
+        env = "RTBIT_INDEXARR_ENABLED",
+        action = ArgAction::SetTrue,
+        value_parser = BoolishValueParser::new(),
+    )]
+    indexarr_enabled: bool,
+
+    /// Base URL of the Indexarr instance, e.g. http://indexarr:8080. Used with --indexarr-enabled.
+    #[arg(long = "indexarr-url", env = "RTBIT_INDEXARR_URL")]
+    indexarr_url: Option<String>,
+
+    /// API key sent to Indexarr. Used with --indexarr-enabled.
+    #[arg(long = "indexarr-api-key", env = "RTBIT_INDEXARR_API_KEY")]
+    indexarr_api_key: Option<String>,
+}
+
+/// Resolve the Indexarr browsing URL from the parsed options.
+///
+/// Returns `None` when Indexarr is disabled. When enabled, the URL must be present and be an
+/// http(s) URL. Setting the URL or key without enabling Indexarr only logs a warning.
+fn indexarr_url_from_opts(opts: &Opts) -> anyhow::Result<Option<String>> {
+    let url = opts
+        .indexarr_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    if !opts.indexarr_enabled {
+        if url.is_some() || opts.indexarr_api_key.is_some() {
+            warn!(
+                "Indexarr URL or API key is set but Indexarr is not enabled; \
+                 pass --indexarr-enabled (RTBIT_INDEXARR_ENABLED=true) to use it"
+            );
+        }
+        return Ok(None);
+    }
+
+    let url = url.context(
+        "Indexarr is enabled but no URL is set; pass --indexarr-url (RTBIT_INDEXARR_URL)",
+    )?;
+    let parsed = url::Url::parse(url)
+        .with_context(|| format!("invalid Indexarr URL {url:?}, expected e.g. http://host:8080"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        bail!(
+            "invalid Indexarr URL {url:?}: scheme must be http or https, not {:?}",
+            parsed.scheme()
+        );
+    }
+    Ok(Some(url.to_owned()))
 }
 
 #[derive(Parser)]
@@ -545,6 +612,7 @@ fn main() -> anyhow::Result<()> {
     #[cfg(not(target_os = "windows"))]
     {
         let token = token.clone();
+        let shutdown_timeout = opts.shutdown_timeout;
         use signal_hook::{consts::SIGINT, consts::SIGTERM, iterator::Signals};
         let mut signals = Signals::new([SIGINT, SIGTERM])?;
         thread::spawn(move || {
@@ -554,13 +622,19 @@ fn main() -> anyhow::Result<()> {
                     warn!("received signal {:?}, forcing shutdown", sig);
                     std::process::exit(1)
                 }
-                warn!("received signal {:?}, trying to shut down gracefully", sig);
+                warn!(
+                    "received signal {:?}, trying to shut down gracefully (timeout {:?})",
+                    sig, shutdown_timeout
+                );
                 token.cancel();
                 cancel_triggered = true;
 
-                std::thread::spawn(|| {
-                    std::thread::sleep(Duration::from_secs(5));
-                    warn!("could not shutdown in time, killing myself");
+                std::thread::spawn(move || {
+                    std::thread::sleep(shutdown_timeout);
+                    warn!(
+                        "could not shut down within {:?}, killing myself",
+                        shutdown_timeout
+                    );
                     std::process::exit(1)
                 });
             }
@@ -735,6 +809,8 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
         None
     };
 
+    let indexarr_url = indexarr_url_from_opts(&opts)?;
+
     // Always create token store (needed for setup flow and login)
     let token_store = Some(std::sync::Arc::new(
         librtbit::http_api::auth::TokenStore::new(),
@@ -760,17 +836,8 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
             }
         },
 
-        indexarr_url: {
-            let enabled = std::env::var("RTBIT_INDEXARR_ENABLED")
-                .map(|v| v == "true" || v == "1")
-                .unwrap_or(false);
-            if enabled {
-                std::env::var("RTBIT_INDEXARR_URL").ok()
-            } else {
-                None
-            }
-        },
-        indexarr_api_key: std::env::var("RTBIT_INDEXARR_API_KEY").ok(),
+        indexarr_url,
+        indexarr_api_key: opts.indexarr_api_key.clone(),
 
         ..Default::default()
     };
@@ -813,6 +880,7 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
                 sopts.fastresume_validation_denom = start_opts.fastresume_validation_denom;
                 sopts.completed_folder = start_opts.completed_folder.as_deref().map(PathBuf::from);
 
+                let startup = StartupInfo::new(&sopts, Some(start_opts.output_folder.clone()));
                 let session =
                     Session::new_with_opts(PathBuf::from(&start_opts.output_folder), sopts)
                         .await
@@ -831,6 +899,7 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
                     http_api_opts,
                     &opts,
                     log_config,
+                    startup,
                 )
                 .await?;
 
@@ -868,6 +937,15 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
                 disable_trackers: opts.disable_trackers,
                 ..Default::default()
             };
+            let startup = StartupInfo::new(
+                &sopts,
+                Some(
+                    download_opts
+                        .output_folder
+                        .clone()
+                        .unwrap_or_else(|| ".".to_owned()),
+                ),
+            );
             let session = Session::new_with_opts(
                 download_opts
                     .output_folder
@@ -894,6 +972,7 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
                     http_api_opts,
                     &opts,
                     log_config,
+                    startup,
                 )
                 .await?;
                 librtbit_spawn(debug_span!("http_api"), "http_api", http_api_fut);
@@ -1001,6 +1080,7 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
                 .map(|t| t.to_string())
                 .collect();
 
+            let startup = StartupInfo::new(&sopts, None);
             let session = Session::new_with_opts(PathBuf::new(), sopts)
                 .await
                 .context("error initializing rtbit session")?;
@@ -1013,6 +1093,7 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
                 http_api_opts,
                 &opts,
                 log_config,
+                startup,
             )
             .await?;
 
@@ -1041,6 +1122,71 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
     }
 }
 
+/// What the startup banner reports besides the HTTP API address. Callers build it from the
+/// session options before those are moved into the session.
+struct StartupInfo {
+    download_folder: Option<String>,
+    state_location: String,
+    bittorrent_listen: String,
+}
+
+impl StartupInfo {
+    fn new(sopts: &SessionOptions, download_folder: Option<String>) -> Self {
+        Self {
+            download_folder,
+            state_location: describe_state_location(sopts.persistence.as_ref()),
+            bittorrent_listen: match sopts.listen.as_ref() {
+                Some(listen) => listen.listen_addr.to_string(),
+                None => "disabled".to_owned(),
+            },
+        }
+    }
+}
+
+/// Describe where session state is kept, for the startup banner.
+fn describe_state_location(persistence: Option<&SessionPersistenceConfig>) -> String {
+    match persistence {
+        None => "disabled (nothing is saved between runs)".to_owned(),
+        Some(SessionPersistenceConfig::Json {
+            folder: Some(folder),
+        }) => folder.display().to_string(),
+        Some(SessionPersistenceConfig::Json { folder: None }) => {
+            SessionPersistenceConfig::default_json_persistence_folder()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "default location".to_owned())
+        }
+        #[cfg(feature = "postgres")]
+        Some(SessionPersistenceConfig::Postgres { .. }) => "postgres".to_owned(),
+    }
+}
+
+/// Describe the HTTP API auth state for the startup banner.
+fn describe_auth(basic_auth_user: Option<&str>, web_ui_url: &str) -> String {
+    match basic_auth_user {
+        Some(user) => format!("enabled (user {user:?})"),
+        None => {
+            format!("not set up; open {web_ui_url} to create credentials before exposing this port")
+        }
+    }
+}
+
+/// Log the startup banner: where the web UI is, whether auth is set up, and where state and
+/// downloads live. Each line is a separate info event so it greps cleanly.
+fn log_startup_banner(listen_addr: SocketAddr, basic_auth_user: Option<&str>, info: &StartupInfo) {
+    let web_ui_url = format!("http://{listen_addr}/");
+    let downloads = info.download_folder.as_deref().unwrap_or("none");
+    let lines = [
+        ("web UI and API", web_ui_url.clone()),
+        ("auth", describe_auth(basic_auth_user, &web_ui_url)),
+        ("state", info.state_location.clone()),
+        ("downloads", downloads.to_owned()),
+        ("bittorrent listen", info.bittorrent_listen.clone()),
+    ];
+    for (label, value) in lines {
+        info!("{label:>18}: {value}");
+    }
+}
+
 async fn start_http_api(
     cancel: CancellationToken,
     session: Arc<Session>,
@@ -1048,6 +1194,7 @@ async fn start_http_api(
     mut http_api_opts: HttpApiOptions,
     opts: &Opts,
     log_config: InitLoggingResult,
+    startup: StartupInfo,
 ) -> anyhow::Result<impl Future<Output = anyhow::Result<()>> + use<> + 'static> {
     let api = Api::new(
         session.clone(),
@@ -1094,8 +1241,12 @@ async fn start_http_api(
 
     let listen_addr = listener.bind_addr();
     http_api_opts.web_ui_port = Some(listen_addr.port());
+    let basic_auth_user = http_api_opts
+        .basic_auth
+        .as_ref()
+        .map(|(user, _)| user.clone());
+    log_startup_banner(listen_addr, basic_auth_user.as_deref(), &startup);
     let http_api = HttpApi::new(api, Some(http_api_opts));
-    info!("started HTTP API at http://{listen_addr}");
 
     let mut upnp_server = {
         match opts.enable_upnp_server {
@@ -1249,6 +1400,109 @@ mod tests {
         ]);
 
         assert!(result.is_err());
+    }
+
+    fn parse_server_opts(extra: &[&str]) -> Opts {
+        let mut args = vec!["rtbit"];
+        args.extend_from_slice(extra);
+        args.extend_from_slice(&["server", "start", "/tmp/rtbit-startup-test"]);
+        Opts::try_parse_from(args).unwrap()
+    }
+
+    #[test]
+    fn log_file_defaults_to_info_not_librtbit_debug() {
+        let opts = parse_server_opts(&[]);
+        assert_eq!(opts.log_file_rust_log, "info");
+    }
+
+    #[test]
+    fn shutdown_timeout_defaults_to_30s_and_is_configurable() {
+        let opts = parse_server_opts(&[]);
+        assert_eq!(opts.shutdown_timeout, std::time::Duration::from_secs(30));
+
+        let opts = parse_server_opts(&["--shutdown-timeout", "2m"]);
+        assert_eq!(opts.shutdown_timeout, std::time::Duration::from_secs(120));
+    }
+
+    #[test]
+    fn indexarr_is_disabled_by_default() {
+        let opts = parse_server_opts(&[]);
+        assert!(!opts.indexarr_enabled);
+        assert_eq!(crate::indexarr_url_from_opts(&opts).unwrap(), None);
+    }
+
+    #[test]
+    fn indexarr_flags_are_parsed_by_clap() {
+        let opts = parse_server_opts(&[
+            "--indexarr-enabled",
+            "--indexarr-url",
+            "http://indexarr:8080",
+            "--indexarr-api-key",
+            "secret",
+        ]);
+        assert!(opts.indexarr_enabled);
+        assert_eq!(
+            crate::indexarr_url_from_opts(&opts).unwrap().as_deref(),
+            Some("http://indexarr:8080")
+        );
+        assert_eq!(opts.indexarr_api_key.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn indexarr_enabled_without_url_is_an_error() {
+        let opts = parse_server_opts(&["--indexarr-enabled"]);
+        let err = crate::indexarr_url_from_opts(&opts).unwrap_err();
+        assert!(format!("{err:#}").contains("no URL is set"), "{err:#}");
+    }
+
+    #[test]
+    fn indexarr_rejects_malformed_or_non_http_url() {
+        for bad in ["not a url", "ftp://indexarr:8080"] {
+            let opts = parse_server_opts(&["--indexarr-enabled", "--indexarr-url", bad]);
+            let err = crate::indexarr_url_from_opts(&opts).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("Indexarr URL"),
+                "{bad}: {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn indexarr_url_without_enabled_is_ignored() {
+        let opts = parse_server_opts(&["--indexarr-url", "http://indexarr:8080"]);
+        assert_eq!(crate::indexarr_url_from_opts(&opts).unwrap(), None);
+    }
+
+    #[test]
+    fn auth_banner_says_setup_required_until_credentials_exist() {
+        let url = "http://127.0.0.1:3030/";
+        assert_eq!(
+            crate::describe_auth(Some("admin"), url),
+            "enabled (user \"admin\")"
+        );
+        let unset = crate::describe_auth(None, url);
+        assert!(unset.starts_with("not set up"), "{unset}");
+        assert!(unset.contains(url), "{unset}");
+    }
+
+    #[test]
+    fn state_location_banner_describes_json_folder_and_disabled_persistence() {
+        use librtbit::SessionPersistenceConfig;
+        assert!(crate::describe_state_location(None).starts_with("disabled"));
+        let folder = SessionPersistenceConfig::Json {
+            folder: Some("/var/lib/rtbit".into()),
+        };
+        assert_eq!(
+            crate::describe_state_location(Some(&folder)),
+            "/var/lib/rtbit"
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn umask_error_echoes_the_rejected_value() {
+        let err = crate::parse_umask("089").unwrap_err();
+        assert!(format!("{err:#}").contains("\"089\""), "{err:#}");
     }
 
     #[cfg(not(target_os = "windows"))]
