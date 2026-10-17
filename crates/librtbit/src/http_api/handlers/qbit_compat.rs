@@ -6,7 +6,6 @@
 
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
-    net::{IpAddr, Ipv4Addr},
     num::{NonZeroU16, NonZeroU32},
     path::Path,
     path::PathBuf,
@@ -16,14 +15,13 @@ use std::{
 
 use axum::{
     Router,
-    extract::{ConnectInfo, Multipart, Query, Request, State},
+    extract::{Multipart, Query, Request, State},
     middleware::Next,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use bytes::Bytes;
-use http::{HeaderMap, Method, StatusCode, header::SET_COOKIE};
-use librqbit_dualstack_sockets::WrappedSocketAddr;
+use http::{HeaderMap, Method, StatusCode, header::RETRY_AFTER, header::SET_COOKIE};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -95,67 +93,6 @@ impl QbitSessions {
 
     fn remove_session(&self, sid: &str) {
         self.sessions.write().remove(sid);
-    }
-}
-
-/// Failed logins a client may make before backoff starts.
-const LOGIN_FREE_FAILURES: u32 = 5;
-/// Upper bound on the backoff between attempts from one client.
-const LOGIN_MAX_BACKOFF: Duration = Duration::from_secs(15 * 60);
-
-#[derive(Clone, Copy)]
-struct LoginFailures {
-    count: u32,
-    last_failure: Instant,
-}
-
-/// Per-client-IP backoff for compat `auth/login`. After `LOGIN_FREE_FAILURES`
-/// failed attempts, each further attempt must wait twice as long as the one
-/// before (1s, 2s, 4s, ... capped at `LOGIN_MAX_BACKOFF`). A successful login
-/// clears the client's record.
-#[derive(Default)]
-struct LoginThrottle {
-    failures: RwLock<HashMap<IpAddr, LoginFailures>>,
-}
-
-impl LoginThrottle {
-    fn backoff_for(count: u32) -> Duration {
-        let exponent = count.saturating_sub(LOGIN_FREE_FAILURES).min(20);
-        Duration::from_secs(1 << exponent).min(LOGIN_MAX_BACKOFF)
-    }
-
-    /// `Err(wait)` while the client is inside its backoff window.
-    fn check(&self, ip: IpAddr) -> Result<(), Duration> {
-        let failures = self.failures.read();
-        let Some(entry) = failures.get(&ip) else {
-            return Ok(());
-        };
-        if entry.count < LOGIN_FREE_FAILURES {
-            return Ok(());
-        }
-        let backoff = Self::backoff_for(entry.count);
-        let elapsed = entry.last_failure.elapsed();
-        if elapsed >= backoff {
-            Ok(())
-        } else {
-            Err(backoff - elapsed)
-        }
-    }
-
-    fn record_failure(&self, ip: IpAddr) {
-        let mut failures = self.failures.write();
-        // A client that stayed quiet for the maximum backoff starts again.
-        failures.retain(|_, entry| entry.last_failure.elapsed() < LOGIN_MAX_BACKOFF);
-        let entry = failures.entry(ip).or_insert(LoginFailures {
-            count: 0,
-            last_failure: Instant::now(),
-        });
-        entry.count = entry.count.saturating_add(1);
-        entry.last_failure = Instant::now();
-    }
-
-    fn record_success(&self, ip: IpAddr) {
-        self.failures.write().remove(&ip);
     }
 }
 
@@ -448,7 +385,6 @@ struct QbitCategory {
 pub(crate) struct QbitState {
     api_state: ApiState,
     sessions: QbitSessions,
-    login_throttle: LoginThrottle,
     tags: QbitTags,
     creator: QbitTorrentCreator,
     share_limits: QbitShareLimits,
@@ -684,24 +620,17 @@ struct LoginForm {
 
 async fn h_auth_login(
     State(state): State<Arc<QbitState>>,
-    parts: http::request::Parts,
+    super::super::auth::ClientAddr(client): super::super::auth::ClientAddr,
     body: Bytes,
 ) -> impl IntoResponse {
-    // The peer address comes from the server's connect info. Without it (e.g.
-    // in-process tests) every attempt shares one bucket.
-    let client_ip = parts
-        .extensions
-        .get::<ConnectInfo<WrappedSocketAddr>>()
-        .map(|ConnectInfo(addr)| addr.0.ip())
-        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-    if let Err(wait) = state.login_throttle.check(client_ip) {
-        return qbit_error(
+    if let Some(wait) = state.api_state.login_limiter.check(client, Instant::now()) {
+        let retry_after = wait.as_secs().max(1).to_string();
+        return (
             StatusCode::TOO_MANY_REQUESTS,
-            format!(
-                "too many failed login attempts; retry in {}s",
-                wait.as_secs().max(1)
-            ),
-        );
+            [(RETRY_AFTER, retry_after)],
+            "Fails.".to_string(),
+        )
+            .into_response();
     }
 
     let form: LoginForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
@@ -721,16 +650,21 @@ async fn h_auth_login(
                     expected_pass.as_bytes(),
                 )
         }
-        (None, None) => true,
+        // No credentials at all: only acceptable when there is no credential store either.
+        // With a store, setup has not happened yet and login must fail.
+        (None, None) => state.api_state.opts.credential_store.is_none(),
     };
 
     if auth_ok {
-        state.login_throttle.record_success(client_ip);
+        state.api_state.login_limiter.record_success(client);
         let sid = state.sessions.create_session();
         let cookie = format!("SID={sid}; Path=/; HttpOnly; SameSite=Strict");
         (StatusCode::OK, [(SET_COOKIE, cookie)], "Ok.".to_string()).into_response()
     } else {
-        state.login_throttle.record_failure(client_ip);
+        state
+            .api_state
+            .login_limiter
+            .record_failure(client, Instant::now());
         (StatusCode::FORBIDDEN, "Fails.".to_string()).into_response()
     }
 }
@@ -2917,7 +2851,6 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
     let qbit_state = Arc::new(QbitState {
         api_state: api_state.clone(),
         sessions: QbitSessions::new(),
-        login_throttle: LoginThrottle::default(),
         tags: qbit_tag_store(),
         creator: QbitTorrentCreator::default(),
         share_limits: QbitShareLimits::default(),
@@ -3040,6 +2973,10 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
                                 .as_ref()
                                 .is_some_and(|store| store.has_credentials());
                         if !auth_configured {
+                            // A credential store with no credentials means setup is pending.
+                            if qbit_state.api_state.opts.credential_store.is_some() {
+                                return Err((StatusCode::FORBIDDEN, "Setup required"));
+                            }
                             return Ok(next.run(request).await);
                         }
                         let sid = extract_sid(&headers);
@@ -3082,10 +3019,9 @@ mod tests {
     };
 
     use super::{
-        CreatorStatus, LoginThrottle, QbitSessions, QbitShareLimits, QbitState, QbitTags,
-        QbitTorrentCreator, h_app_preferences, h_app_set_preferences, h_app_version,
-        h_torrentcreator_add_task, h_torrents_recheck, matches_category, origin_allowed,
-        qbit_file_name,
+        CreatorStatus, QbitSessions, QbitShareLimits, QbitState, QbitTags, QbitTorrentCreator,
+        h_app_preferences, h_app_set_preferences, h_app_version, h_torrentcreator_add_task,
+        h_torrents_recheck, matches_category, origin_allowed, qbit_file_name,
     };
 
     async fn qbit_state() -> (Arc<QbitState>, Arc<Session>, tempfile::TempDir) {
@@ -3124,7 +3060,6 @@ mod tests {
             Arc::new(QbitState {
                 api_state,
                 sessions: QbitSessions::new(),
-                login_throttle: LoginThrottle::default(),
                 tags: QbitTags::default(),
                 creator: QbitTorrentCreator::default(),
                 share_limits: QbitShareLimits::default(),
@@ -3237,33 +3172,6 @@ mod tests {
         assert_eq!(sessions.sessions.read().len(), 1);
         assert!(!sessions.sessions.read().contains_key(&stale));
         assert!(sessions.validate_session(&fresh));
-    }
-
-    #[test]
-    fn login_throttle_backs_off_after_repeated_failures_per_client() {
-        let throttle = LoginThrottle::default();
-        let ip: std::net::IpAddr = "192.0.2.10".parse().unwrap();
-        let other: std::net::IpAddr = "192.0.2.11".parse().unwrap();
-        for _ in 0..4 {
-            throttle.record_failure(ip);
-        }
-        assert!(throttle.check(ip).is_ok());
-        throttle.record_failure(ip);
-        assert!(throttle.check(ip).is_err());
-        assert!(throttle.check(other).is_ok());
-        throttle.record_success(ip);
-        assert!(throttle.check(ip).is_ok());
-    }
-
-    #[test]
-    fn login_backoff_doubles_and_is_capped() {
-        assert_eq!(LoginThrottle::backoff_for(5), Duration::from_secs(1));
-        assert_eq!(LoginThrottle::backoff_for(6), Duration::from_secs(2));
-        assert_eq!(LoginThrottle::backoff_for(7), Duration::from_secs(4));
-        assert_eq!(
-            LoginThrottle::backoff_for(u32::MAX),
-            Duration::from_secs(900)
-        );
     }
 
     #[test]

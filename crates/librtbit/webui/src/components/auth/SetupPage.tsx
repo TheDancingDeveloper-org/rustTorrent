@@ -8,6 +8,7 @@ export const SetupPage: React.FC = () => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [setupToken, setSetupToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const setTokens = useAuthStore((s) => s.setTokens);
@@ -28,7 +29,11 @@ export const SetupPage: React.FC = () => {
 
     setLoading(true);
     try {
-      const tokens: TokenResponse = await AuthAPI.setup(username, password);
+      const tokens: TokenResponse = await AuthAPI.setup(
+        username,
+        password,
+        setupToken.trim(),
+      );
       setTokens(tokens.access_token, tokens.refresh_token, tokens.expires_in);
     } catch (err: any) {
       setError(err.message || "Setup failed");
@@ -61,6 +66,27 @@ export const SetupPage: React.FC = () => {
 
           <div>
             <label className="block text-sm font-medium text-secondary mb-1">
+              Setup token
+            </label>
+            <input
+              type="text"
+              value={setupToken}
+              onChange={(e) => setSetupToken(e.target.value)}
+              className={inputClass}
+              placeholder="Paste the token from the rtbit log"
+              autoComplete="off"
+              spellCheck={false}
+              autoFocus
+              required
+            />
+            <p className="text-tertiary text-xs mt-1">
+              Printed in the rtbit server log at startup (for example{" "}
+              <code>docker logs</code>).
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-secondary mb-1">
               Username
             </label>
             <input
@@ -70,7 +96,6 @@ export const SetupPage: React.FC = () => {
               className={inputClass}
               placeholder="Choose a username"
               autoComplete="username"
-              autoFocus
               required
             />
           </div>
@@ -107,7 +132,9 @@ export const SetupPage: React.FC = () => {
 
           <button
             type="submit"
-            disabled={loading || !username || !password || !confirmPassword}
+            disabled={
+              loading || !setupToken || !username || !password || !confirmPassword
+            }
             className="w-full py-2 bg-primary-bg text-white rounded font-medium hover:bg-primary-bg-hover disabled:opacity-50 transition-colors cursor-pointer disabled:cursor-not-allowed"
           >
             {loading ? "Creating account..." : "Create Account"}

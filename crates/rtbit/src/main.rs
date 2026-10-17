@@ -17,7 +17,7 @@ use librtbit::{
     AddTorrent, AddTorrentOptions, AddTorrentResponse, Api, ConnectionOptions,
     CreateTorrentOptions, ListOnlyResponse, ListenerMode, ListenerOptions, PeerConnectionOptions,
     Session, SessionOptions, SessionPersistenceConfig, TorrentStatsState, dht,
-    http_api::{HttpApi, HttpApiOptions},
+    http_api::{HttpApi, HttpApiOptions, auth::CredentialStore},
     librtbit_spawn,
     limits::LimitsConfig,
     storage::{
@@ -512,6 +512,28 @@ enum SubCommand {
     Download(DownloadOpts),
     /// Shell completions. eval "$(rtbit completions bash)"
     Completions(CompletionsOpts),
+    /// Manage the HTTP API login credentials.
+    Auth(AuthOpts),
+}
+
+#[derive(Parser)]
+struct AuthOpts {
+    #[clap(subcommand)]
+    subcommand: AuthSubcommand,
+}
+
+#[derive(Parser)]
+enum AuthSubcommand {
+    /// Replace the stored HTTP API username and password. Works even when the
+    /// credentials file is corrupt. Restart a running server to pick up the change.
+    ResetPassword(ResetPasswordOpts),
+}
+
+#[derive(Parser)]
+struct ResetPasswordOpts {
+    /// The username to store with the new password.
+    #[arg(short = 'u', long)]
+    username: String,
 }
 
 /// Return the API listener socket passed to rtbit by systemd, if any.
@@ -579,6 +601,10 @@ fn main() -> anyhow::Result<()> {
             &mut io::stdout(),
         );
         return Ok(());
+    }
+
+    if let SubCommand::Auth(auth_opts) = &opts.subcommand {
+        return run_auth_command(auth_opts);
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -784,22 +810,14 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
         completed_folder: None,
     };
 
-    // Credential store for persistent auth — uses data_dir (not config_dir) so it
-    // lands inside XDG_DATA_HOME which is always writable in the Docker image.
-    let credential_store = {
-        let config_dir = librtbit_core::directories::get_configuration_directory("session")
-            .map(|d| d.data_dir().to_owned())
-            .unwrap_or_else(|_| PathBuf::from("."));
-        Arc::new(librtbit::http_api::auth::CredentialStore::new(config_dir))
-    };
+    // Refuses to start if credentials.json exists but is corrupt, rather than running unauthenticated.
+    let credential_store = Arc::new(CredentialStore::load(credentials_dir())?);
 
-    // Load auth: credential store first, then env var fallback
-    let basic_auth = if let Some(creds) = credential_store.get_credentials() {
-        info!(
-            username = %creds.username,
-            "loaded credentials from credential store"
-        );
-        Some((creds.username, creds.password))
+    // Stored credentials are checked against their hash by the HTTP API, so they are not
+    // copied into basic_auth. The env var is only used when nothing is stored.
+    let basic_auth = if let Some(username) = credential_store.username() {
+        info!(%username, "loaded credentials from credential store");
+        None
     } else if let Ok(up) = std::env::var("RTBIT_HTTP_BASIC_AUTH_USERPASS") {
         let (u, p) = up
             .split_once(":")
@@ -1119,6 +1137,7 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
             http_api_fut.await
         }
         SubCommand::Completions(_) => unreachable!(),
+        SubCommand::Auth(_) => unreachable!(),
     }
 }
 
@@ -1185,6 +1204,40 @@ fn log_startup_banner(listen_addr: SocketAddr, basic_auth_user: Option<&str>, in
     for (label, value) in lines {
         info!("{label:>18}: {value}");
     }
+}
+
+/// Directory holding `credentials.json`. It uses data_dir (not config_dir) so it lands
+/// inside XDG_DATA_HOME, which is always writable in the Docker image.
+fn credentials_dir() -> PathBuf {
+    librtbit_core::directories::get_configuration_directory("session")
+        .map(|d| d.data_dir().to_owned())
+        .unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Runs `rtbit auth ...`. The new password is read from stdin so it never appears in argv.
+fn run_auth_command(opts: &AuthOpts) -> anyhow::Result<()> {
+    match &opts.subcommand {
+        AuthSubcommand::ResetPassword(reset) => {
+            anyhow::ensure!(!reset.username.is_empty(), "username must not be empty");
+            let mut line = String::new();
+            io::stdin()
+                .read_line(&mut line)
+                .context("cannot read the new password from stdin")?;
+            let password = line.trim_end_matches(['\r', '\n']);
+            anyhow::ensure!(!password.is_empty(), "the new password must not be empty");
+
+            let dir = credentials_dir();
+            CredentialStore::reset_credentials(dir.clone(), &reset.username, password)
+                .with_context(|| format!("cannot write credentials to {}", dir.display()))?;
+            println!(
+                "stored new credentials for {} in {}",
+                reset.username,
+                dir.join("credentials.json").display()
+            );
+            println!("restart rtbit so a running server picks them up");
+        }
+    }
+    Ok(())
 }
 
 async fn start_http_api(

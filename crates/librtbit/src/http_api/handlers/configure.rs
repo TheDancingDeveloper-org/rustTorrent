@@ -1,8 +1,12 @@
+use std::path::PathBuf;
+
 use axum::{Json, extract::Query, extract::State, response::IntoResponse};
+use http::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use super::ApiState;
 use crate::{
+    ApiError, WithStatusError,
     api::{EmptyJsonResponse, Result},
     limits::LimitsConfig,
 };
@@ -95,18 +99,51 @@ pub struct BrowseResponse {
     pub entries: Vec<DirEntry>,
 }
 
-pub async fn h_browse_directory(Query(query): Query<BrowseQuery>) -> Result<impl IntoResponse> {
-    let path = query.path.map(std::path::PathBuf::from).unwrap_or_else(|| {
-        // Default to root on Unix
-        std::path::PathBuf::from("/")
-    });
+/// The folders the browser may show: the session's download folder and, when set, its
+/// completed folder. Folders that do not exist are left out.
+fn browse_roots(state: &ApiState) -> Vec<PathBuf> {
+    std::iter::once(state.api.api_output_folder())
+        .chain(state.api.api_completed_folder())
+        .filter_map(|folder| PathBuf::from(folder).canonicalize().ok())
+        .collect()
+}
 
-    // Canonicalize to prevent directory traversal
+/// Resolves a browse request to a canonical directory inside one of `roots`. With no
+/// path, the first root is used. Symlinks and `..` are resolved before the check, so
+/// neither can step out of a root.
+fn resolve_browse_path(requested: Option<PathBuf>, roots: &[PathBuf]) -> Result<PathBuf> {
+    let path = match requested {
+        Some(path) => path,
+        None => roots
+            .first()
+            .cloned()
+            .with_status_error(StatusCode::FORBIDDEN, "no download folder is configured")?,
+    };
+
     let canonical = path
         .canonicalize()
         .map_err(|e| anyhow::anyhow!("invalid path: {e}"))?;
+    if !roots.iter().any(|root| canonical.starts_with(root)) {
+        return Err(ApiError::from((
+            StatusCode::FORBIDDEN,
+            "path is outside the download folders",
+        )));
+    }
+    Ok(canonical)
+}
 
-    let parent = canonical.parent().map(|p| p.to_string_lossy().into_owned());
+pub async fn h_browse_directory(
+    State(state): State<ApiState>,
+    Query(query): Query<BrowseQuery>,
+) -> Result<impl IntoResponse> {
+    let roots = browse_roots(&state);
+    let canonical = resolve_browse_path(query.path.map(PathBuf::from), &roots)?;
+
+    // The parent is only offered while it is still inside a root.
+    let parent = canonical
+        .parent()
+        .filter(|parent| roots.iter().any(|root| parent.starts_with(root)))
+        .map(|p| p.to_string_lossy().into_owned());
 
     let mut entries = Vec::new();
     let read_dir =
@@ -142,4 +179,71 @@ pub async fn h_browse_directory(Query(query): Query<BrowseQuery>) -> Result<impl
         parent,
         entries,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    fn canonical_roots(dirs: &[&Path]) -> Vec<PathBuf> {
+        dirs.iter()
+            .map(|dir| dir.canonicalize().expect("canonical test root"))
+            .collect()
+    }
+
+    #[test]
+    fn browse_defaults_to_first_root_and_allows_subdirectories() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let downloads = temp.path().join("downloads");
+        std::fs::create_dir_all(downloads.join("movies")).expect("create folders");
+        let roots = canonical_roots(&[&downloads]);
+
+        assert_eq!(
+            resolve_browse_path(None, &roots).expect("default"),
+            roots[0]
+        );
+        let movies = resolve_browse_path(Some(downloads.join("movies")), &roots).expect("subdir");
+        assert!(movies.ends_with("movies"));
+    }
+
+    #[test]
+    fn browse_refuses_paths_outside_the_roots() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let downloads = temp.path().join("downloads");
+        // Shares a string prefix with the root but is a different folder.
+        let lookalike = temp.path().join("downloads-old");
+        let secret = temp.path().join("secret");
+        for dir in [&downloads, &lookalike, &secret] {
+            std::fs::create_dir_all(dir).expect("create folders");
+        }
+        let roots = canonical_roots(&[&downloads]);
+
+        assert!(resolve_browse_path(Some(PathBuf::from("/")), &roots).is_err());
+        assert!(resolve_browse_path(Some(secret), &roots).is_err());
+        assert!(resolve_browse_path(Some(lookalike), &roots).is_err());
+        assert!(resolve_browse_path(Some(downloads.join("..")), &roots).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn browse_refuses_symlinks_that_leave_the_roots() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let downloads = temp.path().join("downloads");
+        let secret = temp.path().join("secret");
+        std::fs::create_dir_all(&downloads).expect("create downloads");
+        std::fs::create_dir_all(&secret).expect("create secret");
+        std::os::unix::fs::symlink(&secret, downloads.join("escape")).expect("symlink");
+        let roots = canonical_roots(&[&downloads]);
+
+        assert!(resolve_browse_path(Some(downloads.join("escape")), &roots).is_err());
+    }
+
+    #[test]
+    fn browse_refuses_everything_when_no_root_exists() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        assert!(resolve_browse_path(None, &[]).is_err());
+        assert!(resolve_browse_path(Some(temp.path().to_path_buf()), &[]).is_err());
+    }
 }
