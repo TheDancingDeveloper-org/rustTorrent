@@ -1,7 +1,7 @@
 use anyhow::Context;
 use axum::extract::{ConnectInfo, Request};
 use axum::middleware::Next;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 #[cfg(any(feature = "webui", feature = "prometheus"))]
 use axum::routing::get;
 use base64::Engine;
@@ -88,6 +88,8 @@ pub struct HttpApiOptions {
     pub allow_create: bool,
     pub token_store: Option<Arc<auth::TokenStore>>,
     pub credential_store: Option<Arc<auth::CredentialStore>>,
+    /// Keys for `Authorization: Bearer rtb_...`. None disables API keys.
+    pub api_keys: Option<Arc<auth::ApiKeyStore>>,
     /// Actual port the HTTP API is bound to, reported by compatibility APIs.
     pub web_ui_port: Option<u16>,
     #[cfg(feature = "prometheus")]
@@ -111,6 +113,16 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         .zip(b.iter())
         .fold(0u8, |acc, (x, y)| acc | (x ^ y))
         == 0
+}
+
+/// Runs a request authenticated as `role`. A read-only caller gets 403 for anything that is not
+/// a read. The role is recorded in the request for handlers that check it.
+async fn admit(role: auth::Role, mut request: axum::extract::Request, next: Next) -> Response {
+    if !role.allows_method(request.method()) {
+        return (StatusCode::FORBIDDEN, "this account is read-only").into_response();
+    }
+    request.extensions_mut().insert(auth::Caller(role));
+    next.run(request).await
 }
 
 /// Paths reachable before any credentials exist: the setup status and setup endpoints,
@@ -205,6 +217,7 @@ impl HttpApi {
         // The middleware checks credentials dynamically so runtime changes are picked up.
         {
             let token_store = state.opts.token_store.clone();
+            let api_keys = state.opts.api_keys.clone();
             let basic_auth = state.opts.basic_auth.clone();
             let credential_store = state.opts.credential_store.clone();
 
@@ -235,6 +248,7 @@ impl HttpApi {
             main_router = main_router.route_layer(axum::middleware::from_fn(
                 move |headers: HeaderMap, request: axum::extract::Request, next: Next| {
                     let token_store = token_store.clone();
+                    let api_keys = api_keys.clone();
                     let basic_auth = basic_auth.clone();
                     let credential_store = credential_store.clone();
                     let limiter_state = limiter_state.clone();
@@ -267,17 +281,25 @@ impl HttpApi {
                             return Ok((StatusCode::FORBIDDEN, "setup required").into_response());
                         }
 
-                        // Try Bearer token first
-                        if let Some(ts) = &token_store
-                            && let Some(token) = headers
-                                .get("Authorization")
-                                .and_then(|h| h.to_str().ok())
-                                .and_then(|h| h.strip_prefix("Bearer "))
+                        // Try Bearer first: an API key, or a session's access token.
+                        let bearer = headers
+                            .get("Authorization")
+                            .and_then(|h| h.to_str().ok())
+                            .and_then(|h| h.strip_prefix("Bearer "));
+                        if let Some(token) =
+                            bearer.filter(|_| token_store.is_some() || api_keys.is_some())
                         {
-                            if ts.validate_access_token(token) {
-                                return Ok(next.run(request).await);
-                            }
-                            return Err(ApiError::unauthorized());
+                            let role = if token.starts_with(auth::API_KEY_PREFIX) {
+                                api_keys.as_ref().and_then(|keys| keys.authenticate(token))
+                            } else {
+                                token_store
+                                    .as_ref()
+                                    .and_then(|ts| ts.validate_access_token(token))
+                            };
+                            return match role {
+                                Some(role) => Ok(admit(role, request, next).await),
+                                None => Err(ApiError::unauthorized()),
+                            };
                         }
 
                         // Try Basic auth — check credential store first, then env var
@@ -318,9 +340,9 @@ impl HttpApi {
                                 )
                                 .await;
                                 match verdict {
-                                    auth::Verdict::Valid => {
+                                    auth::Verdict::Valid(role) => {
                                         limiter_state.login_limiter.record_success(client);
-                                        return Ok(next.run(request).await);
+                                        return Ok(admit(role, request, next).await);
                                     }
                                     auth::Verdict::Busy => return Ok(auth::busy_response()),
                                     auth::Verdict::Invalid => {}
@@ -333,7 +355,7 @@ impl HttpApi {
                                 && constant_time_eq(p.as_bytes(), env_p.as_bytes())
                             {
                                 limiter_state.login_limiter.record_success(client);
-                                return Ok(next.run(request).await);
+                                return Ok(admit(auth::Role::Admin, request, next).await);
                             }
                         }
 

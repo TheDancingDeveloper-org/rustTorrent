@@ -242,5 +242,14 @@ pub fn make_api_router(state: ApiState) -> Router {
             );
     }
 
+    if state.opts.api_keys.is_some() {
+        api_router = api_router
+            .route(
+                "/auth/api_keys",
+                get(super::auth::h_api_keys_list).post(super::auth::h_api_key_create),
+            )
+            .route("/auth/api_keys/{id}", delete(super::auth::h_api_key_delete));
+    }
+
     api_router.with_state(state)
 }

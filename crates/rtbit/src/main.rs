@@ -527,11 +527,23 @@ enum AuthSubcommand {
     /// Replace the stored HTTP API username and password. Works even when the
     /// credentials file is corrupt. Restart a running server to pick up the change.
     ResetPassword(ResetPasswordOpts),
+    /// Add or replace the read-only account, which can read the API but not change
+    /// anything. The password is read from stdin. Restart a running server to pick it up.
+    SetReadOnlyUser(ReadOnlyUserOpts),
+    /// Remove the read-only account. Restart a running server to pick up the change.
+    RemoveReadOnlyUser,
 }
 
 #[derive(Parser)]
 struct ResetPasswordOpts {
     /// The username to store with the new password.
+    #[arg(short = 'u', long)]
+    username: String,
+}
+
+#[derive(Parser)]
+struct ReadOnlyUserOpts {
+    /// The read-only account's username. It must differ from the admin username.
     #[arg(short = 'u', long)]
     username: String,
 }
@@ -829,9 +841,12 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
 
     let indexarr_url = indexarr_url_from_opts(&opts)?;
 
-    // Always create token store (needed for setup flow and login)
+    // Sessions are saved next to the credentials, so logins survive a restart.
     let token_store = Some(std::sync::Arc::new(
-        librtbit::http_api::auth::TokenStore::new(),
+        librtbit::http_api::auth::TokenStore::load(credentials_dir()),
+    ));
+    let api_keys = Some(std::sync::Arc::new(
+        librtbit::http_api::auth::ApiKeyStore::load(credentials_dir())?,
     ));
 
     #[allow(clippy::needless_update)]
@@ -841,6 +856,7 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
         allow_create: opts.http_api_allow_create,
         token_store,
         credential_store: Some(credential_store),
+        api_keys,
 
         // We need to install prometheus recorder early before we registered any metrics.
         #[cfg(feature = "prometheus")]
@@ -1219,15 +1235,10 @@ fn run_auth_command(opts: &AuthOpts) -> anyhow::Result<()> {
     match &opts.subcommand {
         AuthSubcommand::ResetPassword(reset) => {
             anyhow::ensure!(!reset.username.is_empty(), "username must not be empty");
-            let mut line = String::new();
-            io::stdin()
-                .read_line(&mut line)
-                .context("cannot read the new password from stdin")?;
-            let password = line.trim_end_matches(['\r', '\n']);
-            anyhow::ensure!(!password.is_empty(), "the new password must not be empty");
+            let password = read_password_from_stdin()?;
 
             let dir = credentials_dir();
-            CredentialStore::reset_credentials(dir.clone(), &reset.username, password)
+            CredentialStore::reset_credentials(dir.clone(), &reset.username, &password)
                 .with_context(|| format!("cannot write credentials to {}", dir.display()))?;
             println!(
                 "stored new credentials for {} in {}",
@@ -1236,8 +1247,41 @@ fn run_auth_command(opts: &AuthOpts) -> anyhow::Result<()> {
             );
             println!("restart rtbit so a running server picks them up");
         }
+        AuthSubcommand::SetReadOnlyUser(account) => {
+            anyhow::ensure!(!account.username.is_empty(), "username must not be empty");
+            let password = read_password_from_stdin()?;
+
+            let dir = credentials_dir();
+            let store = CredentialStore::load(dir.clone())
+                .with_context(|| format!("cannot read credentials in {}", dir.display()))?;
+            store.set_read_only_user(&account.username, &password)?;
+            println!("stored read-only user {}", account.username);
+            println!("restart rtbit so a running server picks it up");
+        }
+        AuthSubcommand::RemoveReadOnlyUser => {
+            let dir = credentials_dir();
+            let store = CredentialStore::load(dir.clone())
+                .with_context(|| format!("cannot read credentials in {}", dir.display()))?;
+            if store.remove_read_only_user()? {
+                println!("removed the read-only user");
+                println!("restart rtbit so a running server picks it up");
+            } else {
+                println!("there is no read-only user to remove");
+            }
+        }
     }
     Ok(())
+}
+
+/// Reads one line from stdin, so a password never appears in argv.
+fn read_password_from_stdin() -> anyhow::Result<String> {
+    let mut line = String::new();
+    io::stdin()
+        .read_line(&mut line)
+        .context("cannot read the password from stdin")?;
+    let password = line.trim_end_matches(['\r', '\n']).to_owned();
+    anyhow::ensure!(!password.is_empty(), "the password must not be empty");
+    Ok(password)
 }
 
 async fn start_http_api(
