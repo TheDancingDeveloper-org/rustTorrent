@@ -8,7 +8,12 @@ export const SetupPage: React.FC = () => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [setupToken, setSetupToken] = useState("");
+  // The desktop app injects the token into its own webview; in a browser this is absent.
+  const [setupToken, setSetupToken] = useState(
+    () =>
+      (window as unknown as { __RTBIT_SETUP_TOKEN__?: string })
+        .__RTBIT_SETUP_TOKEN__ ?? "",
+  );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const setTokens = useAuthStore((s) => s.setTokens);

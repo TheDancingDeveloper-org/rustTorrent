@@ -224,6 +224,10 @@ impl HttpApi {
                     eprintln!(
                         "Send it as \"setup_token\" to POST /auth/setup, or enter it on the setup page."
                     );
+                    eprintln!(
+                        "It is also written to {} (owner-only) until setup completes.",
+                        cs.setup_token_path().display()
+                    );
                 }
             }
 

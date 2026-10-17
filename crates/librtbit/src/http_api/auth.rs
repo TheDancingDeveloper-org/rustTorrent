@@ -393,11 +393,33 @@ impl CredentialStore {
             }
         };
         let setup_token = credentials.is_none().then(generate_token);
-        Ok(Self {
+        let store = Self {
             credentials: RwLock::new(credentials),
             file_path,
             setup_token,
-        })
+        };
+        match &store.setup_token {
+            Some(token) => store.write_setup_token_file(token),
+            None => {
+                // Setup already happened, so a token file left by an earlier run is stale.
+                let _ = std::fs::remove_file(store.setup_token_path());
+            }
+        }
+        Ok(store)
+    }
+
+    /// Where the setup token is written, next to credentials.json.
+    pub fn setup_token_path(&self) -> PathBuf {
+        self.file_path.with_file_name("setup-token")
+    }
+
+    /// Writes the setup token to an owner-only file, for headless installs whose log nobody
+    /// reads. A failure is only a warning, because the token is also printed to stderr.
+    fn write_setup_token_file(&self, token: &str) {
+        let path = self.setup_token_path();
+        if let Err(e) = write_private_file(&path, token.as_bytes()) {
+            warn!("could not write the setup token to {}: {e}", path.display());
+        }
     }
 
     /// Replaces the stored credentials in `config_dir`, even if the existing file is corrupt.
@@ -449,6 +471,7 @@ impl CredentialStore {
         let mut guard = self.credentials.write();
         write_private_file(&self.file_path, &json)?;
         *guard = Some(file);
+        let _ = std::fs::remove_file(self.setup_token_path());
         Ok(())
     }
 
@@ -891,6 +914,32 @@ mod tests {
             "dropping frees the slots"
         );
     }
+
+    #[test]
+    fn setup_token_file_is_owner_only_and_removed_by_setup() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let store = CredentialStore::load(temp.path().to_path_buf()).expect("load");
+        let token = store.setup_token().expect("token").to_owned();
+        let token_file = temp.path().join("setup-token");
+        assert_eq!(
+            std::fs::read_to_string(&token_file).expect("token file"),
+            token
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&token_file)
+                .expect("token metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+
+        store.set_credentials("admin", "pass").expect("set");
+        assert!(!token_file.exists(), "setup must spend the token file");
+    }
 }
 
 // --- Change Credentials ---
@@ -904,8 +953,13 @@ pub struct ChangeCredentialsRequest {
 
 pub async fn h_auth_change_credentials(
     State(state): State<ApiState>,
+    ClientAddr(client): ClientAddr,
     Json(req): Json<ChangeCredentialsRequest>,
 ) -> impl IntoResponse {
+    if let Some(wait) = state.login_limiter.check(client, Instant::now()) {
+        return too_many_login_attempts(wait);
+    }
+
     let cs = match &state.opts.credential_store {
         Some(cs) => cs,
         None => {
@@ -940,8 +994,10 @@ pub async fn h_auth_change_credentials(
         },
     };
     if !current_ok {
+        state.login_limiter.record_failure(client, Instant::now());
         return (StatusCode::UNAUTHORIZED, "current password is incorrect").into_response();
     }
+    state.login_limiter.record_success(client);
 
     let new_username = req.new_username.unwrap_or(current_username);
     // The current password was just verified, so it stays valid when no new one is given.

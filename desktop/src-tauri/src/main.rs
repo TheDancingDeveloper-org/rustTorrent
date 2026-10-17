@@ -75,7 +75,7 @@ fn write_config(path: &str, config: &RtbitDesktopConfig) -> anyhow::Result<()> {
 async fn api_from_config(
     init_logging: &InitLoggingResult,
     config: &RtbitDesktopConfig,
-) -> anyhow::Result<(Api, SocketAddr)> {
+) -> anyhow::Result<(Api, SocketAddr, Option<String>)> {
     config
         .validate()
         .context("error validating configuration")?;
@@ -103,6 +103,9 @@ async fn api_from_config(
             .to_owned();
         Arc::new(librtbit::http_api::auth::CredentialStore::load(config_dir)?)
     };
+    // Set only while setup is pending. The webview gets it directly, so a Windows build with
+    // no console can still finish first-time setup.
+    let setup_token = credential_store.setup_token().map(str::to_owned);
 
     // Stored credentials are checked against their hash by the HTTP API, so they are not
     // copied into basic_auth.
@@ -235,13 +238,13 @@ async fn api_from_config(
         session.spawn(debug_span!("http_api"), "http_api", http_api_task);
     }
 
-    Ok((api, listen_addr))
+    Ok((api, listen_addr, setup_token))
 }
 
 /// Start the engine, HTTP server, and wait for readiness.
 async fn start_engine(
     init_logging: &InitLoggingResult,
-) -> anyhow::Result<(Api, SocketAddr, String)> {
+) -> anyhow::Result<(Api, SocketAddr, String, Option<String>)> {
     let config_filename = directories::ProjectDirs::from("com", "rtbit", "desktop")
         .expect("directories::ProjectDirs::from")
         .config_dir()
@@ -265,7 +268,7 @@ async fn start_engine(
         }
     };
 
-    let (api, listen_addr) = api_from_config(init_logging, &config).await?;
+    let (api, listen_addr, setup_token) = api_from_config(init_logging, &config).await?;
 
     // Wait for HTTP server readiness by polling /stats.
     let health_url = format!("http://{listen_addr}/stats");
@@ -275,13 +278,13 @@ async fn start_engine(
             && resp.status().is_success()
         {
             info!("HTTP server ready on {listen_addr}");
-            return Ok((api, listen_addr, config_filename));
+            return Ok((api, listen_addr, config_filename, setup_token));
         }
     }
 
     // Server may still work even if polling didn't succeed.
     warn!("Could not confirm HTTP server readiness, continuing anyway");
-    Ok((api, listen_addr, config_filename))
+    Ok((api, listen_addr, config_filename, setup_token))
 }
 
 // ---------------------------------------------------------------------------
@@ -503,14 +506,15 @@ async fn start() {
         Err(e) => warn!("failed increasing open file limit: {:#}", e),
     };
 
-    let (api, listen_addr, _config_filename) = match start_engine(&init_logging_result).await {
-        Ok(result) => result,
-        Err(e) => {
-            error!("Failed to start engine: {e:#}");
-            eprintln!("Fatal: Failed to start rtbit engine: {e:#}");
-            std::process::exit(1);
-        }
-    };
+    let (api, listen_addr, _config_filename, setup_token) =
+        match start_engine(&init_logging_result).await {
+            Ok(result) => result,
+            Err(e) => {
+                error!("Failed to start engine: {e:#}");
+                eprintln!("Fatal: Failed to start rtbit engine: {e:#}");
+                std::process::exit(1);
+            }
+        };
 
     let server_url = format!("http://{}/web/", listen_addr);
 
@@ -525,10 +529,18 @@ async fn start() {
         .setup(move |app| {
             // Create main window pointing at the HTTP server's web UI.
             let url = WebviewUrl::External(server_url.parse().unwrap());
-            let _window = WebviewWindowBuilder::new(app, "main", url)
+            let mut window = WebviewWindowBuilder::new(app, "main", url)
                 .title("rtbit")
-                .inner_size(1280.0, 800.0)
-                .build()?;
+                .inner_size(1280.0, 800.0);
+            if let Some(token) = &setup_token {
+                // Only this webview sees the token; the setup page reads it and fills the field.
+                let script = format!(
+                    "window.__RTBIT_SETUP_TOKEN__ = {};",
+                    serde_json::to_string(token)?
+                );
+                window = window.initialization_script(&script);
+            }
+            let _window = window.build()?;
 
             // Set up system tray.
             if let Err(e) = setup_tray(app.handle()) {
