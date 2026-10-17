@@ -43,6 +43,8 @@ import { useIndexarrStore } from "../stores/indexarrStore";
 import { MagnetInput } from "./buttons/MagnetInput";
 import { FileInput } from "./buttons/FileInput";
 import { ConfigModal } from "./config/ConfigModal";
+import { ShortcutHelp } from "./ShortcutHelp";
+import { TorrentDetailsModal } from "./modal/TorrentDetailsModal";
 import { DeleteTorrentModal } from "./modal/DeleteTorrentModal";
 
 interface ToolbarProps {
@@ -70,6 +72,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const setSidebarOpen = useUIStore((state) => state.setSidebarOpen);
   const currentPage = useUIStore((s) => s.currentPage);
   const setCurrentPage = useUIStore((s) => s.setCurrentPage);
+  const detailsModalTorrentId = useUIStore((s) => s.detailsModalTorrentId);
+  const openDetailsModal = useUIStore((s) => s.openDetailsModal);
+  const closeDetailsModal = useUIStore((s) => s.closeDetailsModal);
 
   // Torrent store
   const torrents = useTorrentStore((state) => state.torrents);
@@ -210,11 +215,42 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     setShowDeleteModal(true);
   }, [selectedTorrentIds, torrents]);
 
+  // Space pauses the selection when every selected torrent is live, otherwise resumes it
+  const toggleRunSelected = () => {
+    const selected = (torrents ?? []).filter((t) =>
+      selectedTorrentIds.has(t.id),
+    );
+    const allLive =
+      selected.length > 0 &&
+      selected.every((t) => t.stats?.state === STATE_LIVE);
+    if (allLive) {
+      pauseSelected();
+    } else {
+      resumeSelected();
+    }
+  };
+
   // Keyboard shortcuts (global)
-  const keyboardActions = useMemo(
-    () => ({ onDelete: openDeleteModal }),
-    [openDeleteModal],
-  );
+  const keyboardActions = {
+    onDelete: openDeleteModal,
+    onToggleRun: toggleRunSelected,
+    onOpenDetails: () => {
+      const [id] = Array.from(selectedTorrentIds);
+      if (id !== undefined) openDetailsModal(id);
+    },
+    onOpenFilePicker: () => {
+      document.querySelector<HTMLInputElement>('input[type="file"]')?.click();
+    },
+    onFocusMagnet: () => {
+      document
+        .querySelector<HTMLInputElement>('input[placeholder^="magnet:"]')
+        ?.focus();
+    },
+    onToggleHelp: () => {
+      const { shortcutHelpOpen, setShortcutHelpOpen } = useUIStore.getState();
+      setShortcutHelpOpen(!shortcutHelpOpen);
+    },
+  };
   useKeyboardShortcuts(keyboardActions);
 
   const runBulkAction = async (
@@ -563,6 +599,16 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         onHide={() => setShowDeleteModal(false)}
         torrents={torrentsToDelete}
       />
+
+      {detailsModalTorrentId !== null && (
+        <TorrentDetailsModal
+          torrentId={detailsModalTorrentId}
+          isOpen={true}
+          onClose={closeDetailsModal}
+        />
+      )}
+
+      <ShortcutHelp />
     </div>
   );
 };
