@@ -1,3 +1,4 @@
+import { Suspense, lazy } from "react";
 import { CardLayout } from "./CardLayout";
 import { ErrorComponent } from "./ErrorComponent";
 import { useTorrentStore } from "../stores/torrentStore";
@@ -5,8 +6,15 @@ import { useErrorStore } from "../stores/errorStore";
 import { useUIStore } from "../stores/uiStore";
 import { useIsLargeScreen } from "../hooks/useIsLargeScreen";
 import { CompactLayout } from "./compact/CompactLayout";
-import { IndexarrBrowse } from "./IndexarrBrowse";
-import { RSSPage } from "./RSSPage";
+import { Spinner } from "./Spinner";
+
+// Feature pages are loaded on first visit so they stay out of the main chunk.
+const IndexarrBrowse = lazy(() =>
+  import("./IndexarrBrowse").then((m) => ({ default: m.IndexarrBrowse })),
+);
+const RSSPage = lazy(() =>
+  import("./RSSPage").then((m) => ({ default: m.RSSPage })),
+);
 
 export const RootContent = () => {
   const closeableError = useErrorStore((state) => state.closeableError);
@@ -32,7 +40,9 @@ export const RootContent = () => {
         />
         <ErrorComponent error={otherError} />
         <div className="flex-1 min-h-0">
-          <IndexarrBrowse />
+          <Suspense fallback={<Spinner />}>
+            <IndexarrBrowse />
+          </Suspense>
         </div>
       </div>
     );
@@ -47,7 +57,9 @@ export const RootContent = () => {
         />
         <ErrorComponent error={otherError} />
         <div className="flex-1 min-h-0">
-          <RSSPage />
+          <Suspense fallback={<Spinner />}>
+            <RSSPage />
+          </Suspense>
         </div>
       </div>
     );
