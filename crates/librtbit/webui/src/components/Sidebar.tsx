@@ -20,7 +20,10 @@ interface FilterItem {
   count: number;
 }
 
-export const Sidebar: React.FC = () => {
+/** `drawer` fills the mobile navigation drawer and has no collapse control. */
+export const Sidebar: React.FC<{ variant?: "default" | "drawer" }> = ({
+  variant = "default",
+}) => {
   const torrents = useTorrentStore((state) => state.torrents);
   const statusFilter = useUIStore((state) => state.statusFilter);
   const setStatusFilter = useUIStore((state) => state.setStatusFilter);
@@ -105,7 +108,7 @@ export const Sidebar: React.FC = () => {
   const inactiveItemClass =
     "text-secondary hover:bg-surface-sunken hover:text-primary";
 
-  if (sidebarCollapsed) {
+  if (sidebarCollapsed && variant === "default") {
     return (
       <div className="w-12 bg-surface border-r border-divider flex flex-col shrink-0">
         <div className="flex-1 pt-2">
@@ -114,7 +117,9 @@ export const Sidebar: React.FC = () => {
               key={f.key}
               onClick={() => handleFilterClick(f.key)}
               title={`${f.label} (${f.count})`}
-              className={`w-full flex items-center justify-center py-2.5 cursor-pointer transition-colors ${
+              aria-label={`${f.label}, ${f.count} ${f.count === 1 ? "torrent" : "torrents"}`}
+              aria-pressed={statusFilter === f.key}
+              className={`w-full flex items-center justify-center py-2.5 cursor-pointer transition-colors focus-ring ${
                 statusFilter === f.key ? activeItemClass : inactiveItemClass
               }`}
             >
@@ -133,21 +138,28 @@ export const Sidebar: React.FC = () => {
     );
   }
 
+  const rootClass =
+    variant === "drawer"
+      ? "w-full h-full bg-surface flex flex-col"
+      : "w-48 bg-surface border-r border-divider flex flex-col shrink-0";
+
   return (
-    <div className="w-48 bg-surface border-r border-divider flex flex-col shrink-0">
+    <div className={rootClass}>
       <div className="flex-1 overflow-y-auto">
         {/* Status section */}
         <div className="px-3 pt-3 pb-1">
-          <h3 className="text-xs font-semibold text-tertiary uppercase tracking-wider">
+          <h2 className="text-xs font-semibold text-tertiary uppercase tracking-wider">
             Status
-          </h3>
+          </h2>
         </div>
         <div className="px-1.5">
           {filters.map((f) => (
             <button
               key={f.key}
               onClick={() => handleFilterClick(f.key)}
-              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded text-sm cursor-pointer transition-colors ${
+              aria-pressed={statusFilter === f.key}
+              aria-label={`${f.label}, ${f.count} ${f.count === 1 ? "torrent" : "torrents"}`}
+              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded text-sm cursor-pointer transition-colors focus-ring ${
                 statusFilter === f.key ? activeItemClass : inactiveItemClass
               }`}
             >
@@ -170,14 +182,16 @@ export const Sidebar: React.FC = () => {
         {/* Trackers section */}
         <TrackerFilter />
       </div>
-      <button
-        onClick={toggleSidebar}
-        className="p-2 text-tertiary hover:text-secondary cursor-pointer border-t border-divider flex items-center justify-center gap-1 text-xs"
-        title="Collapse sidebar"
-      >
-        <BsChevronLeft className="w-3 h-3" />
-        <span>Collapse</span>
-      </button>
+      {variant === "default" && (
+        <button
+          onClick={toggleSidebar}
+          className="p-2 text-tertiary hover:text-secondary cursor-pointer border-t border-divider flex items-center justify-center gap-1 text-xs focus-ring"
+          title="Collapse sidebar"
+        >
+          <BsChevronLeft className="w-3 h-3" />
+          <span>Collapse</span>
+        </button>
+      )}
     </div>
   );
 };
