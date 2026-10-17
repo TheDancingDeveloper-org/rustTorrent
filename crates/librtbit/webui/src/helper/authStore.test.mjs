@@ -53,3 +53,11 @@ test("an explicit logout does not flag the session as expired", () => {
   useAuthStore.getState().clearTokens();
   assert.equal(useAuthStore.getState().sessionExpired, false);
 });
+
+test("clearSessionExpired resets the flag without touching the session", () => {
+  useAuthStore.getState().setTokens("access", "refresh", 3600);
+  useAuthStore.getState().expireSession();
+  useAuthStore.getState().clearSessionExpired();
+  assert.equal(useAuthStore.getState().sessionExpired, false);
+  assert.equal(useAuthStore.getState().state, "login_required");
+});

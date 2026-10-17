@@ -11,6 +11,7 @@ import {
   SortDirection,
   torrentTrackerHosts,
 } from "../../helper/torrentFilters";
+import { Button } from "../buttons/Button";
 import { ColumnMenu } from "./ColumnMenu";
 import { TorrentContextMenu, ContextMenuState } from "../TorrentContextMenu";
 
@@ -132,6 +133,16 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
   const statusFilter = useUIStore((state) => state.statusFilter);
   const categoryFilter = useUIStore((state) => state.categoryFilter);
   const trackerFilter = useUIStore((state) => state.trackerFilter);
+  const setSearchQuery = useUIStore((state) => state.setSearchQuery);
+  const setStatusFilter = useUIStore((state) => state.setStatusFilter);
+  const setCategoryFilter = useUIStore((state) => state.setCategoryFilter);
+  const setTrackerFilter = useUIStore((state) => state.setTrackerFilter);
+  const clearFilters = useCallback(() => {
+    setSearchQuery("");
+    setStatusFilter("all");
+    setCategoryFilter(null);
+    setTrackerFilter(null);
+  }, [setSearchQuery, setStatusFilter, setCategoryFilter, setTrackerFilter]);
 
   // Subscribe to data directly so component re-renders on changes
   useColumnStore((s) => s.columnVisibility);
@@ -504,9 +515,25 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
 
   if (!torrents || torrents.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-tertiary">
-        <p className="text-lg">No torrents</p>
-        <p className="">Add a torrent to get started</p>
+      <div className="flex flex-col items-center justify-center h-64 gap-1 px-4 text-center text-tertiary">
+        <p className="text-lg">No torrents yet</p>
+        <p>
+          Paste a magnet link or drop a .torrent file anywhere on this page to
+          add one.
+        </p>
+      </div>
+    );
+  }
+
+  // Torrents exist, but the search or a filter hides all of them
+  if (filteredTorrents && filteredTorrents.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-2 px-4 text-center text-tertiary">
+        <p className="text-lg">No matches</p>
+        <p>No torrents match the current search or filters.</p>
+        <Button variant="secondary" onClick={clearFilters}>
+          Clear filters
+        </Button>
       </div>
     );
   }

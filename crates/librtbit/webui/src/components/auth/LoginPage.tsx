@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { AuthAPI, TokenResponse } from "../../http-api";
 import { useAuthStore } from "../../stores/authStore";
 // @ts-expect-error - SVG import handled by vite-plugin-svgr
@@ -10,6 +10,14 @@ export const LoginPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const setTokens = useAuthStore((s) => s.setTokens);
+  const sessionExpired = useAuthStore((s) => s.sessionExpired);
+  const clearSessionExpired = useAuthStore((s) => s.clearSessionExpired);
+  // Captured on mount so the notice stays up after the flag is cleared below
+  const [expiredNotice] = useState(sessionExpired);
+
+  useEffect(() => {
+    if (sessionExpired) clearSessionExpired();
+  }, [sessionExpired, clearSessionExpired]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,6 +46,15 @@ export const LoginPage: React.FC = () => {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {expiredNotice && !error && (
+            <div
+              role="status"
+              className="bg-warning/10 border border-warning text-primary rounded px-3 py-2 text-sm"
+            >
+              Your session expired. Sign in again to continue.
+            </div>
+          )}
+
           {error && (
             <div className="bg-error-bg/10 border border-error-bg text-error-bg rounded px-3 py-2 text-sm">
               {error}

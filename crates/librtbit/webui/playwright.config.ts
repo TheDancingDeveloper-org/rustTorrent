@@ -18,10 +18,19 @@ export default defineConfig({
       ? { executablePath: chromiumExecutablePath }
       : undefined,
   },
-  webServer: {
-    command: "npm run dev:mock -- --host 127.0.0.1",
-    url: "http://127.0.0.1:3032/mock.html",
-    reuseExistingServer: !process.env.CI,
-    timeout: 30_000,
-  },
+  webServer: [
+    {
+      command: "npm run dev:mock -- --host 127.0.0.1",
+      url: "http://127.0.0.1:3032/mock.html",
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+    },
+    // The real app shell, with its backend calls routed by the wiring spec
+    {
+      command: "npm run dev -- --host 127.0.0.1",
+      url: "http://127.0.0.1:3031/",
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+    },
+  ],
 });
