@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Template: packaging/scripts/render-flatpak.sh fills the release version and
+     date. Validate the rendered file with appstreamcli before submission. -->
+<component type="desktop-application">
+  <id>io.github.TheDancingDeveloper.rustTorrent</id>
+  <name>rtbit</name>
+  <summary>BitTorrent client written in Rust</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <developer id="io.github.TheDancingDeveloper">
+    <name>TheDancingDeveloper</name>
+  </developer>
+  <description>
+    <p>rtbit is a BitTorrent client written in Rust. It runs with a web UI, an HTTP API and this desktop app, and opens magnet links.</p>
+  </description>
+  <launchable type="desktop-id">io.github.TheDancingDeveloper.rustTorrent.desktop</launchable>
+  <url type="homepage">https://github.com/TheDancingDeveloper-org/rustTorrent</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="REPLACE_WITH_VERSION" date="REPLACE_WITH_RELEASE_DATE"/>
+  </releases>
+</component>

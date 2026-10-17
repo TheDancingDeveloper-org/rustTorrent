@@ -1,0 +1,47 @@
+# Flatpak manifest for the rtbit desktop app (desktop/src-tauri).
+# This file is a template: packaging/scripts/render-flatpak.sh fills the
+# placeholder values from the tag's commit and the verified SHA256SUMS of the
+# release, and writes the rendered manifest and metainfo into one directory.
+# The build runs offline against the vendored crates from the release.
+app-id: io.github.TheDancingDeveloper.rustTorrent
+runtime: org.gnome.Platform
+runtime-version: "48"
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: rtbit-desktop
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --filesystem=xdg-download
+  - --talk-name=org.freedesktop.Notifications
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/rtbit-desktop/cargo
+modules:
+  - name: rtbit-desktop
+    buildsystem: simple
+    build-commands:
+      # The in-app updater downloads and replaces the binary, which the
+      # sandbox forbids. Flatpak updates arrive through the Flatpak remote,
+      # so the updater's config is removed before the build.
+      - python3 -c "import json,pathlib; p=pathlib.Path('desktop/src-tauri/tauri.conf.json'); c=json.loads(p.read_text()); c.get('plugins',{}).pop('updater',None); p.write_text(json.dumps(c, indent=2))"
+      - cargo build --release --manifest-path desktop/src-tauri/Cargo.toml --offline
+      - install -Dm755 target/release/rtbit-desktop /app/bin/rtbit-desktop
+      - install -Dm644 packaging/flatpak/io.github.TheDancingDeveloper.rustTorrent.desktop /app/share/applications/io.github.TheDancingDeveloper.rustTorrent.desktop
+      - install -Dm644 io.github.TheDancingDeveloper.rustTorrent.metainfo.xml /app/share/metainfo/io.github.TheDancingDeveloper.rustTorrent.metainfo.xml
+      - install -Dm644 desktop/src-tauri/icons/128x128.png /app/share/icons/hicolor/128x128/apps/io.github.TheDancingDeveloper.rustTorrent.png
+    sources:
+      - type: git
+        url: https://github.com/TheDancingDeveloper-org/rustTorrent.git
+        tag: REPLACE_WITH_TAG
+        commit: REPLACE_WITH_COMMIT
+      - type: archive
+        url: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/download/REPLACE_WITH_TAG/rtbit-REPLACE_WITH_TAG-vendor.tar.xz
+        sha256: REPLACE_WITH_SHA256_VENDOR
+      - type: file
+        path: io.github.TheDancingDeveloper.rustTorrent.metainfo.xml
