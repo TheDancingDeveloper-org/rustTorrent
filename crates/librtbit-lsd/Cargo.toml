@@ -1,6 +1,6 @@
 [package]
 name = "swarmforge-lsd"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 edition = "2024"
 description = "BEP 14 Local Service Discovery for the rtbit BitTorrent client"
 license = "Apache-2.0"
