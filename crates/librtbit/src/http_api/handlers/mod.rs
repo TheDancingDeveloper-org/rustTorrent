@@ -8,6 +8,7 @@ pub(crate) mod playlist;
 pub(crate) mod qbit_compat;
 #[cfg(test)]
 mod qbit_parity;
+mod qbit_sync;
 pub(crate) mod rss;
 pub(crate) mod speed;
 pub(crate) mod streaming;
