@@ -9,6 +9,15 @@ upgrade notes in each release describe what to back up and check.
 
 ## [Unreleased]
 
+## [0.1.0-rc.5] - 2026-10-18
+
+### Fixed
+
+- Release workflow: pin cosign to v2.6.5. cosign v3 writes only the new bundle
+  format and ignores `--output-signature`/`--output-certificate`, so the
+  `v0.1.0-rc.4` release failed at signing and rc.4 has container images but no
+  binary release.
+
 ## [0.1.0-rc.4] - 2026-10-18
 
 ### Fixed
@@ -32,7 +41,7 @@ upgrade notes in each release describe what to back up and check.
 
 - Repository hygiene: restored the full `LICENSE` text; added `NOTICE`,
   `CONTRIBUTING.md` and `SECURITY.md`; corrected stale `../libs` paths.
-- Every crate and package is at version `0.1.0-rc.4`, including the `librtbit-*`
+- Every crate and package is at version `0.1.0-rc.5`, including the `librtbit-*`
   crates, `rtbit`, the desktop app and `fuzz`/`benchv2`.
 - Release notes moved from the repository root to `docs/releases/`, and
   `documentation/` was merged into `docs/`. The layout of each path is described
@@ -118,7 +127,8 @@ persistent session directory before upgrading.
 - The Docker build and web UI were consolidated so the shipped interface is
   built from the reviewed source tree.
 
-[Unreleased]: https://github.com/TheDancingDeveloper-org/rustTorrent/compare/v0.1.0-rc.4...HEAD
+[Unreleased]: https://github.com/TheDancingDeveloper-org/rustTorrent/compare/v0.1.0-rc.5...HEAD
+[0.1.0-rc.5]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.1.0-rc.5
 [0.1.0-rc.4]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.1.0-rc.4
 [0.1.0-rc.3]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.1.0-rc.3
 [0.1.0-rc.2]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.1.0-rc.2
