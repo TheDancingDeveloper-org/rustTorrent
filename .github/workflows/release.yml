@@ -116,6 +116,21 @@ jobs:
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: release-artifacts/rtbit-*
+      # cosign-installer runs envsubst, which the self-hosted runners may not have.
+      - name: Ensure envsubst is available
+        shell: bash
+        run: |
+          if command -v envsubst >/dev/null 2>&1; then
+            exit 0
+          fi
+          sudo=""
+          if [[ "$(id -u)" != 0 ]]; then
+            sudo="sudo -n"
+          fi
+          if ! { $sudo apt-get update -qq && $sudo apt-get install -y --no-install-recommends gettext-base; }; then
+            echo "::error::envsubst is missing and gettext-base could not be installed; add it to the runner image"
+            exit 1
+          fi
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Sign SHA256SUMS (keyless)
         shell: bash
@@ -148,6 +163,21 @@ jobs:
         with:
           name: release-artifacts-signed
           path: release-artifacts/
+      # cosign-installer runs envsubst, which the self-hosted runners may not have.
+      - name: Ensure envsubst is available
+        shell: bash
+        run: |
+          if command -v envsubst >/dev/null 2>&1; then
+            exit 0
+          fi
+          sudo=""
+          if [[ "$(id -u)" != 0 ]]; then
+            sudo="sudo -n"
+          fi
+          if ! { $sudo apt-get update -qq && $sudo apt-get install -y --no-install-recommends gettext-base; }; then
+            echo "::error::envsubst is missing and gettext-base could not be installed; add it to the runner image"
+            exit 1
+          fi
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Verify SHA256SUMS signature and artefact digests
         shell: bash
