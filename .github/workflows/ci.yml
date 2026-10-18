@@ -1,28 +1,64 @@
 name: CI
 
+# Pull requests run only the areas their diff touches (see `changes`). The
+# merge queue (merge_group), pushes and manual runs run everything. Skipped
+# jobs report success, so a required check never stays pending. See docs/ci.md.
 on:
   push:
     branches: [main, dev]
-    paths-ignore:
-      - "*.md"
-      - "docs/**"
-      - "AGENTS.md"
-      - "CONTRIBUTING.md"
-      - "SECURITY.md"
   pull_request:
-    paths-ignore:
-      - "*.md"
-      - "docs/**"
-      - "AGENTS.md"
-      - "CONTRIBUTING.md"
-      - "SECURITY.md"
+  merge_group:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  # Per ref: a force-push cancels the superseded PR run. Each queue entry has
+  # its own gh-readonly-queue/... ref, so entries never cancel each other.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  changes:
+    name: classify changes
+    runs-on: [self-hosted]
+    outputs:
+      rust: ${{ steps.classify.outputs.rust }}
+      webui: ${{ steps.classify.outputs.webui }}
+      website: ${{ steps.classify.outputs.website }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - id: classify
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" != pull_request ]]; then
+            printf 'rust=true\nwebui=true\nwebsite=true\n' >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files="$(git diff --name-only "$(git merge-base "$BASE_SHA" HEAD)" HEAD)"
+          rust=false webui=false website=false
+          while IFS= read -r f; do
+            case "$f" in
+              '') ;;
+              .github/*|ci/*|Dockerfile|.dockerignore|rust-toolchain.toml)
+                rust=true webui=true website=true ;;
+              crates/librtbit/webui/*) webui=true ;;
+              website/*) website=true ;;
+              crates/*|fuzz/*|tests/*|benchv2/*|Cargo.toml|Cargo.lock) rust=true ;;
+            esac
+          done <<<"$files"
+          printf 'rust=%s\nwebui=%s\nwebsite=%s\n' "$rust" "$webui" "$website" | tee -a "$GITHUB_OUTPUT"
+
   rust:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: [self-hosted]
     env:
       CARGO_BUILD_JOBS: 1
@@ -39,6 +75,8 @@ jobs:
       - run: cargo build --profile release-github -p rtbit --no-default-features --features default-tls
 
   webui:
+    needs: changes
+    if: needs.changes.outputs.webui == 'true'
     runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -58,7 +96,8 @@ jobs:
 
   gui-e2e:
     runs-on: [self-hosted]
-    needs: webui
+    needs: [changes, webui]
+    if: needs.changes.outputs.webui == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -74,6 +113,8 @@ jobs:
         run: npm run test:e2e
 
   website:
+    needs: changes
+    if: needs.changes.outputs.website == 'true'
     runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

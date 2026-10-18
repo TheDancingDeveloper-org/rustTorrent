@@ -17,6 +17,12 @@ BitTorrent client written in Rust with a web UI.
   (Service Access table): `GIT_AUTH_TOKEN`/`FORGEJO_TOKEN`/`GITHUB_PAT` live in the `cicd` project,
   env `prod`. Never print token values.
 
+## CI and landing
+
+PR checks are path-scoped; the merge queue runs the full suite. Enqueue with
+`gh pr merge --auto --rebase` rather than rebasing on every sibling merge. See
+[docs/ci.md](docs/ci.md).
+
 ## Coding conventions
 
 - **Do not reference the upstream qBittorrent project by name in code.** The

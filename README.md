@@ -118,6 +118,11 @@ Most behaviour is configurable from the web UI's settings dialog or via CLI flag
 | `fuzz/` | Fuzz targets for the protocol parsers |
 | `docs/` | Architecture notes, testing guide, fork provenance, release notes (`docs/releases/`) |
 
+## CI
+
+Pull requests run only the CI areas they touch; the merge queue runs the full
+suite before anything reaches `main`. See [docs/ci.md](docs/ci.md).
+
 ## Naming
 
 The project has several names, and they refer to different things:

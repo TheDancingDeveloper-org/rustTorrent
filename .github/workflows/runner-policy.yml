@@ -8,11 +8,16 @@ name: Runner policy
 
 on:
   pull_request:
+  merge_group:
   push:
     branches: [main, dev]
 
 permissions:
   contents: read
+
+concurrency:
+  group: runner-policy-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   runner-policy:
