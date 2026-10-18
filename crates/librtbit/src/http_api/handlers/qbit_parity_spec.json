@@ -9,7 +9,17 @@
       "endpoint": "app/buildInfo",
       "method": "GET",
       "status": "partial",
-      "notes": "Placeholder values for qt/libtorrent/boost/openssl."
+      "notes": "Placeholder values for qt/libtorrent/boost/openssl.",
+      "response": {
+        "content": "json",
+        "schema": {
+          "qt": "string",
+          "libtorrent": "string",
+          "boost": "string",
+          "openssl": "string",
+          "bitness": "integer"
+        }
+      }
     },
     {
       "endpoint": "app/cookies",
@@ -20,7 +30,10 @@
     {
       "endpoint": "app/defaultSavePath",
       "method": "GET",
-      "status": "full"
+      "status": "full",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "app/deleteAPIKey",
@@ -53,7 +66,35 @@
       "endpoint": "app/preferences",
       "method": "GET",
       "status": "partial",
-      "notes": "Small subset of preference fields. Seeding-limit fields are reported disabled with qBittorrent default values; rtbit does not enforce them globally."
+      "notes": "Small subset of preference fields. Seeding-limit fields are reported disabled with qBittorrent default values; rtbit does not enforce them globally.",
+      "response": {
+        "content": "json",
+        "schema": {
+          "max_connec": "integer",
+          "max_connec_per_torrent": "integer",
+          "max_uploads": "integer",
+          "max_uploads_per_torrent": "integer",
+          "dl_limit": "integer",
+          "up_limit": "integer",
+          "encryption": "integer",
+          "web_ui_port": "integer",
+          "listen_port": "integer",
+          "announce_port": "integer",
+          "max_ratio_act": "integer",
+          "max_seeding_time": "integer",
+          "temp_path_enabled": "boolean",
+          "dht": "boolean",
+          "pex": "boolean",
+          "lsd": "boolean",
+          "queueing_enabled": "boolean",
+          "max_ratio_enabled": "boolean",
+          "max_seeding_time_enabled": "boolean",
+          "save_path": "string",
+          "temp_path": "string",
+          "locale": "string",
+          "max_ratio": "number"
+        }
+      }
     },
     {
       "endpoint": "app/processInfo",
@@ -83,7 +124,10 @@
       "endpoint": "app/setPreferences",
       "method": "POST",
       "status": "partial",
-      "notes": "announce_port is applied when present (must be 1-65535). Other fields are accepted and ignored, so whole-object read-modify-write clients succeed."
+      "notes": "announce_port is applied when present (must be 1-65535). Other fields are accepted and ignored, so whole-object read-modify-write clients succeed.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "app/shutdown",
@@ -94,22 +138,34 @@
       "endpoint": "app/version",
       "method": "GET",
       "status": "partial",
-      "notes": "Returns a fixed 5.x-line version string (v5.0.0) matching the advertised WebAPI version; not a real qBittorrent build."
+      "notes": "Returns a fixed 5.x-line version string (v5.0.0) matching the advertised WebAPI version; not a real qBittorrent build.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "app/webapiVersion",
       "method": "GET",
-      "status": "full"
+      "status": "full",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "auth/login",
       "method": "POST",
-      "status": "full"
+      "status": "full",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "auth/logout",
       "method": "POST",
-      "status": "full"
+      "status": "full",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "clientdata/load",
@@ -294,7 +350,131 @@
       "endpoint": "sync/maindata",
       "method": "GET",
       "status": "partial",
-      "notes": "Always returns a full_update snapshot (no per-client rid deltas); free_space_on_disk and dht_nodes stubbed."
+      "notes": "Always returns a full_update snapshot (no per-client rid deltas); free_space_on_disk and dht_nodes stubbed.",
+      "response": {
+        "content": "json",
+        "schema": {
+          "rid": "integer",
+          "full_update": "boolean",
+          "torrents": {
+            "*": {
+              "added_on": "integer",
+              "amount_left": "integer",
+              "completed": "integer",
+              "completion_on": "integer",
+              "dl_limit": "integer",
+              "dlspeed": "integer",
+              "downloaded": "integer",
+              "downloaded_session": "integer",
+              "eta": "integer",
+              "last_activity": "integer",
+              "max_seeding_time": "integer",
+              "num_complete": "integer",
+              "num_incomplete": "integer",
+              "num_leechs": "integer",
+              "num_seeds": "integer",
+              "priority": "integer",
+              "seeding_time": "integer",
+              "seeding_time_limit": "integer",
+              "seen_complete": "integer",
+              "size": "integer",
+              "time_active": "integer",
+              "total_size": "integer",
+              "trackers_count": "integer",
+              "up_limit": "integer",
+              "uploaded": "integer",
+              "uploaded_session": "integer",
+              "upspeed": "integer",
+              "reannounce": "integer",
+              "max_inactive_seeding_time": "integer",
+              "inactive_seeding_time_limit": "integer",
+              "category": "string",
+              "content_path": "string",
+              "download_path": "string",
+              "hash": "string",
+              "infohash_v1": "string",
+              "infohash_v2": "string",
+              "magnet_uri": "string",
+              "name": "string",
+              "save_path": "string",
+              "state": "string",
+              "tags": "string",
+              "tracker": "string",
+              "comment": "string",
+              "root_path": "string",
+              "availability": "number",
+              "max_ratio": "number",
+              "progress": "number",
+              "ratio": "number",
+              "ratio_limit": "number",
+              "popularity": "number",
+              "auto_tmm": "boolean",
+              "f_l_piece_prio": "boolean",
+              "force_start": "boolean",
+              "seq_dl": "boolean",
+              "super_seeding": "boolean",
+              "has_metadata": "boolean",
+              "private": "boolean"
+            }
+          },
+          "categories": {
+            "*": {
+              "name": "string",
+              "savePath": "string"
+            }
+          },
+          "tags": [
+            "string"
+          ],
+          "server_state": {
+            "alltime_dl": "integer",
+            "alltime_ul": "integer",
+            "average_time_queue": "integer",
+            "dht_nodes": "integer",
+            "dl_info_data": "integer",
+            "dl_info_speed": "integer",
+            "dl_rate_limit": "integer",
+            "free_space_on_disk": "integer",
+            "queued_io_jobs": "integer",
+            "refresh_interval": "integer",
+            "total_buffers_size": "integer",
+            "total_peer_connections": "integer",
+            "total_queued_size": "integer",
+            "total_wasted_session": "integer",
+            "up_info_data": "integer",
+            "up_info_speed": "integer",
+            "up_rate_limit": "integer",
+            "connection_status": "string",
+            "global_ratio": "string",
+            "read_cache_hits": "string",
+            "read_cache_overload": "string",
+            "write_cache_overload": "string",
+            "queueing": "boolean",
+            "use_alt_speed_limits": "boolean"
+          }
+        },
+        "missing_fields": [
+          "torrents.*.comment",
+          "torrents.*.has_metadata",
+          "torrents.*.inactive_seeding_time_limit",
+          "torrents.*.max_inactive_seeding_time",
+          "torrents.*.popularity",
+          "torrents.*.private",
+          "torrents.*.reannounce",
+          "torrents.*.root_path",
+          "server_state.alltime_dl",
+          "server_state.alltime_ul",
+          "server_state.average_time_queue",
+          "server_state.queued_io_jobs",
+          "server_state.read_cache_hits",
+          "server_state.read_cache_overload",
+          "server_state.total_buffers_size",
+          "server_state.total_peer_connections",
+          "server_state.total_queued_size",
+          "server_state.total_wasted_session",
+          "server_state.write_cache_overload"
+        ]
+      }
     },
     {
       "endpoint": "sync/torrentPeers",
@@ -305,25 +485,56 @@
       "endpoint": "torrentcreator/addTask",
       "method": "POST",
       "status": "partial",
-      "notes": "Bridges native create_torrent (sourcePath/trackers/pieceSize/name); other options ignored. Requires server create to be enabled. Tasks not persisted across restarts."
+      "notes": "Bridges native create_torrent (sourcePath/trackers/pieceSize/name); other options ignored. Requires server create to be enabled. Tasks not persisted across restarts.",
+      "response": {
+        "content": "json",
+        "schema": {
+          "taskID": "string"
+        }
+      }
     },
     {
       "endpoint": "torrentcreator/deleteTask",
       "method": "POST",
       "status": "full",
-      "notes": "Removes a task from the in-memory store."
+      "notes": "Removes a task from the in-memory store.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrentcreator/status",
       "method": "GET",
       "status": "full",
-      "notes": "In-memory task status (Running/Finished/Failed)."
+      "notes": "In-memory task status (Running/Finished/Failed).",
+      "response": {
+        "content": "json",
+        "schema": [
+          {
+            "taskID": "string",
+            "sourcePath": "string",
+            "format": "string",
+            "status": "string",
+            "pieceSize": "integer",
+            "private": "boolean",
+            "timeAdded": "string"
+          }
+        ],
+        "missing_fields": [
+          "*.pieceSize",
+          "*.private",
+          "*.timeAdded"
+        ]
+      }
     },
     {
       "endpoint": "torrentcreator/torrentFile",
       "method": "GET",
       "status": "full",
-      "notes": "Returns the generated .torrent bytes for a finished task."
+      "notes": "Returns the generated .torrent bytes for a finished task.",
+      "response": {
+        "content": "bittorrent"
+      }
     },
     {
       "endpoint": "torrents/SSLParameters",
@@ -335,24 +546,36 @@
       "endpoint": "torrents/add",
       "method": "POST",
       "status": "partial",
-      "notes": "Supports urls/torrents/savepath/category/paused; other form fields ignored."
+      "notes": "Supports urls/torrents/savepath/category/paused; other form fields ignored.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/addPeers",
       "method": "POST",
       "status": "partial",
-      "notes": "Adds peers to live torrents; silently skips torrents that are not yet live."
+      "notes": "Adds peers to live torrents; silently skips torrents that are not yet live.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/addTags",
       "method": "POST",
       "status": "partial",
-      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags."
+      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/addTrackers",
       "method": "POST",
-      "status": "full"
+      "status": "full",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/addWebSeeds",
@@ -363,45 +586,76 @@
       "endpoint": "torrents/bottomPrio",
       "method": "POST",
       "status": "partial",
-      "notes": "No-op: rtbit has no download queue and app/preferences reports queueing_enabled=false, so the request succeeds without changing anything."
+      "notes": "No-op: rtbit has no download queue and app/preferences reports queueing_enabled=false, so the request succeeds without changing anything.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/categories",
       "method": "GET",
-      "status": "full"
+      "status": "full",
+      "response": {
+        "content": "json",
+        "schema": {
+          "*": {
+            "name": "string",
+            "savePath": "string"
+          }
+        }
+      }
     },
     {
       "endpoint": "torrents/count",
       "method": "GET",
-      "status": "full"
+      "status": "full",
+      "response": {
+        "content": "json",
+        "schema": "integer"
+      }
     },
     {
       "endpoint": "torrents/createCategory",
       "method": "POST",
-      "status": "full"
+      "status": "full",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/createTags",
       "method": "POST",
       "status": "partial",
-      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags."
+      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/decreasePrio",
       "method": "POST",
       "status": "partial",
-      "notes": "No-op: rtbit has no download queue and app/preferences reports queueing_enabled=false, so the request succeeds without changing anything."
+      "notes": "No-op: rtbit has no download queue and app/preferences reports queueing_enabled=false, so the request succeeds without changing anything.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/delete",
       "method": "POST",
-      "status": "full"
+      "status": "full",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/deleteTags",
       "method": "POST",
       "status": "partial",
-      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags."
+      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/downloadFile",
@@ -412,18 +666,30 @@
       "endpoint": "torrents/downloadLimit",
       "method": "GET",
       "status": "partial",
-      "notes": "Per-torrent limit persisted on the torrent and enforced while live (resets are avoided across pause/unpause)."
+      "notes": "Per-torrent limit persisted on the torrent and enforced while live (resets are avoided across pause/unpause).",
+      "response": {
+        "content": "json",
+        "schema": {
+          "*": "integer"
+        }
+      }
     },
     {
       "endpoint": "torrents/editCategory",
       "method": "POST",
-      "status": "full"
+      "status": "full",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/editTracker",
       "method": "POST",
       "status": "partial",
-      "notes": "Replaces origUrl with newUrl (remove + add); validates newUrl before removing so a bad newUrl is non-destructive."
+      "notes": "Replaces origUrl with newUrl (remove + add); validates newUrl before removing so a bad newUrl is non-destructive.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/editWebSeed",
@@ -434,7 +700,10 @@
       "endpoint": "torrents/export",
       "method": "GET",
       "status": "partial",
-      "notes": "Returns raw .torrent bytes; 409 while a magnet is still resolving."
+      "notes": "Returns raw .torrent bytes; 409 while a magnet is still resolving.",
+      "response": {
+        "content": "bittorrent"
+      }
     },
     {
       "endpoint": "torrents/fetchMetadata",
@@ -445,25 +714,122 @@
       "endpoint": "torrents/filePrio",
       "method": "POST",
       "status": "partial",
-      "notes": "Maps priority 0 to file exclusion and any non-zero priority to inclusion (no per-file priority tiers)."
+      "notes": "Maps priority 0 to file exclusion and any non-zero priority to inclusion (no per-file priority tiers).",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/files",
       "method": "GET",
       "status": "partial",
-      "notes": "piece_range is stubbed as [0, 0]."
+      "notes": "piece_range is stubbed as [0, 0].",
+      "response": {
+        "content": "json",
+        "schema": [
+          {
+            "index": "integer",
+            "name": "string",
+            "size": "integer",
+            "progress": "number",
+            "priority": "integer",
+            "is_seed": "boolean",
+            "piece_range": [
+              "integer"
+            ],
+            "availability": "number"
+          }
+        ]
+      }
     },
     {
       "endpoint": "torrents/increasePrio",
       "method": "POST",
       "status": "partial",
-      "notes": "No-op: rtbit has no download queue and app/preferences reports queueing_enabled=false, so the request succeeds without changing anything."
+      "notes": "No-op: rtbit has no download queue and app/preferences reports queueing_enabled=false, so the request succeeds without changing anything.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/info",
       "method": "GET",
       "status": "partial",
-      "notes": "Core fields real; several fields stubbed (tags, limits, magnet_uri, priority)."
+      "notes": "Core fields real; several fields stubbed (tags, limits, magnet_uri, priority).",
+      "response": {
+        "content": "json",
+        "schema": [
+          {
+            "added_on": "integer",
+            "amount_left": "integer",
+            "completed": "integer",
+            "completion_on": "integer",
+            "dl_limit": "integer",
+            "dlspeed": "integer",
+            "downloaded": "integer",
+            "downloaded_session": "integer",
+            "eta": "integer",
+            "last_activity": "integer",
+            "max_seeding_time": "integer",
+            "num_complete": "integer",
+            "num_incomplete": "integer",
+            "num_leechs": "integer",
+            "num_seeds": "integer",
+            "priority": "integer",
+            "seeding_time": "integer",
+            "seeding_time_limit": "integer",
+            "seen_complete": "integer",
+            "size": "integer",
+            "time_active": "integer",
+            "total_size": "integer",
+            "trackers_count": "integer",
+            "up_limit": "integer",
+            "uploaded": "integer",
+            "uploaded_session": "integer",
+            "upspeed": "integer",
+            "reannounce": "integer",
+            "max_inactive_seeding_time": "integer",
+            "inactive_seeding_time_limit": "integer",
+            "category": "string",
+            "content_path": "string",
+            "download_path": "string",
+            "hash": "string",
+            "infohash_v1": "string",
+            "infohash_v2": "string",
+            "magnet_uri": "string",
+            "name": "string",
+            "save_path": "string",
+            "state": "string",
+            "tags": "string",
+            "tracker": "string",
+            "comment": "string",
+            "root_path": "string",
+            "availability": "number",
+            "max_ratio": "number",
+            "progress": "number",
+            "ratio": "number",
+            "ratio_limit": "number",
+            "popularity": "number",
+            "auto_tmm": "boolean",
+            "f_l_piece_prio": "boolean",
+            "force_start": "boolean",
+            "seq_dl": "boolean",
+            "super_seeding": "boolean",
+            "has_metadata": "boolean",
+            "private": "boolean"
+          }
+        ],
+        "missing_fields": [
+          "*.comment",
+          "*.has_metadata",
+          "*.inactive_seeding_time_limit",
+          "*.max_inactive_seeding_time",
+          "*.popularity",
+          "*.private",
+          "*.reannounce",
+          "*.root_path"
+        ]
+      }
     },
     {
       "endpoint": "torrents/parseMetadata",
@@ -475,7 +841,10 @@
       "method": "POST",
       "status": "full",
       "upstream": false,
-      "notes": "Legacy pre-2.11 name kept for old clients; upstream replaced it with torrents/stop."
+      "notes": "Legacy pre-2.11 name kept for old clients; upstream replaced it with torrents/stop.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/pieceAvailability",
@@ -486,47 +855,112 @@
       "endpoint": "torrents/pieceHashes",
       "method": "GET",
       "status": "partial",
-      "notes": "v1 piece hashes from metadata; empty array while a magnet is still resolving or for v2-only torrents."
+      "notes": "v1 piece hashes from metadata; empty array while a magnet is still resolving or for v2-only torrents.",
+      "response": {
+        "content": "json",
+        "schema": [
+          "string"
+        ]
+      }
     },
     {
       "endpoint": "torrents/pieceStates",
       "method": "GET",
       "status": "partial",
-      "notes": "Emits 0 (not downloaded) / 2 (downloaded) from the have bitfield; the in-flight state 1 is not distinguished."
+      "notes": "Emits 0 (not downloaded) / 2 (downloaded) from the have bitfield; the in-flight state 1 is not distinguished.",
+      "response": {
+        "content": "json",
+        "schema": [
+          "integer"
+        ]
+      }
     },
     {
       "endpoint": "torrents/properties",
       "method": "GET",
       "status": "partial",
-      "notes": "Some fields stubbed (creation_date, comment, wasted, reannounce)."
+      "notes": "Some fields stubbed (creation_date, comment, wasted, reannounce).",
+      "response": {
+        "content": "json",
+        "schema": {
+          "creation_date": "integer",
+          "piece_size": "integer",
+          "total_wasted": "integer",
+          "total_uploaded": "integer",
+          "total_uploaded_session": "integer",
+          "total_downloaded": "integer",
+          "total_downloaded_session": "integer",
+          "up_limit": "integer",
+          "dl_limit": "integer",
+          "time_elapsed": "integer",
+          "seeding_time": "integer",
+          "nb_connections": "integer",
+          "nb_connections_limit": "integer",
+          "addition_date": "integer",
+          "completion_date": "integer",
+          "dl_speed_avg": "integer",
+          "dl_speed": "integer",
+          "eta": "integer",
+          "last_seen": "integer",
+          "peers": "integer",
+          "peers_total": "integer",
+          "pieces_have": "integer",
+          "pieces_num": "integer",
+          "reannounce": "integer",
+          "seeds": "integer",
+          "seeds_total": "integer",
+          "total_size": "integer",
+          "up_speed_avg": "integer",
+          "up_speed": "integer",
+          "save_path": "string",
+          "comment": "string",
+          "created_by": "string",
+          "share_ratio": "number"
+        }
+      }
     },
     {
       "endpoint": "torrents/reannounce",
       "method": "POST",
       "status": "partial",
-      "notes": "Signals a fresh tracker announce / peer re-discovery on live torrents; a no-op for paused or finished-idle torrents."
+      "notes": "Signals a fresh tracker announce / peer re-discovery on live torrents; a no-op for paused or finished-idle torrents.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/recheck",
       "method": "POST",
-      "status": "full"
+      "status": "full",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/removeCategories",
       "method": "POST",
-      "status": "full"
+      "status": "full",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/removeTags",
       "method": "POST",
       "status": "partial",
-      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags."
+      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/removeTrackers",
       "method": "POST",
       "status": "partial",
-      "notes": "Removes URLs from the tracker set (persisted); an in-flight announce loop for a removed tracker stops at the next re-discovery."
+      "notes": "Removes URLs from the tracker set (persisted); an in-flight announce loop for a removed tracker stops at the next re-discovery.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/removeWebSeeds",
@@ -537,26 +971,38 @@
       "endpoint": "torrents/rename",
       "method": "POST",
       "status": "full",
-      "notes": "Sets the torrent's display name (name override); surfaced in torrents/info and sync/maindata. Not persisted across restarts."
+      "notes": "Sets the torrent's display name (name override); surfaced in torrents/info and sync/maindata. Not persisted across restarts.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/renameFile",
       "method": "POST",
       "status": "partial",
-      "notes": "Moves the file on disk and updates metadata; requires the torrent stopped (409 if running). Not persisted across restarts."
+      "notes": "Moves the file on disk and updates metadata; requires the torrent stopped (409 if running). Not persisted across restarts.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/renameFolder",
       "method": "POST",
       "status": "partial",
-      "notes": "Moves every file under the folder prefix; requires the torrent stopped (409 if running). Not persisted across restarts."
+      "notes": "Moves every file under the folder prefix; requires the torrent stopped (409 if running). Not persisted across restarts.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/resume",
       "method": "POST",
       "status": "full",
       "upstream": false,
-      "notes": "Legacy pre-2.11 name kept for old clients; upstream replaced it with torrents/start."
+      "notes": "Legacy pre-2.11 name kept for old clients; upstream replaced it with torrents/start.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/saveMetadata",
@@ -572,7 +1018,10 @@
       "endpoint": "torrents/setCategory",
       "method": "POST",
       "status": "partial",
-      "notes": "Does not return 409 for unknown categories like qBittorrent does."
+      "notes": "Does not return 409 for unknown categories like qBittorrent does.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/setComment",
@@ -583,7 +1032,10 @@
       "endpoint": "torrents/setDownloadLimit",
       "method": "POST",
       "status": "partial",
-      "notes": "Per-torrent limit persisted on the torrent and enforced while live (resets are avoided across pause/unpause)."
+      "notes": "Per-torrent limit persisted on the torrent and enforced while live (resets are avoided across pause/unpause).",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/setDownloadPath",
@@ -594,13 +1046,19 @@
       "endpoint": "torrents/setForceStart",
       "method": "POST",
       "status": "partial",
-      "notes": "Routed to torrents/start (resume). rtbit has no queue, so force-start has no separate state."
+      "notes": "Routed to torrents/start (resume). rtbit has no queue, so force-start has no separate state.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/setLocation",
       "method": "POST",
       "status": "partial",
-      "notes": "Moves all files to a new root; stopped-only (409 if running) and same-filesystem only (cross-device rejected). Not persisted across restarts."
+      "notes": "Moves all files to a new root; stopped-only (409 if running) and same-filesystem only (cross-device rejected). Not persisted across restarts.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/setSSLParameters",
@@ -612,13 +1070,19 @@
       "endpoint": "torrents/setSavePath",
       "method": "POST",
       "status": "partial",
-      "notes": "Alias of setLocation (id/path form): stopped-only, same-filesystem move. Not persisted across restarts."
+      "notes": "Alias of setLocation (id/path form): stopped-only, same-filesystem move. Not persisted across restarts.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/setShareLimits",
       "method": "POST",
       "status": "partial",
-      "notes": "Stores ratio/seeding-time limits and reports them in torrents/info; not auto-enforced (clients apply their own removal). Not persisted across restarts."
+      "notes": "Stores ratio/seeding-time limits and reports them in torrents/info; not auto-enforced (clients apply their own removal). Not persisted across restarts.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/setSuperSeeding",
@@ -629,31 +1093,49 @@
       "endpoint": "torrents/setTags",
       "method": "POST",
       "status": "partial",
-      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags."
+      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/setUploadLimit",
       "method": "POST",
       "status": "partial",
-      "notes": "Per-torrent limit persisted on the torrent and enforced while live (resets are avoided across pause/unpause)."
+      "notes": "Per-torrent limit persisted on the torrent and enforced while live (resets are avoided across pause/unpause).",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/start",
       "method": "POST",
       "status": "full",
-      "notes": "WebAPI 2.11+ name for torrents/resume; shares the resume handler."
+      "notes": "WebAPI 2.11+ name for torrents/resume; shares the resume handler.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/stop",
       "method": "POST",
       "status": "full",
-      "notes": "WebAPI 2.11+ name for torrents/pause; shares the pause handler."
+      "notes": "WebAPI 2.11+ name for torrents/pause; shares the pause handler.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/tags",
       "method": "GET",
       "status": "partial",
-      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags."
+      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags.",
+      "response": {
+        "content": "json",
+        "schema": [
+          "string"
+        ]
+      }
     },
     {
       "endpoint": "torrents/toggleFirstLastPiecePrio",
@@ -669,24 +1151,56 @@
       "endpoint": "torrents/topPrio",
       "method": "POST",
       "status": "partial",
-      "notes": "No-op: rtbit has no download queue and app/preferences reports queueing_enabled=false, so the request succeeds without changing anything."
+      "notes": "No-op: rtbit has no download queue and app/preferences reports queueing_enabled=false, so the request succeeds without changing anything.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/trackers",
       "method": "GET",
       "status": "partial",
-      "notes": "Real per-tracker announce state; tier always 0 and num_downloaded always -1 (not tracked)."
+      "notes": "Real per-tracker announce state; tier always 0 and num_downloaded always -1 (not tracked).",
+      "response": {
+        "content": "json",
+        "schema": [
+          {
+            "url": "string",
+            "status": "integer",
+            "tier": "integer",
+            "num_peers": "integer",
+            "num_seeds": "integer",
+            "num_leeches": "integer",
+            "num_downloaded": "integer",
+            "msg": "string"
+          }
+        ]
+      }
     },
     {
       "endpoint": "torrents/uploadLimit",
       "method": "GET",
       "status": "partial",
-      "notes": "Per-torrent limit persisted on the torrent and enforced while live (resets are avoided across pause/unpause)."
+      "notes": "Per-torrent limit persisted on the torrent and enforced while live (resets are avoided across pause/unpause).",
+      "response": {
+        "content": "json",
+        "schema": {
+          "*": "integer"
+        }
+      }
     },
     {
       "endpoint": "torrents/webseeds",
       "method": "GET",
-      "status": "full"
+      "status": "full",
+      "response": {
+        "content": "json",
+        "schema": [
+          {
+            "url": "string"
+          }
+        ]
+      }
     },
     {
       "endpoint": "transfer/banPeers",
@@ -696,7 +1210,11 @@
     {
       "endpoint": "transfer/downloadLimit",
       "method": "GET",
-      "status": "full"
+      "status": "full",
+      "response": {
+        "content": "json",
+        "schema": "integer"
+      }
     },
     {
       "endpoint": "transfer/getSpeedLimits",
@@ -707,24 +1225,46 @@
       "endpoint": "transfer/info",
       "method": "GET",
       "status": "partial",
-      "notes": "Real session rate limits; dht_nodes stubbed and connection_status always connected."
+      "notes": "Real session rate limits; dht_nodes stubbed and connection_status always connected.",
+      "response": {
+        "content": "json",
+        "schema": {
+          "dl_info_speed": "integer",
+          "dl_info_data": "integer",
+          "up_info_speed": "integer",
+          "up_info_data": "integer",
+          "dl_rate_limit": "integer",
+          "up_rate_limit": "integer",
+          "dht_nodes": "integer",
+          "connection_status": "string"
+        }
+      }
     },
     {
       "endpoint": "transfer/pauseSession",
       "method": "POST",
       "status": "partial",
-      "notes": "Pauses every torrent (no global session pause)."
+      "notes": "Pauses every torrent (no global session pause).",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "transfer/resumeSession",
       "method": "POST",
       "status": "partial",
-      "notes": "Resumes every torrent (no global session pause)."
+      "notes": "Resumes every torrent (no global session pause).",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "transfer/setDownloadLimit",
       "method": "POST",
-      "status": "full"
+      "status": "full",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "transfer/setSpeedLimits",
@@ -735,29 +1275,45 @@
       "endpoint": "transfer/setSpeedLimitsMode",
       "method": "POST",
       "status": "full",
-      "notes": "Sets the alt-speed mode (native /speed/alt)."
+      "notes": "Sets the alt-speed mode (native /speed/alt).",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "transfer/setUploadLimit",
       "method": "POST",
-      "status": "full"
+      "status": "full",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "transfer/speedLimitsMode",
       "method": "GET",
       "status": "full",
-      "notes": "Reflects the alt-speed toggle (native /speed/alt)."
+      "notes": "Reflects the alt-speed toggle (native /speed/alt).",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "transfer/toggleSpeedLimitsMode",
       "method": "POST",
       "status": "full",
-      "notes": "Toggles the alt-speed mode (native /speed/alt)."
+      "notes": "Toggles the alt-speed mode (native /speed/alt).",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "transfer/uploadLimit",
       "method": "GET",
-      "status": "full"
+      "status": "full",
+      "response": {
+        "content": "json",
+        "schema": "integer"
+      }
     }
   ]
 }
