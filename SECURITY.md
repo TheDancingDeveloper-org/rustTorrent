@@ -27,7 +27,7 @@ you in the advisory if you wish.
 ## Supported versions
 
 Security fixes are made against the latest release candidate or release tag
-(currently `0.1.0-rc.2`) and the `main` branch. Earlier beta releases are not
+(currently `0.1.0-rc.3`) and the `main` branch. Earlier beta releases are not
 supported; upgrade to the latest tag to receive fixes.
 
 ## Deployment notes
