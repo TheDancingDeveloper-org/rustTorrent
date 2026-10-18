@@ -132,6 +132,11 @@ jobs:
             exit 1
           fi
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # cosign v3 writes only the new bundle format and ignores
+          # --output-signature/--output-certificate, which sign-blob and
+          # verify-release.sh rely on. Stay on v2 until both move to --bundle.
+          cosign-release: 'v2.6.5'
       - name: Sign SHA256SUMS (keyless)
         shell: bash
         run: |
@@ -179,6 +184,11 @@ jobs:
             exit 1
           fi
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # cosign v3 writes only the new bundle format and ignores
+          # --output-signature/--output-certificate, which sign-blob and
+          # verify-release.sh rely on. Stay on v2 until both move to --bundle.
+          cosign-release: 'v2.6.5'
       - name: Verify SHA256SUMS signature and artefact digests
         shell: bash
         run: |
