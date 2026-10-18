@@ -21,6 +21,8 @@ license: "Apache-2.0"
 contents:
   - src: "${BINARY}"
     dst: /usr/bin/rtbit
+    # nfpm only expands environment variables in src when asked to.
+    expand: true
     file_info:
       mode: 0755
 
