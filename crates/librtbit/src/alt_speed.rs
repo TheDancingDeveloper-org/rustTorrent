@@ -125,6 +125,16 @@ impl Session {
         }
     }
 
+    /// Normal session rate limits as configured, whether or not alternative
+    /// limits are currently replacing them in the live limiter.
+    pub fn normal_rate_limits(&self) -> (Option<NonZeroU32>, Option<NonZeroU32>) {
+        if let Some(saved) = *self.alt_speed.saved_normal.read() {
+            return saved;
+        }
+        let live = self.ratelimits.get_config();
+        (live.download_bps, live.upload_bps)
+    }
+
     fn alt_speed_schedule_wants_active(schedule: &AltSpeedSchedule) -> bool {
         use chrono::{Datelike, Local, Timelike};
         let now = Local::now();

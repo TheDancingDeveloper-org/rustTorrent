@@ -28,6 +28,7 @@ use tracing::warn;
 
 use crate::{
     AddTorrent, AddTorrentOptions, CreateTorrentOptions, SessionPersistenceConfig,
+    alt_speed::AltSpeedConfig,
     api::{Api, TorrentIdOrHash},
     create_torrent,
     limits::LimitsConfig,
@@ -804,8 +805,15 @@ async fn h_transfer_info(State(state): State<Arc<QbitState>>) -> impl IntoRespon
         up_info_data: session_stats.counters.uploaded_bytes,
         dl_rate_limit: bps_to_u64(config.download_bps),
         up_rate_limit: bps_to_u64(config.upload_bps),
-        dht_nodes: 0,
+        dht_nodes: dht_nodes(&state),
         connection_status: "connected",
+    })
+}
+
+/// Nodes in the DHT routing tables (IPv4 + IPv6); 0 when DHT is disabled.
+fn dht_nodes(state: &QbitState) -> u64 {
+    state.api_state.api.api_dht_stats().map_or(0, |s| {
+        (s.routing_table_size + s.routing_table_size_v6) as u64
     })
 }
 
@@ -846,7 +854,7 @@ async fn h_transfer_set_download_limit(
 ) -> &'static str {
     let form: LimitForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
     let session = state.api_state.api.session();
-    let upload = session.ratelimits.get_config().upload_bps;
+    let (_, upload) = session.normal_rate_limits();
     session.set_normal_rate_limits(limit_to_bps(form.limit), upload);
     "Ok."
 }
@@ -857,9 +865,57 @@ async fn h_transfer_set_upload_limit(
 ) -> &'static str {
     let form: LimitForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
     let session = state.api_state.api.session();
-    let download = session.ratelimits.get_config().download_bps;
+    let (download, _) = session.normal_rate_limits();
     session.set_normal_rate_limits(download, limit_to_bps(form.limit));
     "Ok."
+}
+
+#[derive(Serialize)]
+struct QbitSpeedLimits {
+    up_limit: u64,
+    dl_limit: u64,
+    alt_up_limit: u64,
+    alt_dl_limit: u64,
+}
+
+#[derive(Deserialize)]
+struct SpeedLimitsForm {
+    up_limit: u64,
+    dl_limit: u64,
+    alt_up_limit: u64,
+    alt_dl_limit: u64,
+}
+
+/// `transfer/getSpeedLimits` — normal and alternative session limits in
+/// bytes/s (0 = unlimited), over the native limiter and `/speed/alt` config.
+async fn h_transfer_get_speed_limits(State(state): State<Arc<QbitState>>) -> impl IntoResponse {
+    let session = state.api_state.api.session();
+    let (download, upload) = session.normal_rate_limits();
+    let alt = session.alt_speed_status().config;
+    axum::Json(QbitSpeedLimits {
+        up_limit: bps_to_u64(upload),
+        dl_limit: bps_to_u64(download),
+        alt_up_limit: alt.upload_rate.unwrap_or(0),
+        alt_dl_limit: alt.download_rate.unwrap_or(0),
+    })
+}
+
+/// `transfer/setSpeedLimits` — sets all four limits at once; every field is
+/// required, as upstream.
+async fn h_transfer_set_speed_limits(State(state): State<Arc<QbitState>>, body: Bytes) -> Response {
+    let Ok(form) = serde_urlencoded::from_bytes::<SpeedLimitsForm>(&body) else {
+        return qbit_error(
+            StatusCode::BAD_REQUEST,
+            "up_limit, dl_limit, alt_up_limit and alt_dl_limit are required integers",
+        );
+    };
+    let session = state.api_state.api.session();
+    session.set_normal_rate_limits(limit_to_bps(form.dl_limit), limit_to_bps(form.up_limit));
+    session.set_alt_speed_config(AltSpeedConfig {
+        download_rate: (form.alt_dl_limit != 0).then_some(form.alt_dl_limit),
+        upload_rate: (form.alt_up_limit != 0).then_some(form.alt_up_limit),
+    });
+    (StatusCode::OK, "Ok.").into_response()
 }
 
 /// qBittorrent alternative-speed mode maps onto our alt-speed toggle: `1` when
@@ -2615,7 +2671,7 @@ async fn h_sync_maindata(
 
     let server_state = QbitServerState {
         connection_status: "connected",
-        dht_nodes: 0,
+        dht_nodes: dht_nodes(&state),
         dl_info_data: downloaded,
         dl_info_speed: session_stats.download_speed.as_bytes(),
         dl_rate_limit: bps_to_u64(config.download_bps),
@@ -2952,6 +3008,8 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
         .route("/uploadLimit", get(h_transfer_upload_limit))
         .route("/setDownloadLimit", post(h_transfer_set_download_limit))
         .route("/setUploadLimit", post(h_transfer_set_upload_limit))
+        .route("/getSpeedLimits", get(h_transfer_get_speed_limits))
+        .route("/setSpeedLimits", post(h_transfer_set_speed_limits))
         .route("/speedLimitsMode", get(h_transfer_speed_limits_mode))
         .route(
             "/toggleSpeedLimitsMode",

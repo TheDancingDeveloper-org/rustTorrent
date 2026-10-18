@@ -111,7 +111,11 @@ and the rate-limit state disagreement; all are now resolved:
    session limiter as the native `/torrents/limits` API, and
    `transfer/speedLimitsMode`/`toggleSpeedLimitsMode`/`setSpeedLimitsMode`
    reflect the native `/speed/alt` toggle. `transfer/info` now also reports the
-   real session `dl_rate_limit`/`up_rate_limit` (was hardcoded to 0).
+   real session `dl_rate_limit`/`up_rate_limit` (was hardcoded to 0) and
+   `dht_nodes` from the DHT routing tables. `transfer/getSpeedLimits`/
+   `setSpeedLimits` read and write the normal limits and the native alt-speed
+   config in one call; `getSpeedLimits` reports the configured normal limits
+   even while alternative mode is active.
 
 Still open:
 
@@ -131,7 +135,7 @@ done: `torrents/stop`/`start`, `sync/maindata`, `app/defaultSavePath`,
 `torrents/tags` + tag CRUD, `torrents/trackers`, `torrents/addTrackers`,
 `torrents/addPeers`, `torrents/filePrio`, `torrents/pieceStates`/`pieceHashes`,
 `torrents/export`, `torrents/webseeds`, `torrents/count`, the `transfer/*Limit*`
-+ speed-limits-mode family, and `transfer/pauseSession`/`resumeSession`.
++ get/setSpeedLimits + speed-limits-mode family, and `transfer/pauseSession`/`resumeSession`.
 
 Remaining work, roughly by cost:
 

@@ -1219,13 +1219,23 @@
     {
       "endpoint": "transfer/getSpeedLimits",
       "method": "GET",
-      "status": "missing"
+      "status": "full",
+      "notes": "Normal limits from the session limiter, alternative limits from native /speed/alt/config.",
+      "response": {
+        "content": "json",
+        "schema": {
+          "up_limit": "integer",
+          "dl_limit": "integer",
+          "alt_up_limit": "integer",
+          "alt_dl_limit": "integer"
+        }
+      }
     },
     {
       "endpoint": "transfer/info",
       "method": "GET",
       "status": "partial",
-      "notes": "Real session rate limits; dht_nodes stubbed and connection_status always connected.",
+      "notes": "Real session rate limits and DHT routing-table size; connection_status always connected.",
       "response": {
         "content": "json",
         "schema": {
@@ -1269,7 +1279,11 @@
     {
       "endpoint": "transfer/setSpeedLimits",
       "method": "POST",
-      "status": "missing"
+      "status": "full",
+      "notes": "All four fields required (400 otherwise), as upstream.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "transfer/setSpeedLimitsMode",
