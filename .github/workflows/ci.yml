@@ -47,7 +47,7 @@ jobs:
           while IFS= read -r f; do
             case "$f" in
               '') ;;
-              .github/*|ci/*|Dockerfile|.dockerignore|rust-toolchain.toml)
+              .github/*|ci/*|Dockerfile*|.dockerignore|rust-toolchain.toml)
                 rust=true webui=true website=true ;;
               crates/librtbit/webui/*) webui=true ;;
               website/*) website=true ;;
