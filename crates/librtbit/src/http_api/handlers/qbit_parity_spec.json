@@ -546,7 +546,7 @@
       "endpoint": "torrents/add",
       "method": "POST",
       "status": "partial",
-      "notes": "Supports urls/torrents/savepath/category/paused; other form fields ignored.",
+      "notes": "Supports urls/torrents/savepath/category and stopped (2.11+; legacy paused also accepted); other form fields ignored.",
       "response": {
         "content": "text"
       }
@@ -755,7 +755,7 @@
       "endpoint": "torrents/info",
       "method": "GET",
       "status": "partial",
-      "notes": "Core fields real; several fields stubbed (tags, limits, magnet_uri, priority).",
+      "notes": "Core fields real; state uses 2.11 stoppedDL/stoppedUP; filter accepts 2.11 stopped/running and legacy paused/resumed. Several fields stubbed (tags, limits, magnet_uri, priority).",
       "response": {
         "content": "json",
         "schema": [
