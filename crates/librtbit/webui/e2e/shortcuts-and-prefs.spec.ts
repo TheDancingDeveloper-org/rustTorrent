@@ -104,7 +104,10 @@ test("a pause is announced in the live region", async ({ page }) => {
     (document.activeElement as HTMLElement | null)?.blur(),
   );
   await page.keyboard.press("Space");
-  await expect(page.getByRole("status")).toContainText("Paused");
+  // Toasts are a status region too, so look for the one that carries the announcement.
+  await expect(
+    page.getByRole("status").filter({ hasText: "Paused" }),
+  ).toHaveCount(1);
 });
 
 test("the detail pane keeps its tab across a reload", async ({ page }) => {
