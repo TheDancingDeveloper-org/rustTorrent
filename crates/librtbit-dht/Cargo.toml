@@ -1,6 +1,6 @@
 [package]
 name = "swarmforge-dht"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 edition = "2024"
 description = "Kademlia DHT implementation for the rtbit BitTorrent client"
 license = "Apache-2.0"

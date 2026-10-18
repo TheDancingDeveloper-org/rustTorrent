@@ -1,6 +1,6 @@
 [package]
 name = "rtbit"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 authors = ["AusAgentSmith <admin@rusttorrent.dev>"]
 edition = "2024"
 description = "A bittorrent command line client and server."
