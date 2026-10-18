@@ -8,7 +8,7 @@ and enforced, and where we currently stand.
 
 ## Current standing (upstream WebAPI 2.16.2, refreshed 2026-10-17)
 
-**69 of 93 in-scope endpoints routed (~74%)** — 26 full, 43 partial — plus 2
+**72 of 93 in-scope endpoints routed (~77%)** — 28 full, 44 partial — plus 2
 legacy aliases (`torrents/pause`, `torrents/resume`) that upstream removed in
 WebAPI 2.11. 37 of the 130 upstream endpoints were descoped on 2026-08-30
 (marked `out_of_scope`, enforced as unrouted): `search/*` (Indexarr covers
@@ -22,7 +22,7 @@ qbit_parity -- --nocapture` prints the same scoreboard.
 Decisions of record: advertised `webapiVersion` stays **2.11.3** and the
 rename-family bug is now fixed *forward* (see below); the remaining heavy engine
 items (a real download queue, per-torrent rate limits, move-storage, reannounce,
-rename) **will be built**, not stubbed — they account for most of the 24
+rename) **will be built**, not stubbed — they account for most of the 21
 still-`missing` in-scope endpoints.
 
 | Controller | Implemented / in scope | Notes |
@@ -31,7 +31,7 @@ still-`missing` in-scope endpoints.
 | `app` | 6 / 10 | version info (5.x line), `defaultSavePath`, minimal preferences (7 descoped) |
 | `torrents` | 46 / 60 | lifecycle, categories, tags (persisted), trackers (add/remove/edit), reannounce, rename (name/file/folder), setLocation/setSavePath, pieces, file prio, per-torrent + share limits, export, webseeds; queue-position endpoints are no-ops |
 | `transfer` | 10 / 13 | info (real session limits) + session rate limits + alt-speed mode + session pause/resume |
-| `sync` | 1 / 2 | `maindata` (full-update snapshots; no per-client rid deltas) |
+| `sync` | 2 / 2 | `maindata` and `torrentPeers` with rid deltas (changed fields + `*_removed`; full update for rid 0 or an expired rid) |
 | `torrentcreator` | 4 / 4 | task API over the native `create_torrent` (in-memory tasks) |
 | `log` | 0 / 2 | no persistent log ring buffer |
 | `rss`, `search`, `clientdata` | — | descoped entirely |
@@ -131,7 +131,7 @@ Still open:
 ### Suggested parity tiers
 
 Tier 1 (high value) and the thin backend bridges from tier 2 are now largely
-done: `torrents/stop`/`start`, `sync/maindata`, `app/defaultSavePath`,
+done: `torrents/stop`/`start`, `sync/maindata` (rid deltas) + `sync/torrentPeers`, `app/defaultSavePath`,
 `torrents/tags` + tag CRUD, `torrents/trackers`, `torrents/addTrackers`,
 `torrents/addPeers`, `torrents/filePrio`, `torrents/pieceStates`/`pieceHashes`,
 `torrents/export`, `torrents/webseeds`, `torrents/count`, the `transfer/*Limit*`

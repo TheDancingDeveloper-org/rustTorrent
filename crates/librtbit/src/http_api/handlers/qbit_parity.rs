@@ -1003,3 +1003,233 @@ async fn transfer_limits_and_alt_speed_through_compat_router() {
     // DHT is disabled in the fixture, so dht_nodes reports 0 rather than failing
     assert_eq!(get(&router, "/transfer/info").await.json()["dht_nodes"], 0);
 }
+
+fn response_contract<'a>(spec: &'a Spec, endpoint: &str) -> &'a ResponseSpec {
+    spec.endpoints
+        .iter()
+        .find(|ep| ep.endpoint == endpoint)
+        .and_then(|ep| ep.response.as_ref())
+        .unwrap_or_else(|| panic!("{endpoint} declares a response"))
+}
+
+/// `sync/maindata` rid deltas: a full snapshot at rid 0, then only what
+/// changed (tags, the touched torrent field, removals) against a held rid,
+/// and a full snapshot again for an unknown rid.
+#[tokio::test]
+async fn sync_maindata_rid_deltas_through_compat_router() {
+    let spec = parse_spec();
+    let contract = response_contract(&spec, "sync/maindata");
+    let (router, session, output) = make_router().await;
+    let torrent = make_payload_torrent(output.path()).await;
+    let handle = session
+        .add_torrent(
+            AddTorrent::from_bytes(torrent),
+            Some(AddTorrentOptions {
+                paused: true,
+                overwrite: true,
+                output_folder: Some(output.path().to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap()
+        .into_handle()
+        .unwrap();
+    handle.wait_until_initialized().await.unwrap();
+    let hash = handle.info_hash().as_string();
+
+    let full = get(&router, "/sync/maindata?rid=0").await;
+    let errors = check_response(contract, full.content_type.as_deref(), &full.body);
+    assert!(errors.is_empty(), "{errors:?}");
+    let full = full.json();
+    assert_eq!(full["full_update"], true);
+    assert_eq!(full["torrents"][&hash]["name"], "payload");
+    let rid = full["rid"].as_u64().unwrap();
+
+    post_form(
+        &router,
+        "/torrents/addTags",
+        &[("hashes", &hash), ("tags", "hd")],
+    )
+    .await;
+    let delta = get(&router, &format!("/sync/maindata?rid={rid}"))
+        .await
+        .json();
+    assert_eq!(delta.get("full_update"), None, "{delta}");
+    assert_eq!(delta["tags"], serde_json::json!(["hd"]), "{delta}");
+    let changed = &delta["torrents"][&hash];
+    assert_eq!(changed["tags"], "hd", "{delta}");
+    assert_eq!(
+        changed.get("name"),
+        None,
+        "unchanged fields are omitted: {delta}"
+    );
+    assert_eq!(delta.get("categories"), None, "{delta}");
+    let rid = delta["rid"].as_u64().unwrap();
+
+    post_form(&router, "/torrents/deleteTags", &[("tags", "hd")]).await;
+    post_form(
+        &router,
+        "/torrents/delete",
+        &[("hashes", &hash), ("deleteFiles", "false")],
+    )
+    .await;
+    let delta = get(&router, &format!("/sync/maindata?rid={rid}"))
+        .await
+        .json();
+    assert_eq!(delta["tags_removed"], serde_json::json!(["hd"]), "{delta}");
+    assert_eq!(
+        delta["torrents_removed"],
+        serde_json::json!([hash]),
+        "{delta}"
+    );
+    let rid = delta["rid"].as_u64().unwrap();
+
+    // a stale rid from before the deletes still diffs against its own snapshot
+    let stale = get(&router, &format!("/sync/maindata?rid={}", rid - 1))
+        .await
+        .json();
+    assert_eq!(
+        stale["torrents_removed"],
+        serde_json::json!([hash]),
+        "{stale}"
+    );
+    // an rid the server never issued yields a full update
+    let unknown = get(&router, "/sync/maindata?rid=999999").await.json();
+    assert_eq!(unknown["full_update"], true);
+    assert_eq!(unknown["torrents"], serde_json::json!({}));
+}
+
+/// `sync/torrentPeers` against a real peer: a second session downloads the
+/// fixture torrent from the router's session, which must list it (shape
+/// checked against the spec), report its traffic in deltas, and list it in
+/// `peers_removed` once it goes away.
+#[tokio::test]
+async fn sync_torrent_peers_through_compat_router() {
+    let spec = parse_spec();
+    let contract = response_contract(&spec, "sync/torrentPeers");
+    let (router, seeder, output) = make_router().await;
+    let torrent = make_payload_torrent(output.path()).await;
+    let handle = seeder
+        .add_torrent(
+            AddTorrent::from_bytes(torrent.clone()),
+            Some(AddTorrentOptions {
+                overwrite: true,
+                // files land directly in output_folder, so point it at the payload
+                output_folder: Some(output.path().join("payload").to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap()
+        .into_handle()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(30), handle.wait_until_completed())
+        .await
+        .expect("seeder verifies its payload")
+        .unwrap();
+    let hash = handle.info_hash().as_string();
+    let uri = |rid: u64| format!("/sync/torrentPeers?hash={hash}&rid={rid}");
+
+    let empty = get(&router, &uri(0)).await.json();
+    assert_eq!(empty["full_update"], true);
+    assert_eq!(empty["peers"], serde_json::json!({}));
+    assert_eq!(
+        get(
+            &router,
+            &format!("/sync/torrentPeers?hash={}", "0".repeat(40))
+        )
+        .await
+        .status,
+        StatusCode::NOT_FOUND
+    );
+
+    let leecher_dir = tempfile::TempDir::with_prefix("qbit_parity_leecher").unwrap();
+    let leecher = Session::new_with_opts(
+        leecher_dir.path().to_owned(),
+        SessionOptions {
+            disable_dht: true,
+            disable_local_service_discovery: true,
+            listen: Some(ListenerOptions {
+                mode: ListenerMode::TcpOnly,
+                listen_addr: (Ipv4Addr::LOCALHOST, 0).into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let seeder_addr = seeder.listen_addr().expect("seeder listens");
+    let leech = leecher
+        .add_torrent(
+            AddTorrent::from_bytes(torrent),
+            Some(AddTorrentOptions {
+                initial_peers: Some(vec![seeder_addr]),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap()
+        .into_handle()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(30), leech.wait_until_completed())
+        .await
+        .expect("leecher completes")
+        .unwrap();
+
+    // the leecher shows up as a peer with its upload counted
+    let mut full = None;
+    for _ in 0..200 {
+        let response = get(&router, &uri(0)).await;
+        let body = response.json();
+        let uploaded = body["peers"]
+            .as_object()
+            .and_then(|peers| peers.values().next())
+            .and_then(|peer| peer["uploaded"].as_u64())
+            .unwrap_or(0);
+        if uploaded > 0 {
+            let errors = check_response(contract, response.content_type.as_deref(), &response.body);
+            assert!(errors.is_empty(), "{errors:?}");
+            full = Some(body);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let full = full.expect("leecher listed among the seeder's peers");
+    let (addr, peer) = full["peers"].as_object().unwrap().iter().next().unwrap();
+    assert_eq!(peer["ip"], "127.0.0.1");
+    assert_eq!(addr, &format!("127.0.0.1:{}", peer["port"]));
+    assert_eq!(peer["connection"], "BT");
+    let rid = full["rid"].as_u64().unwrap();
+
+    // an rid from another scope (maindata) does not diff against peers
+    let main_rid = get(&router, "/sync/maindata").await.json()["rid"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(
+        get(&router, &uri(main_rid)).await.json()["full_update"],
+        true
+    );
+
+    // once the leecher goes away the seeder reports the peer removed
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        leecher.delete(leech.id().into(), false),
+    )
+    .await
+    .expect("leecher deletes its torrent")
+    .unwrap();
+    drop(leecher);
+    let mut removed = false;
+    for _ in 0..400 {
+        let delta = get(&router, &uri(rid)).await.json();
+        assert_eq!(delta.get("full_update"), None, "{delta}");
+        if delta["peers_removed"] == serde_json::json!([addr]) {
+            removed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(removed, "peer {addr} never reported in peers_removed");
+}

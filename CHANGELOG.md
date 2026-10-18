@@ -13,6 +13,8 @@ upgrade notes in each release describe what to back up and check.
 
 - WebUI API v2 compat: `torrentcreator/status` now emits `taskID` (was
   `taskId`), matching the upstream field name.
+- Tests no longer write compat tags into the user's real data directory
+  (`qbit-tags.json`), which leaked tags between runs.
 
 ### Added
 
@@ -23,6 +25,10 @@ upgrade notes in each release describe what to back up and check.
 - WebUI API v2 compat: `transfer/getSpeedLimits` and `transfer/setSpeedLimits`
   over the native session limiter and alt-speed config; `transfer/info` and
   `sync/maindata` report real `dht_nodes` from the DHT routing tables.
+- WebUI API v2 compat: `sync/maindata` now answers a known `rid` with a delta
+  (changed fields only, plus `torrents_removed` / `categories_removed` /
+  `tags_removed`) instead of a full snapshot every poll, and
+  `sync/torrentPeers` is routed with the same rid encoding.
 
 ## [0.1.0-rc.5] - 2026-10-18
 

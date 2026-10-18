@@ -33,10 +33,11 @@ use crate::{
     create_torrent,
     limits::LimitsConfig,
     spawn_utils::BlockingSpawner,
-    torrent_state::stats::TorrentStatsState,
+    stream_connect::ConnectionKind,
+    torrent_state::{peer::stats::snapshot::PeerStatsFilter, stats::TorrentStatsState},
 };
 
-use super::ApiState;
+use super::{ApiState, qbit_sync::SyncSnapshots};
 
 // ---------------------------------------------------------------------------
 // Shared state for qBit compat layer
@@ -389,6 +390,7 @@ pub(crate) struct QbitState {
     tags: QbitTags,
     creator: QbitTorrentCreator,
     share_limits: QbitShareLimits,
+    sync: SyncSnapshots,
 }
 
 // ---------------------------------------------------------------------------
@@ -2611,8 +2613,6 @@ struct QbitServerState {
 
 #[derive(Serialize)]
 struct QbitMainData {
-    rid: u64,
-    full_update: bool,
     torrents: HashMap<String, QbitTorrentInfo>,
     categories: HashMap<String, QbitCategory>,
     tags: Vec<String>,
@@ -2626,9 +2626,9 @@ struct SyncQuery {
 }
 
 /// `sync/maindata` — the primary polling endpoint for WebUI frontends and many
-/// integrations. We do not track per-client deltas, so every response is a
-/// `full_update` snapshot (a valid, if chattier, mode of the protocol); the
-/// `rid` is echoed back incremented so clients keep polling.
+/// integrations. `rid=0` (or an unknown/expired rid) returns a `full_update`
+/// snapshot; a rid from a previous response returns only what changed since
+/// it (see `qbit_sync`).
 async fn h_sync_maindata(
     State(state): State<Arc<QbitState>>,
     Query(query): Query<SyncQuery>,
@@ -2685,14 +2685,113 @@ async fn h_sync_maindata(
         global_ratio,
     };
 
-    axum::Json(QbitMainData {
-        rid: query.rid.saturating_add(1),
-        full_update: true,
+    let snapshot = to_json_map(&QbitMainData {
         torrents,
         categories,
         tags: state.tags.all_tags(),
         server_state,
-    })
+    });
+    axum::Json(state.sync.respond("maindata", query.rid, snapshot))
+}
+
+fn to_json_map(value: &impl Serialize) -> serde_json::Map<String, serde_json::Value> {
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => unreachable!("sync payloads serialize to JSON objects"),
+    }
+}
+
+#[derive(Serialize)]
+struct QbitPeer {
+    client: String,
+    connection: &'static str,
+    country: String,
+    country_code: String,
+    dl_speed: u64,
+    downloaded: u64,
+    files: String,
+    flags: String,
+    flags_desc: String,
+    ip: String,
+    port: u16,
+    progress: f64,
+    relevance: f64,
+    up_speed: u64,
+    uploaded: u64,
+    peer_id_client: String,
+}
+
+#[derive(Serialize)]
+struct QbitTorrentPeers {
+    show_flags: bool,
+    peers: HashMap<String, QbitPeer>,
+}
+
+#[derive(Deserialize)]
+struct SyncPeersQuery {
+    hash: String,
+    #[serde(default)]
+    rid: u64,
+}
+
+/// `sync/torrentPeers` — live peers of one torrent, keyed by `ip:port`, with
+/// the same rid delta encoding as `sync/maindata`. Only the transfer counters
+/// and connection kind are known natively; client name, country, flags,
+/// per-peer progress and speeds are reported empty/zero.
+async fn h_sync_torrent_peers(
+    State(state): State<Arc<QbitState>>,
+    Query(query): Query<SyncPeersQuery>,
+) -> Response {
+    let api = &state.api_state.api;
+    let Ok(idx) = TorrentIdOrHash::parse(&query.hash) else {
+        return qbit_error(StatusCode::NOT_FOUND, "Not found");
+    };
+    let Ok(handle) = api.mgr_handle(idx) else {
+        return qbit_error(StatusCode::NOT_FOUND, "Not found");
+    };
+    // A torrent that is not live (paused, initializing) simply has no peers.
+    let peers = handle
+        .live()
+        .map(|live| {
+            live.per_peer_stats_snapshot(PeerStatsFilter::default())
+                .peers
+                .into_iter()
+                .filter_map(|(addr, stats)| {
+                    let socket: std::net::SocketAddr = addr.parse().ok()?;
+                    let connection = match stats.conn_kind {
+                        Some(ConnectionKind::Utp) => "μTP",
+                        _ => "BT",
+                    };
+                    let peer = QbitPeer {
+                        client: String::new(),
+                        connection,
+                        country: String::new(),
+                        country_code: String::new(),
+                        dl_speed: 0,
+                        downloaded: stats.counters.fetched_bytes,
+                        files: String::new(),
+                        flags: String::new(),
+                        flags_desc: String::new(),
+                        ip: socket.ip().to_string(),
+                        port: socket.port(),
+                        progress: 0.0,
+                        relevance: 0.0,
+                        up_speed: 0,
+                        uploaded: stats.counters.uploaded_bytes,
+                        peer_id_client: String::new(),
+                    };
+                    Some((addr, peer))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let snapshot = to_json_map(&QbitTorrentPeers {
+        show_flags: true,
+        peers,
+    });
+    let scope = format!("peers:{}", handle.info_hash().as_string());
+    axum::Json(state.sync.respond(&scope, query.rid, snapshot)).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -2917,6 +3016,10 @@ async fn reject_cross_origin_posts(request: Request, next: Next) -> Response {
 /// the session persistence files. Falls back to memory if that directory cannot
 /// be resolved.
 fn qbit_tag_store() -> QbitTags {
+    // Tests build many routers; keep them off the user's real data directory.
+    if cfg!(test) {
+        return QbitTags::default();
+    }
     match SessionPersistenceConfig::default_json_persistence_folder() {
         Ok(dir) => QbitTags::persistent(dir.join("qbit-tags.json")),
         Err(error) => {
@@ -2934,6 +3037,7 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
         tags: qbit_tag_store(),
         creator: QbitTorrentCreator::default(),
         share_limits: QbitShareLimits::default(),
+        sync: SyncSnapshots::default(),
     });
 
     // Auth endpoints (no auth required to reach these)
@@ -3024,7 +3128,9 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
 
     // Sync (main polling endpoint). Must stay nested inside protected_router so
     // it runs behind the SID-cookie auth layer.
-    let sync_router = Router::new().route("/maindata", get(h_sync_maindata));
+    let sync_router = Router::new()
+        .route("/maindata", get(h_sync_maindata))
+        .route("/torrentPeers", get(h_sync_torrent_peers));
 
     // Torrent creator task API (also behind the auth layer).
     let torrentcreator_router = Router::new()
@@ -3102,8 +3208,9 @@ mod tests {
 
     use super::{
         CreatorStatus, QbitSessions, QbitShareLimits, QbitState, QbitTags, QbitTorrentCreator,
-        h_app_preferences, h_app_set_preferences, h_app_version, h_torrentcreator_add_task,
-        h_torrents_recheck, matches_category, origin_allowed, qbit_file_name,
+        SyncSnapshots, h_app_preferences, h_app_set_preferences, h_app_version,
+        h_torrentcreator_add_task, h_torrents_recheck, matches_category, origin_allowed,
+        qbit_file_name,
     };
 
     async fn qbit_state() -> (Arc<QbitState>, Arc<Session>, tempfile::TempDir) {
@@ -3145,6 +3252,7 @@ mod tests {
                 tags: QbitTags::default(),
                 creator: QbitTorrentCreator::default(),
                 share_limits: QbitShareLimits::default(),
+                sync: SyncSnapshots::default(),
             }),
             session,
             output,

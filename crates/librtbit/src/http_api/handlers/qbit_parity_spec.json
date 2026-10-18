@@ -350,7 +350,7 @@
       "endpoint": "sync/maindata",
       "method": "GET",
       "status": "partial",
-      "notes": "Always returns a full_update snapshot (no per-client rid deltas); free_space_on_disk and dht_nodes stubbed.",
+      "notes": "rid deltas: rid=0 or an unknown/expired rid (snapshots kept 5 min, 64 max) returns full_update; otherwise only changed fields plus *_removed lists. free_space_on_disk stubbed; no trackers map.",
       "response": {
         "content": "json",
         "schema": {
@@ -479,7 +479,36 @@
     {
       "endpoint": "sync/torrentPeers",
       "method": "GET",
-      "status": "missing"
+      "status": "partial",
+      "notes": "Live peers keyed by ip:port with the maindata rid delta encoding. Only transfer counters and connection kind are real; client, country, flags, progress and speeds are empty/zero.",
+      "response": {
+        "content": "json",
+        "schema": {
+          "rid": "integer",
+          "full_update": "boolean",
+          "show_flags": "boolean",
+          "peers": {
+            "*": {
+              "client": "string",
+              "connection": "string",
+              "country": "string",
+              "country_code": "string",
+              "dl_speed": "integer",
+              "downloaded": "integer",
+              "files": "string",
+              "flags": "string",
+              "flags_desc": "string",
+              "ip": "string",
+              "peer_id_client": "string",
+              "port": "integer",
+              "progress": "number",
+              "relevance": "number",
+              "up_speed": "integer",
+              "uploaded": "integer"
+            }
+          }
+        }
+      }
     },
     {
       "endpoint": "torrentcreator/addTask",
