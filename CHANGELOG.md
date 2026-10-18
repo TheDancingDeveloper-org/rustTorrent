@@ -9,6 +9,18 @@ upgrade notes in each release describe what to back up and check.
 
 ## [Unreleased]
 
+### Fixed
+
+- WebUI API v2 compat: `torrentcreator/status` now emits `taskID` (was
+  `taskId`), matching the upstream field name.
+
+### Added
+
+- WebUI API v2 compat conformance tests: every routed endpoint in
+  `qbit_parity_spec.json` declares a response contract that is validated
+  against a live torrent, plus an add/stop/start/recheck/setCategory/delete
+  lifecycle test through the compat router.
+
 ## [0.1.0-rc.5] - 2026-10-18
 
 ### Fixed

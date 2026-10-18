@@ -2716,6 +2716,7 @@ async fn h_torrentcreator_add_task(
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CreatorTaskStatus {
+    #[serde(rename = "taskID")]
     task_id: String,
     source_path: String,
     format: String,

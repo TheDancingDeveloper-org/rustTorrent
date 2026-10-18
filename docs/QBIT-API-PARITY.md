@@ -224,21 +224,30 @@ spec against the real router (they run in the normal
   flipping its spec status fails CI.
 - `every_compat_route_is_tracked_in_spec` — scans the route literals in
   `qbit_compat.rs` so no compat route can land untracked.
+- `routed_responses_match_declared_shapes` — every routed entry declares a
+  `response` (`content`: `json`, `text` or `bittorrent`; JSON entries add a
+  `schema` with the documented upstream field set and types). The test builds
+  a session holding a real two-file torrent (with a category, a tag and a
+  finished torrent-creator task, so collections are non-empty), probes every
+  routed GET, plus every POST that accepts a no-op probe, and validates each
+  body. Upstream fields we do not emit yet are listed per entry in
+  `missing_fields` (dotted paths, `*` for an array element or map value); a
+  listed field that starts appearing fails the test, so the list cannot go
+  stale. The schema syntax is described in the `qbit_parity.rs` module docs.
+- `torrent_lifecycle_through_compat_router` — add (multipart) → stop → start
+  → stop → recheck → setCategory → delete, driven only through the compat
+  router against a real session, asserting what a client observes via
+  `torrents/info` after each step (and validating its shape every poll).
 - `parity_summary` — prints the scoreboard
   (`cargo test -p swarmforge qbit_parity -- --nocapture`).
 
 ### Testing scope (the parity checker is tier 0, not the whole story)
 
-The tests above enforce *surface* parity only — that an endpoint is routed,
-not that its response is correct. Full durable testing is scoped as a ladder
-(tracked as WI-25/WI-26):
+Durable testing is scoped as a ladder; tiers 1 and 2 are in place (WI-25),
+3 and 4 are tracked as WI-26:
 
-1. **Shape conformance** (WI-25, mandatory before the endpoint wave): each
-   `full`/`partial` spec entry gains a response schema; the parity tests probe
-   endpoints with a live in-process torrent and validate JSON field
-   sets/types.
-2. **Behavioral lifecycle** (WI-25): add→stop→start→recheck→delete suites
-   through the compat router against a real session.
+1. **Shape conformance** (done): `routed_responses_match_declared_shapes`.
+2. **Behavioral lifecycle** (done): `torrent_lifecycle_through_compat_router`.
 3. **Client-replay fixtures** (WI-26): recorded Sonarr / qbittorrent-api
    request sequences replayed against the router.
 4. **Differential harness** (WI-26, nightly): identical requests against a
@@ -251,7 +260,10 @@ lifecycle coverage.
 ### Workflow
 
 - **Implementing an endpoint**: add the route, flip the spec entry to
-  `full`/`partial`, note any semantic gaps in `notes`.
+  `full`/`partial`, add its `response` contract (schema from the upstream
+  WebUI API docs; list fields we do not emit in `missing_fields`), note any
+  semantic gaps in `notes`, and extend the lifecycle test if the endpoint
+  changes torrent state.
 - **Declaring non-goals**: set status to `out_of_scope` (kept enforced as
   unrouted).
 - **Tracking upstream**: re-clone qBittorrent and run
