@@ -2,6 +2,8 @@ name: Migration policy
 
 on:
   push:
+    # The queue pushes gh-readonly-queue/main/* refs; its merge_group run covers them.
+    branches-ignore: ['gh-readonly-queue/**']
   pull_request:
   merge_group:
   workflow_dispatch:
@@ -10,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: policy-${{ github.ref }}
+  group: policy-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

@@ -19,7 +19,7 @@ and run it all again.
 
 | Changed paths | Runs |
 |---|---|
-| `.github/`, `ci/`, `Dockerfile`, `.dockerignore`, `rust-toolchain.toml` | everything, as in the queue |
+| `.github/`, `ci/`, `Dockerfile*`, `.dockerignore`, `rust-toolchain.toml` | everything, as in the queue |
 | `crates/` (outside the web UI), `fuzz/`, `tests/`, `benchv2/`, `Cargo.*` | `rust` |
 | `crates/librtbit/webui/` | `webui`, `gui-e2e` |
 | `website/` | `website` |
@@ -31,7 +31,9 @@ leaves a PR or queue entry waiting forever; a skipped job reports success.
 ### Concurrency
 
 `ci`, `policy` and `runner-policy` cancel in progress per ref (`github.ref`),
-so a force-push cancels the superseded run. Each queue entry has its own
+so a force-push cancels the superseded run. `policy` also keys its group on
+the event and ignores pushes to `gh-readonly-queue/**`, so a queue branch push
+cannot cancel the required `merge_group` run. Each queue entry has its own
 `gh-readonly-queue/main/pr-N-<sha>` ref, so entries never cancel each other.
 
 ### Runners
