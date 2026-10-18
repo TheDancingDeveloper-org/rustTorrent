@@ -974,7 +974,7 @@ dependencies = [
 
 [[package]]
 name = "rusttorrent-fuzz"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "libfuzzer-sys",
  "swarmforge-bencode",
@@ -1073,7 +1073,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "swarmforge-bencode"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "anyhow",
  "arrayvec",
@@ -1088,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-buffers"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "bytes",
  "serde",
@@ -1098,14 +1098,14 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-clone-to-owned"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "bytes",
 ]
 
 [[package]]
 name = "swarmforge-core"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1133,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-dht"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
@@ -1164,7 +1164,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-peer-protocol"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "anyhow",
  "bitvec",
@@ -1183,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-sha1-wrapper"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "assert_cfg",
  "crypto-hash",
