@@ -9,11 +9,13 @@ upgrade notes in each release describe what to back up and check.
 
 ## [Unreleased]
 
+## [0.1.0-rc.2] - 2026-10-18
+
 ### Changed
 
 - Repository hygiene: restored the full `LICENSE` text; added `NOTICE`,
   `CONTRIBUTING.md` and `SECURITY.md`; corrected stale `../libs` paths.
-- Every crate and package is at version `0.1.0-rc.1`, including the `librtbit-*`
+- Every crate and package is at version `0.1.0-rc.2`, including the `librtbit-*`
   crates, `rtbit`, the desktop app and `fuzz`/`benchv2`.
 - Release notes moved from the repository root to `docs/releases/`, and
   `documentation/` was merged into `docs/`. The layout of each path is described
@@ -99,7 +101,8 @@ persistent session directory before upgrading.
 - The Docker build and web UI were consolidated so the shipped interface is
   built from the reviewed source tree.
 
-[Unreleased]: https://github.com/TheDancingDeveloper-org/rustTorrent/compare/v0.1.0-rc.1...HEAD
+[Unreleased]: https://github.com/TheDancingDeveloper-org/rustTorrent/compare/v0.1.0-rc.2...HEAD
+[0.1.0-rc.2]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.1.0-rc.2
 [0.1.0-rc.1]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.1.0-rc.1
 [0.1.0-beta.3]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.1.0-beta.3
 [0.1.0-beta.2]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.1.0-beta.2
