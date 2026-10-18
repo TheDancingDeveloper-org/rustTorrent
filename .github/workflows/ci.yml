@@ -23,9 +23,13 @@ permissions:
 
 jobs:
   rust:
-    runs-on: [self-hosted]
+    # Heavy Rust: an on-demand GCP Spot VM (c3d-highcpu-8, 16 GB; spot-github-runners
+    # deploy/tdd-org-gcp). Only those VMs carry `gcp-rust`, so an idle Node B runner
+    # cannot claim the job first.
+    runs-on: [self-hosted, gcp-rust]
     env:
-      CARGO_BUILD_JOBS: 1
+      # 8 vCPU / 16 GB.
+      CARGO_BUILD_JOBS: 4
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
