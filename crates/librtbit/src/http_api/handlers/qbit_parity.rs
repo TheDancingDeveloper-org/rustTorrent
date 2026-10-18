@@ -752,6 +752,16 @@ fn state_of(torrent: &Value) -> &str {
     torrent["state"].as_str().unwrap_or_default()
 }
 
+/// Number of torrents `torrents/info?filter=<filter>` returns.
+async fn filter_count(router: &axum::Router, filter: &str) -> usize {
+    let list = get(router, &format!("/torrents/info?filter={filter}"))
+        .await
+        .json();
+    list.as_array()
+        .map(Vec::len)
+        .unwrap_or_else(|| panic!("{list}"))
+}
+
 /// add -> stop -> start -> recheck -> setCategory -> delete, driven entirely
 /// through the compat router against a real session, asserting what a client
 /// would observe through `torrents/info` after each step.
@@ -818,6 +828,11 @@ async fn torrent_lifecycle_through_compat_router() {
         matches!(state_of(t), "downloading" | "uploading")
     })
     .await;
+    // 2.11 filter vocabulary: a running torrent is `running`, not `stopped`
+    assert_eq!(filter_count(&router, "running").await, 1);
+    assert_eq!(filter_count(&router, "resumed").await, 1);
+    assert_eq!(filter_count(&router, "stopped").await, 0);
+    assert_eq!(filter_count(&router, "paused").await, 0);
 
     // stop
     assert_eq!(
@@ -840,6 +855,10 @@ async fn torrent_lifecycle_through_compat_router() {
     })
     .await;
     assert_eq!(rechecked["amount_left"], 0);
+    assert_eq!(filter_count(&router, "stopped").await, 1);
+    assert_eq!(filter_count(&router, "paused").await, 1);
+    assert_eq!(filter_count(&router, "running").await, 0);
+    assert_eq!(filter_count(&router, "resumed").await, 0);
 
     // setCategory, visible both on the torrent and through the category filter
     let created = post_form(
