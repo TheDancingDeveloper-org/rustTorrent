@@ -20,6 +20,9 @@ upgrade notes in each release describe what to back up and check.
   `qbit_parity_spec.json` declares a response contract that is validated
   against a live torrent, plus an add/stop/start/recheck/setCategory/delete
   lifecycle test through the compat router.
+- WebUI API v2 compat: `transfer/getSpeedLimits` and `transfer/setSpeedLimits`
+  over the native session limiter and alt-speed config; `transfer/info` and
+  `sync/maindata` report real `dht_nodes` from the DHT routing tables.
 
 ## [0.1.0-rc.5] - 2026-10-18
 

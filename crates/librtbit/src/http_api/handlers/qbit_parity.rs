@@ -899,3 +899,107 @@ async fn torrent_lifecycle_through_compat_router() {
     assert_eq!(get(&router, "/torrents/count").await.json(), 0);
     assert!(output.path().join("payload").join("a.bin").exists());
 }
+
+/// Session limits and alternative-speed mode, driven through the compat
+/// router and cross-checked against the native session state the
+/// `/torrents/limits` and `/speed/alt` APIs read, so both views agree.
+#[tokio::test]
+async fn transfer_limits_and_alt_speed_through_compat_router() {
+    let (router, session, _output) = make_router().await;
+    let text = |r: ProbeResponse| r.text().to_owned();
+
+    // normal limits: set via compat, visible via compat and the native limiter
+    assert_eq!(
+        text(
+            post_form(
+                &router,
+                "/transfer/setDownloadLimit",
+                &[("limit", "100000")]
+            )
+            .await
+        ),
+        "Ok."
+    );
+    assert_eq!(
+        text(post_form(&router, "/transfer/setUploadLimit", &[("limit", "50000")]).await),
+        "Ok."
+    );
+    assert_eq!(
+        get(&router, "/transfer/downloadLimit").await.json(),
+        100_000
+    );
+    assert_eq!(get(&router, "/transfer/uploadLimit").await.json(), 50_000);
+    let config = session.ratelimits.get_config();
+    assert_eq!(config.download_bps.map(|v| v.get()), Some(100_000));
+    assert_eq!(config.upload_bps.map(|v| v.get()), Some(50_000));
+    let info = get(&router, "/transfer/info").await.json();
+    assert_eq!(
+        (info["dl_rate_limit"].clone(), info["up_rate_limit"].clone()),
+        (100_000.into(), 50_000.into()),
+        "{info}"
+    );
+
+    // setSpeedLimits requires all four fields
+    let partial = post_form(&router, "/transfer/setSpeedLimits", &[("dl_limit", "1")]).await;
+    assert_eq!(partial.status, StatusCode::BAD_REQUEST);
+    let set = post_form(
+        &router,
+        "/transfer/setSpeedLimits",
+        &[
+            ("dl_limit", "200000"),
+            ("up_limit", "0"),
+            ("alt_dl_limit", "10000"),
+            ("alt_up_limit", "5000"),
+        ],
+    )
+    .await;
+    assert_eq!((set.status, set.text()), (StatusCode::OK, "Ok."));
+    let limits = serde_json::json!({
+        "dl_limit": 200_000, "up_limit": 0, "alt_dl_limit": 10_000, "alt_up_limit": 5_000
+    });
+    assert_eq!(
+        get(&router, "/transfer/getSpeedLimits").await.json(),
+        limits
+    );
+    let alt = session.alt_speed_status().config;
+    assert_eq!(
+        (alt.download_rate, alt.upload_rate),
+        (Some(10_000), Some(5_000))
+    );
+
+    // alternative mode: the live limiter switches to the alt rates, while
+    // getSpeedLimits keeps reporting the configured normal limits
+    assert_eq!(get(&router, "/transfer/speedLimitsMode").await.text(), "0");
+    assert_eq!(
+        text(post_form(&router, "/transfer/toggleSpeedLimitsMode", &[]).await),
+        "Ok."
+    );
+    assert!(session.alt_speed_enabled());
+    assert_eq!(get(&router, "/transfer/speedLimitsMode").await.text(), "1");
+    assert_eq!(get(&router, "/transfer/downloadLimit").await.json(), 10_000);
+    assert_eq!(
+        get(&router, "/transfer/getSpeedLimits").await.json(),
+        limits
+    );
+    let maindata = get(&router, "/sync/maindata").await.json();
+    assert_eq!(maindata["server_state"]["use_alt_speed_limits"], true);
+    assert_eq!(maindata["server_state"]["dl_rate_limit"], 10_000);
+
+    // a normal-limit change while alt mode is on applies once it is turned off
+    post_form(&router, "/transfer/setUploadLimit", &[("limit", "7000")]).await;
+    assert_eq!(get(&router, "/transfer/uploadLimit").await.json(), 5_000);
+    assert_eq!(
+        text(post_form(&router, "/transfer/setSpeedLimitsMode", &[("mode", "0")]).await),
+        "Ok."
+    );
+    assert!(!session.alt_speed_enabled());
+    assert_eq!(get(&router, "/transfer/speedLimitsMode").await.text(), "0");
+    assert_eq!(
+        get(&router, "/transfer/downloadLimit").await.json(),
+        200_000
+    );
+    assert_eq!(get(&router, "/transfer/uploadLimit").await.json(), 7_000);
+
+    // DHT is disabled in the fixture, so dht_nodes reports 0 rather than failing
+    assert_eq!(get(&router, "/transfer/info").await.json()["dht_nodes"], 0);
+}
