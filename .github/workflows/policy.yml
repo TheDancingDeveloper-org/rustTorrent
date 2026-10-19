@@ -17,10 +17,15 @@ concurrency:
 
 jobs:
   policy:
-    # Fork pull requests must not reach self-hosted runners.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted]
     steps:
+      # Required check: a skipped job would count as passing, so fork pull
+      # requests fail here instead, before any fork code is checked out.
+      - name: Refuse fork pull requests
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "::error::Fork pull requests do not run on self-hosted runners. Push the branch to this repository to get policy checks."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
