@@ -98,6 +98,11 @@ pub struct AddTorrentOptions {
     /// to the choice they were added with.
     #[serde(skip)]
     pub part_files: Option<bool>,
+    /// Files to store under a path other than the one in the info dict, as
+    /// `(file_id, relative_path)`. Restored torrents set this to the renames
+    /// made while they were managed.
+    #[serde(skip)]
+    pub file_renames: Vec<(usize, PathBuf)>,
     /// A regex to only download files matching it.
     pub only_files_regex: Option<String>,
     /// An explicit list of file IDs to download.

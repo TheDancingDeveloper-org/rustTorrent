@@ -1007,7 +1007,7 @@ impl Session {
 
             let span = debug_span!(parent: self.rs(), "torrent", id);
             let peer_opts = self.merge_peer_opts(opts.peer_opts);
-            let metadata = Arc::new(metadata);
+            let metadata = Arc::new(apply_file_renames(metadata, &opts.file_renames));
             let minfo = Arc::new(ManagedTorrentShared {
                 id,
                 span,
@@ -1274,6 +1274,52 @@ impl Session {
         handle.start(peer_rx, false)?;
         self.try_update_persistence_metadata(handle).await;
         Ok(())
+    }
+
+    /// Relocate a torrent's files under `new_root`. A live torrent is paused
+    /// for the move (so no writes race it) and resumed afterwards; the new
+    /// location is persisted.
+    pub async fn set_location(
+        self: &Arc<Self>,
+        handle: &ManagedTorrentHandle,
+        new_root: PathBuf,
+    ) -> anyhow::Result<()> {
+        self.with_writes_paused(handle, |h| h.set_location(new_root))
+            .await
+    }
+
+    /// Rename files within a torrent, as `(file_id, new_relative_path)`. Like
+    /// [`Self::set_location`], a live torrent is paused for the move and
+    /// resumed afterwards; the renames are persisted.
+    pub async fn rename_files(
+        self: &Arc<Self>,
+        handle: &ManagedTorrentHandle,
+        renames: &[(usize, PathBuf)],
+    ) -> anyhow::Result<()> {
+        self.with_writes_paused(handle, |h| h.rename_files(renames))
+            .await
+    }
+
+    async fn with_writes_paused(
+        self: &Arc<Self>,
+        handle: &ManagedTorrentHandle,
+        op: impl FnOnce(&ManagedTorrentHandle) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        let was_live = handle.live().is_some();
+        if was_live {
+            handle.pause()?;
+        }
+        let result = op(handle);
+        if was_live {
+            let peer_rx = self.make_peer_rx_managed_torrent(handle, true);
+            if let Err(error) = handle.start(peer_rx, false) {
+                warn!(?error, "error resuming torrent after moving its files");
+            }
+        }
+        if result.is_ok() {
+            self.try_update_persistence_metadata(handle).await;
+        }
+        result
     }
 
     pub async fn force_recheck(
@@ -1719,6 +1765,21 @@ impl Session {
             p.store_categories(&snapshot).await?;
         }
         Ok(())
+    }
+}
+
+/// Apply restored file renames to freshly parsed metadata. Renames that no
+/// longer validate are dropped with a warning rather than failing the add.
+fn apply_file_renames(metadata: TorrentMetadata, renames: &[(usize, PathBuf)]) -> TorrentMetadata {
+    if renames.is_empty() {
+        return metadata;
+    }
+    match crate::torrent_state::validate_renames(&metadata.file_infos, renames) {
+        Ok(()) => metadata.with_renamed_files(renames),
+        Err(error) => {
+            warn!(?error, "ignoring stored file renames");
+            metadata
+        }
     }
 }
 
