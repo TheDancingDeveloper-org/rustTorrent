@@ -242,7 +242,7 @@ spec against the real router (they run in the normal
   `out_of_scope` must 404. Implementing or removing an endpoint without
   flipping its spec status fails CI.
 - `every_compat_route_is_tracked_in_spec` — scans the route literals in
-  `qbit_compat.rs` so no compat route can land untracked.
+  `qbit/mod.rs` so no compat route can land untracked.
 - `routed_responses_match_declared_shapes` — every routed entry declares a
   `response` (`content`: `json`, `text` or `bittorrent`; JSON entries add a
   `schema` with the documented upstream field set and types). The test builds

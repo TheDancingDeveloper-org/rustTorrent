@@ -3,12 +3,12 @@
 //! `qbit_parity_spec.json` is a machine-readable inventory of the upstream
 //! qBittorrent WebUI API v2 surface (extracted from the qBittorrent sources),
 //! annotated with the parity status of each endpoint in our compat layer
-//! (`qbit_compat.rs`). These tests keep the spec and the actual router from
+//! (`qbit/mod.rs`). These tests keep the spec and the actual router from
 //! drifting apart:
 //!
 //! - every endpoint marked `full` or `partial` must be routed;
 //! - every endpoint marked `missing` or `out_of_scope` must return 404;
-//! - every route literal in `qbit_compat.rs` must be tracked in the spec;
+//! - every route literal in `qbit/mod.rs` must be tracked in the spec;
 //! - every routed endpoint declares a `response` (content kind plus, for JSON,
 //!   the documented upstream field set and types), and the router's live
 //!   output — probed against a real in-process torrent — must match it.
@@ -43,7 +43,7 @@ use crate::{
 };
 
 const SPEC_JSON: &str = include_str!("qbit_parity_spec.json");
-const COMPAT_SOURCE: &str = include_str!("qbit_compat.rs");
+const COMPAT_SOURCE: &str = include_str!("qbit/mod.rs");
 
 #[derive(Deserialize)]
 struct Spec {
@@ -119,6 +119,14 @@ fn parse_spec() -> Spec {
 }
 
 pub(super) async fn make_router() -> (axum::Router, Arc<Session>, tempfile::TempDir) {
+    make_router_with(HttpApiOptions {
+        allow_create: true,
+        ..Default::default()
+    })
+    .await
+}
+
+async fn make_router_with(opts: HttpApiOptions) -> (axum::Router, Arc<Session>, tempfile::TempDir) {
     let output = tempfile::TempDir::with_prefix("qbit_parity").unwrap();
     let session = Session::new_with_opts(
         output.path().to_owned(),
@@ -141,18 +149,8 @@ pub(super) async fn make_router() -> (axum::Router, Arc<Session>, tempfile::Temp
         #[cfg(feature = "tracing-subscriber-utils")]
         None,
     );
-    let api_state = Arc::new(HttpApi::new(
-        api,
-        Some(HttpApiOptions {
-            allow_create: true,
-            ..Default::default()
-        }),
-    ));
-    (
-        super::qbit_compat::make_qbit_router(api_state),
-        session,
-        output,
-    )
+    let api_state = Arc::new(HttpApi::new(api, Some(opts)));
+    (super::qbit::make_qbit_router(api_state), session, output)
 }
 
 #[test]
@@ -247,7 +245,57 @@ async fn spec_matches_router() {
     );
 }
 
-/// Every `.route("...")` literal in qbit_compat.rs must correspond to a spec
+/// Every routed endpoint outside `auth/*` must sit behind the SID-cookie
+/// layer. A sub-router nested outside `protected_router` would otherwise ship
+/// unauthenticated without any other test noticing.
+#[tokio::test]
+async fn every_non_auth_route_requires_a_session() {
+    let spec = parse_spec();
+    let (router, _session, _output) = make_router_with(HttpApiOptions {
+        allow_create: true,
+        basic_auth: Some(("admin".into(), "secret".into())),
+        ..Default::default()
+    })
+    .await;
+
+    let mut unprotected = Vec::new();
+    let mut probed = 0;
+    for ep in spec.endpoints.iter().filter(|ep| ep.status.is_routed()) {
+        let request = http::Request::builder()
+            .method(ep.method.as_str())
+            .uri(format!("/{}", ep.endpoint))
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rejected = status == StatusCode::FORBIDDEN && &body[..] == b"Not authenticated";
+        if ep.endpoint.starts_with("auth/") {
+            assert!(
+                !rejected,
+                "{} {} must be reachable without a session",
+                ep.method, ep.endpoint
+            );
+            continue;
+        }
+        probed += 1;
+        if !rejected {
+            unprotected.push(format!("{} {} -> {status}", ep.method, ep.endpoint));
+        }
+    }
+
+    assert!(probed > 0, "no non-auth routes probed");
+    assert!(
+        unprotected.is_empty(),
+        "routes reachable without a SID cookie (nest them inside protected_router):\n{}",
+        unprotected.join("\n")
+    );
+}
+
+/// Every `.route("...")` literal in qbit/mod.rs must correspond to a spec
 /// entry marked as routed, so new compat routes can't land untracked.
 #[test]
 fn every_compat_route_is_tracked_in_spec() {
@@ -273,7 +321,7 @@ fn every_compat_route_is_tracked_in_spec() {
 
     assert!(
         untracked.is_empty(),
-        "routes in qbit_compat.rs with no full/partial entry in qbit_parity_spec.json: {untracked:?}"
+        "routes in qbit/mod.rs with no full/partial entry in qbit_parity_spec.json: {untracked:?}"
     );
 }
 
