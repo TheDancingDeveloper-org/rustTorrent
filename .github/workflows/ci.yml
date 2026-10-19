@@ -22,6 +22,9 @@ concurrency:
 jobs:
   changes:
     name: classify changes
+    # Fork pull requests must not reach self-hosted runners. Every other job
+    # needs this one, so skipping it here skips the whole fork run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted]
     outputs:
       rust: ${{ steps.classify.outputs.rust }}
