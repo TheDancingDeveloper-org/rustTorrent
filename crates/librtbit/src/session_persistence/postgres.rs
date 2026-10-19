@@ -36,6 +36,8 @@ struct TorrentsTableRecord {
     share_max_inactive_secs: Option<i64>,
     uploaded_bytes: i64,
     part_files: Option<bool>,
+    /// JSON object of file id to relative path; NULL when nothing was renamed.
+    file_renames: Option<String>,
 }
 
 /// The five columns for share limits, upload total and `.part` choice, in the
@@ -55,6 +57,15 @@ fn runtime_columns(torrent: &ManagedTorrentHandle) -> anyhow::Result<RuntimeColu
         i64::try_from(uploaded)?,
         part_files,
     ))
+}
+
+fn file_renames_json(torrent: &ManagedTorrentHandle) -> anyhow::Result<Option<String>> {
+    let renames = torrent.renamed_files();
+    if renames.is_empty() {
+        return Ok(None);
+    }
+    let map: std::collections::BTreeMap<usize, PathBuf> = renames.into_iter().collect();
+    Ok(Some(serde_json::to_string(&map)?))
 }
 
 impl TorrentsTableRecord {
@@ -92,6 +103,10 @@ impl TorrentsTableRecord {
                 uploaded_bytes: self.uploaded_bytes.max(0) as u64,
                 part_files: self.part_files,
                 rate_limits: Default::default(),
+                file_renames: self
+                    .file_renames
+                    .and_then(|json| serde_json::from_str(&json).ok())
+                    .unwrap_or_default(),
             },
         ))
     }
@@ -133,6 +148,7 @@ impl PostgresSessionStorage {
 
         exec!("ALTER TABLE torrents ADD COLUMN IF NOT EXISTS have_bitfield BYTEA");
         exec!("ALTER TABLE torrents ADD COLUMN IF NOT EXISTS output_folder_root TEXT");
+        exec!("ALTER TABLE torrents ADD COLUMN IF NOT EXISTS file_renames TEXT");
         exec!(
             "ALTER TABLE torrents ADD COLUMN IF NOT EXISTS queued BOOLEAN NOT NULL DEFAULT FALSE"
         );
@@ -261,6 +277,7 @@ impl SessionPersistenceStore for PostgresSessionStorage {
             .map(|tracker| tracker.to_string())
             .collect::<Vec<_>>();
         let (policy, _, _, _) = runtime_fields(torrent);
+        let (output_folder, output_folder_root) = super::location_fields(torrent);
         let (
             share_max_ratio,
             share_max_seeding_secs,
@@ -269,7 +286,7 @@ impl SessionPersistenceStore for PostgresSessionStorage {
             part_files,
         ) = runtime_columns(torrent)?;
         sqlx::query(
-            "UPDATE torrents SET trackers = $1, only_files = $2, is_paused = $3, queued = $4, held_for_disk = $5, share_paused = $6, share_max_ratio = $7, share_max_seeding_secs = $8, share_max_inactive_secs = $9, uploaded_bytes = $10, part_files = $11 WHERE id = $12",
+            "UPDATE torrents SET trackers = $1, only_files = $2, is_paused = $3, queued = $4, held_for_disk = $5, share_paused = $6, share_max_ratio = $7, share_max_seeding_secs = $8, share_max_inactive_secs = $9, uploaded_bytes = $10, part_files = $11, output_folder = $12, output_folder_root = $13, file_renames = $14 WHERE id = $15",
         )
         .bind(trackers)
         .bind(torrent.only_files().map(|v| {
@@ -286,6 +303,14 @@ impl SessionPersistenceStore for PostgresSessionStorage {
         .bind(share_max_inactive_secs)
         .bind(uploaded_bytes)
         .bind(part_files)
+        .bind(output_folder.to_str().context("output_folder")?.to_owned())
+        .bind(
+            output_folder_root
+                .as_ref()
+                .map(|path| path.to_str().context("output_folder_root"))
+                .transpose()?,
+        )
+        .bind(file_renames_json(torrent)?)
         .bind::<i32>(id.try_into()?)
         .execute(&self.pool)
         .await

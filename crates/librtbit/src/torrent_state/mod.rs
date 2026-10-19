@@ -197,7 +197,7 @@ impl TorrentMetadata {
 /// Validate a batch of file renames against the current file set: each id must
 /// exist, each new path must be relative and free of `.`/`..`/root components,
 /// and the resulting set of paths must stay unique (no collisions).
-fn validate_renames(
+pub(crate) fn validate_renames(
     file_infos: &crate::type_aliases::FileInfos,
     renames: &[(usize, std::path::PathBuf)],
 ) -> anyhow::Result<()> {
@@ -382,6 +382,27 @@ impl ManagedTorrent {
     /// relocation, unlike the add-time `options.output_folder`.
     pub fn output_folder(&self) -> std::path::PathBuf {
         self.shared.output_folder_override.read().clone()
+    }
+
+    /// Files whose path differs from the one in the torrent's info dict, as
+    /// `(file_id, current_relative_path)`. Empty when nothing was renamed or
+    /// the metadata is not resolved yet.
+    pub fn renamed_files(&self) -> Vec<(usize, std::path::PathBuf)> {
+        let metadata = self.metadata.load();
+        let Some(metadata) = metadata.as_ref() else {
+            return Vec::new();
+        };
+        metadata
+            .info
+            .iter_file_details_ext()
+            .zip(metadata.file_infos.iter())
+            .enumerate()
+            .filter_map(|(file_id, (original, current))| {
+                let original = original.details.filename.to_pathbuf();
+                (original != current.relative_filename)
+                    .then(|| (file_id, current.relative_filename.clone()))
+            })
+            .collect()
     }
 
     /// Set (or clear, with `None`) the display-name override for this torrent.

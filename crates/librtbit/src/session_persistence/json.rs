@@ -155,6 +155,7 @@ impl JsonSessionPersistenceStore {
         // before they lock and store in the reverse order, and the older state wins.
         let mut db_content = self.db_content.write().await;
         let (policy, share_limits, uploaded_bytes, part_files) = runtime_fields(torrent);
+        let (output_folder, output_folder_root) = super::location_fields(torrent);
         let st = SerializedTorrent {
             trackers: torrent
                 .shared()
@@ -177,8 +178,9 @@ impl JsonSessionPersistenceStore {
             uploaded_bytes,
             part_files,
             rate_limits: super::TorrentRateLimits::of(torrent),
-            output_folder: torrent.shared().options.output_folder.clone(),
-            output_folder_root: torrent.shared().options.output_folder_root.clone(),
+            output_folder,
+            output_folder_root,
+            file_renames: torrent.renamed_files().into_iter().collect(),
             category: torrent.shared().category.read().clone(),
             tags: torrent.shared().tags.read().clone(),
             added_on: Some(torrent.shared().added_on),
@@ -528,5 +530,120 @@ mod tests {
         assert_eq!(reserialized["tags"], serde_json::json!(["hd", "tv"]));
         let (_, opts) = st.into_add_torrent().unwrap();
         assert_eq!(opts.tags, vec!["hd", "tv"]);
+    }
+
+    #[test]
+    fn serialized_torrent_file_renames_round_trip_and_default_empty() {
+        let legacy = serde_json::json!({
+            "info_hash": "0000000000000000000000000000000000000000",
+            "trackers": [],
+            "output_folder": "/tmp",
+            "only_files": null,
+            "is_paused": false,
+        });
+        let st: SerializedTorrent = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(
+            serde_json::to_value(&st)
+                .unwrap()
+                .get("file_renames")
+                .is_none()
+        );
+        let (_, opts) = st.into_add_torrent().unwrap();
+        assert!(opts.file_renames.is_empty());
+
+        let mut renamed = legacy;
+        renamed["file_renames"] = serde_json::json!({"2": "b/c.bin", "0": "a.bin"});
+        let st: SerializedTorrent = serde_json::from_value(renamed).unwrap();
+        let reserialized = serde_json::to_value(&st).unwrap();
+        assert_eq!(
+            reserialized["file_renames"],
+            serde_json::json!({"0": "a.bin", "2": "b/c.bin"})
+        );
+        let (_, opts) = st.into_add_torrent().unwrap();
+        assert_eq!(
+            opts.file_renames,
+            vec![(0, PathBuf::from("a.bin")), (2, PathBuf::from("b/c.bin"))]
+        );
+    }
+
+    #[tokio::test]
+    async fn json_store_persists_relocation_and_file_renames() {
+        use crate::{AddTorrent, AddTorrentOptions, CreateTorrentOptions, Session, create_torrent};
+
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        std::fs::write(data.join("payload.bin"), vec![0x42; 32 * 1024]).unwrap();
+        let torrent = create_torrent(
+            &data,
+            CreateTorrentOptions {
+                piece_length: Some(16_384),
+                ..Default::default()
+            },
+            &BlockingSpawner::new(1),
+        )
+        .await
+        .unwrap()
+        .as_bytes()
+        .unwrap()
+        .to_vec();
+        let session = Session::new(data.clone()).await.unwrap();
+        let handle = session
+            .add_torrent(
+                AddTorrent::from_bytes(torrent),
+                Some(AddTorrentOptions {
+                    paused: true,
+                    overwrite: true,
+                    output_folder_root: Some(data.to_string_lossy().into_owned()),
+                    ..Default::default()
+                }),
+            )
+            .await
+            .unwrap()
+            .into_handle()
+            .unwrap();
+        handle.wait_until_initialized().await.unwrap();
+
+        let store =
+            JsonSessionPersistenceStore::new(dir.path().join("db"), BlockingSpawner::new(1))
+                .await
+                .unwrap();
+        store.store(handle.id(), &handle).await.unwrap();
+        let (_, opts) = store
+            .get(handle.id())
+            .await
+            .unwrap()
+            .into_add_torrent()
+            .unwrap();
+        assert!(
+            opts.output_folder_root.is_some(),
+            "unmoved torrent keeps its root"
+        );
+
+        let new_root = dir.path().join("moved");
+        let new_rel = PathBuf::from("renamed/payload.bin");
+        session
+            .set_location(&handle, new_root.clone())
+            .await
+            .unwrap();
+        session
+            .rename_files(&handle, &[(0, new_rel.clone())])
+            .await
+            .unwrap();
+        store.update_metadata(handle.id(), &handle).await.unwrap();
+
+        let (_, opts) = store
+            .get(handle.id())
+            .await
+            .unwrap()
+            .into_add_torrent()
+            .unwrap();
+        assert_eq!(
+            opts.output_folder,
+            Some(new_root.to_string_lossy().into_owned())
+        );
+        assert_eq!(opts.output_folder_root, None);
+        assert_eq!(opts.file_renames, vec![(0, new_rel.clone())]);
+        assert!(new_root.join(&new_rel).exists());
     }
 }

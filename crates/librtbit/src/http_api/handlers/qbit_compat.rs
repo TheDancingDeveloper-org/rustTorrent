@@ -2020,7 +2020,11 @@ async fn h_torrents_rename_file(
         Some(id) => id,
         None => return qbit_error(StatusCode::CONFLICT, "oldPath does not exist"),
     };
-    match handle.rename_files(&[(file_id, PathBuf::from(&form.new_path))]) {
+    match api
+        .session()
+        .rename_files(&handle, &[(file_id, PathBuf::from(&form.new_path))])
+        .await
+    {
         Ok(()) => (StatusCode::OK, "Ok.").into_response(),
         Err(error) => rename_conflict(error),
     }
@@ -2058,7 +2062,7 @@ async fn h_torrents_rename_folder(
     if renames.is_empty() {
         return qbit_error(StatusCode::CONFLICT, "no files under oldPath");
     }
-    match handle.rename_files(&renames) {
+    match api.session().rename_files(&handle, &renames).await {
         Ok(()) => (StatusCode::OK, "Ok.").into_response(),
         Err(error) => rename_conflict(error),
     }
@@ -2640,9 +2644,10 @@ async fn h_torrents_set_location(
     let new_root = PathBuf::from(location);
     let mut last_error = None;
     for idx in resolve_hashes(api, &form.hashes) {
-        if let Ok(handle) = api.mgr_handle(idx)
-            && let Err(error) = handle.set_location(new_root.clone())
-        {
+        let Ok(handle) = api.mgr_handle(idx) else {
+            continue;
+        };
+        if let Err(error) = api.session().set_location(&handle, new_root.clone()).await {
             last_error = Some(error);
         }
     }
@@ -3968,6 +3973,163 @@ mod tests {
             new_root.join(&rel).exists(),
             "file should now live under the new root"
         );
+    }
+
+    async fn add_single_file_torrent(
+        session: &Arc<crate::Session>,
+        root: &std::path::Path,
+        paused: bool,
+        file_renames: Vec<(usize, std::path::PathBuf)>,
+    ) -> crate::torrent_state::ManagedTorrentHandle {
+        let torrent = create_torrent(
+            root,
+            CreateTorrentOptions {
+                piece_length: Some(16_384),
+                ..Default::default()
+            },
+            &BlockingSpawner::new(1),
+        )
+        .await
+        .unwrap()
+        .as_bytes()
+        .unwrap()
+        .to_vec();
+        let handle = session
+            .add_torrent(
+                AddTorrent::from_bytes(torrent),
+                Some(AddTorrentOptions {
+                    paused,
+                    overwrite: true,
+                    output_folder: Some(root.to_string_lossy().into_owned()),
+                    file_renames,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .unwrap()
+            .into_handle()
+            .unwrap();
+        handle.wait_until_initialized().await.unwrap();
+        handle
+    }
+
+    #[tokio::test]
+    async fn session_set_location_pauses_live_torrent_and_resumes_it() {
+        let (_state, session, output) = qbit_state().await;
+        std::fs::write(output.path().join("payload.bin"), vec![0x71; 32 * 1024]).unwrap();
+        let handle = add_single_file_torrent(&session, output.path(), false, Vec::new()).await;
+        assert!(handle.live().is_some(), "torrent should be live");
+        let rel = handle
+            .with_metadata(|m| m.file_infos[0].relative_filename.clone())
+            .unwrap();
+
+        // The handle-level move still refuses a live torrent...
+        let new_root = output.path().join("moved");
+        assert!(handle.set_location(new_root.clone()).is_err());
+
+        // ...while the session pauses it for the move and resumes it.
+        session
+            .set_location(&handle, new_root.clone())
+            .await
+            .unwrap();
+        assert!(
+            new_root.join(&rel).exists(),
+            "file should be under new root"
+        );
+        assert!(
+            !output.path().join(&rel).exists(),
+            "old file should be gone"
+        );
+        assert_eq!(handle.output_folder(), new_root);
+        assert!(
+            !handle.is_paused(),
+            "torrent should be resumed after the move"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_rename_files_works_on_live_torrent_and_reports_renames() {
+        let (_state, session, output) = qbit_state().await;
+        std::fs::write(output.path().join("payload.bin"), vec![0x71; 32 * 1024]).unwrap();
+        let handle = add_single_file_torrent(&session, output.path(), false, Vec::new()).await;
+        assert!(handle.renamed_files().is_empty());
+
+        let new_rel = std::path::PathBuf::from("sub/renamed.bin");
+        session
+            .rename_files(&handle, &[(0, new_rel.clone())])
+            .await
+            .unwrap();
+        assert!(output.path().join(&new_rel).exists());
+        assert_eq!(handle.renamed_files(), vec![(0, new_rel)]);
+        assert!(
+            !handle.is_paused(),
+            "torrent should be resumed after the rename"
+        );
+    }
+
+    #[tokio::test]
+    async fn add_torrent_applies_restored_file_renames() {
+        let (_state, session, output) = qbit_state().await;
+        std::fs::write(output.path().join("payload.bin"), vec![0x71; 32 * 1024]).unwrap();
+        let torrent = create_torrent(
+            output.path(),
+            CreateTorrentOptions {
+                piece_length: Some(16_384),
+                ..Default::default()
+            },
+            &BlockingSpawner::new(1),
+        )
+        .await
+        .unwrap()
+        .as_bytes()
+        .unwrap()
+        .to_vec();
+        // Lay the file out the way an earlier rename would have left it.
+        let dest = output.path().join("dest");
+        let rel = std::path::PathBuf::from("restored/payload.bin");
+        std::fs::create_dir_all(dest.join("restored")).unwrap();
+        std::fs::rename(output.path().join("payload.bin"), dest.join(&rel)).unwrap();
+
+        let handle = session
+            .add_torrent(
+                AddTorrent::from_bytes(torrent),
+                Some(AddTorrentOptions {
+                    paused: true,
+                    overwrite: true,
+                    output_folder: Some(dest.to_string_lossy().into_owned()),
+                    file_renames: vec![(0, rel.clone())],
+                    ..Default::default()
+                }),
+            )
+            .await
+            .unwrap()
+            .into_handle()
+            .unwrap();
+        handle.wait_until_initialized().await.unwrap();
+        assert_eq!(
+            handle
+                .with_metadata(|m| m.file_infos[0].relative_filename.clone())
+                .unwrap(),
+            rel
+        );
+        assert_eq!(handle.renamed_files(), vec![(0, rel.clone())]);
+        // The restored file is recognised as complete data at the renamed path.
+        assert!(dest.join(&rel).exists());
+        assert!(!dest.join("payload.bin").exists());
+    }
+
+    #[tokio::test]
+    async fn add_torrent_ignores_invalid_restored_file_renames() {
+        let (_state, session, output) = qbit_state().await;
+        std::fs::write(output.path().join("payload.bin"), vec![0x71; 32 * 1024]).unwrap();
+        let handle = add_single_file_torrent(
+            &session,
+            output.path(),
+            true,
+            vec![(0, std::path::PathBuf::from("../escape.bin"))],
+        )
+        .await;
+        assert!(handle.renamed_files().is_empty());
     }
 
     #[test]

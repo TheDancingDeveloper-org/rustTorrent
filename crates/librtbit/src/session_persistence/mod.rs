@@ -3,7 +3,7 @@ pub mod json;
 pub mod postgres;
 
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::PathBuf,
 };
 
@@ -88,6 +88,10 @@ pub struct SerializedTorrent {
     /// Per-torrent speed limits. Absent in older state, which means unlimited.
     #[serde(default, skip_serializing_if = "TorrentRateLimits::is_unlimited")]
     rate_limits: TorrentRateLimits,
+    /// Files renamed while managed, by file id. Absent in older state, which
+    /// means the paths from the info dict.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    file_renames: BTreeMap<usize, PathBuf>,
 }
 
 /// The per-torrent speed limits kept in session state. `None` is unlimited.
@@ -150,10 +154,11 @@ impl SerializedTorrent {
         self.category = category;
     }
 
-    pub fn into_add_torrent(self) -> anyhow::Result<(AddTorrent<'static>, AddTorrentOptions)> {
+    pub fn into_add_torrent(mut self) -> anyhow::Result<(AddTorrent<'static>, AddTorrentOptions)> {
         let category = self.category.clone();
         let tags = self.tags.iter().cloned().collect();
         let part_files = self.part_files;
+        let file_renames = std::mem::take(&mut self.file_renames).into_iter().collect();
         let trackers = self.trackers.into_iter().collect::<Vec<_>>();
         let add_torrent = if !self.torrent_bytes.is_empty() {
             AddTorrent::TorrentFileBytes(self.torrent_bytes)
@@ -183,6 +188,7 @@ impl SerializedTorrent {
         let opts = AddTorrentOptions {
             paused: self.is_paused,
             part_files,
+            file_renames,
             output_folder,
             output_folder_root,
             only_files: self.only_files,
@@ -228,6 +234,18 @@ impl RestoredState {
         shared
             .force_start
             .store(self.force_start, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Where a torrent's files live now, as `(output_folder, output_folder_root)`.
+/// After a relocation the root no longer applies, so only the folder is kept.
+pub(crate) fn location_fields(torrent: &ManagedTorrentHandle) -> (PathBuf, Option<PathBuf>) {
+    let options = &torrent.shared().options;
+    let current = torrent.output_folder();
+    if current == options.output_folder {
+        (current, options.output_folder_root.clone())
+    } else {
+        (current, None)
     }
 }
 
