@@ -1060,6 +1060,8 @@ impl Session {
                 queued: std::sync::atomic::AtomicBool::new(false),
                 queue_position: std::sync::atomic::AtomicI64::new(id as i64),
                 force_start: std::sync::atomic::AtomicBool::new(false),
+                sequential_download: std::sync::atomic::AtomicBool::new(false),
+                first_last_piece_priority: std::sync::atomic::AtomicBool::new(false),
                 held_for_disk: std::sync::atomic::AtomicBool::new(false),
                 share_paused: std::sync::atomic::AtomicBool::new(false),
                 uploaded_bytes_base: std::sync::atomic::AtomicU64::new(0),

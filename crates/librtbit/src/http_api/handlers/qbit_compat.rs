@@ -1191,7 +1191,7 @@ fn build_torrent_info(
         downloaded: stats.progress_bytes,
         downloaded_session: 0,
         eta,
-        f_l_piece_prio: false,
+        f_l_piece_prio: handle.is_first_last_piece_priority(),
         force_start: forced,
         hash: info_hash.clone(),
         inactive_seeding_time_limit,
@@ -1223,7 +1223,7 @@ fn build_torrent_info(
         } else {
             -1
         },
-        seq_dl: false,
+        seq_dl: handle.is_sequential_download(),
         size: stats.total_bytes,
         state: qbit_state.to_string(),
         super_seeding: false,
@@ -2043,6 +2043,40 @@ async fn h_torrents_set_force_start(
         };
         if let Err(error) = api.session().set_force_start(&handle, enabled).await {
             warn!(%error, "qbit compat: error setting force start");
+        }
+    }
+    "Ok."
+}
+
+/// `torrents/toggleSequentialDownload` — flips sequential piece order on each
+/// torrent. The picker reads the flag on its next pick, so it applies live.
+async fn h_torrents_toggle_sequential_download(
+    State(state): State<Arc<QbitState>>,
+    body: Bytes,
+) -> &'static str {
+    let form: HashesForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
+    let api = &state.api_state.api;
+    for idx in resolve_hashes(api, &form.hashes) {
+        if let Ok(handle) = api.mgr_handle(idx) {
+            handle.set_sequential_download(!handle.is_sequential_download());
+            api.session().try_update_persistence_metadata(&handle).await;
+        }
+    }
+    "Ok."
+}
+
+/// `torrents/toggleFirstLastPiecePrio` — flips the first/last-piece boost on
+/// each torrent.
+async fn h_torrents_toggle_first_last_piece_prio(
+    State(state): State<Arc<QbitState>>,
+    body: Bytes,
+) -> &'static str {
+    let form: HashesForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
+    let api = &state.api_state.api;
+    for idx in resolve_hashes(api, &form.hashes) {
+        if let Ok(handle) = api.mgr_handle(idx) {
+            handle.set_first_last_piece_priority(!handle.is_first_last_piece_priority());
+            api.session().try_update_persistence_metadata(&handle).await;
         }
     }
     "Ok."
@@ -3556,6 +3590,14 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
         .route("/stop", post(h_torrents_stop))
         .route("/start", post(h_torrents_start))
         .route("/setForceStart", post(h_torrents_set_force_start))
+        .route(
+            "/toggleSequentialDownload",
+            post(h_torrents_toggle_sequential_download),
+        )
+        .route(
+            "/toggleFirstLastPiecePrio",
+            post(h_torrents_toggle_first_last_piece_prio),
+        )
         .route("/topPrio", post(h_torrents_top_prio))
         .route("/bottomPrio", post(h_torrents_bottom_prio))
         .route("/increasePrio", post(h_torrents_increase_prio))
@@ -4131,6 +4173,8 @@ mod tests {
             "increasePrio",
             "decreasePrio",
             "setForceStart",
+            "toggleSequentialDownload",
+            "toggleFirstLastPiecePrio",
         ] {
             let request = http::Request::builder()
                 .method("POST")
@@ -4187,6 +4231,72 @@ mod tests {
         ));
         handle.wait_until_initialized().await.unwrap();
         assert!(matches!(handle.stats().state, TorrentStatsState::Paused));
+    }
+
+    #[tokio::test]
+    async fn piece_order_toggles_flip_per_torrent_flags() {
+        let (state, session, output) = qbit_state().await;
+        std::fs::write(output.path().join("payload.bin"), vec![0x52; 32 * 1024]).unwrap();
+        let torrent = create_torrent(
+            output.path(),
+            CreateTorrentOptions {
+                piece_length: Some(16_384),
+                ..Default::default()
+            },
+            &BlockingSpawner::new(1),
+        )
+        .await
+        .unwrap()
+        .as_bytes()
+        .unwrap()
+        .to_vec();
+        let handle = session
+            .add_torrent(
+                AddTorrent::from_bytes(torrent),
+                Some(AddTorrentOptions {
+                    paused: true,
+                    overwrite: true,
+                    output_folder: Some(output.path().to_string_lossy().into_owned()),
+                    ..Default::default()
+                }),
+            )
+            .await
+            .unwrap()
+            .into_handle()
+            .unwrap();
+        handle.wait_until_initialized().await.unwrap();
+        assert!(!handle.is_sequential_download());
+        assert!(!handle.is_first_last_piece_priority());
+
+        let body = || Bytes::from(format!("hashes={}", handle.info_hash().as_string()));
+        let toggle_seq = || {
+            super::h_torrents_toggle_sequential_download(
+                axum::extract::State(state.clone()),
+                body(),
+            )
+        };
+        let toggle_fl = || {
+            super::h_torrents_toggle_first_last_piece_prio(
+                axum::extract::State(state.clone()),
+                body(),
+            )
+        };
+
+        assert_eq!(toggle_seq().await, "Ok.");
+        assert!(handle.is_sequential_download());
+        assert!(!handle.is_first_last_piece_priority());
+
+        assert_eq!(toggle_fl().await, "Ok.");
+        assert!(handle.is_first_last_piece_priority());
+
+        let info = super::build_torrent_info(&handle, &handle.stats(), 0);
+        assert!(info.seq_dl);
+        assert!(info.f_l_piece_prio);
+
+        assert_eq!(toggle_seq().await, "Ok.");
+        assert_eq!(toggle_fl().await, "Ok.");
+        assert!(!handle.is_sequential_download());
+        assert!(!handle.is_first_last_piece_priority());
     }
 
     #[tokio::test]

@@ -30,6 +30,7 @@ use tracing::{debug, debug_span, error, trace, warn};
 use crate::{
     Error,
     chunk_tracker::ChunkMarkingResult,
+    chunk_tracker::PieceOrder,
     peer_connection::{PeerConnectionHandler, WriterRequest},
     piece_tracker::{AcquireRequest, AcquireResult},
     stream_connect::ConnectionKind,
@@ -523,6 +524,18 @@ impl PeerHandler {
                     priority_pieces: self.state.streams.iter_next_pieces(&self.state.lengths),
                     file_priorities,
                     file_infos: &self.state.metadata.file_infos,
+                    order: PieceOrder {
+                        sequential: self
+                            .state
+                            .shared
+                            .sequential_download
+                            .load(Ordering::Relaxed),
+                        first_last_piece_priority: self
+                            .state
+                            .shared
+                            .first_last_piece_priority
+                            .load(Ordering::Relaxed),
+                    },
                     peer_has_piece: |p| bf.get(p.get() as usize).map(|v| *v) == Some(true),
                     can_steal: |p| {
                         self.state.per_piece_locks[p.get_usize()]

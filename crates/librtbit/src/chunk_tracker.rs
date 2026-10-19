@@ -12,6 +12,15 @@ use crate::{
     type_aliases::{BF, BS, FileInfos, FilePriorities},
 };
 
+/// How the piece picker orders queued pieces within the file priority order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PieceOrder {
+    /// Pieces of each file in ascending order, instead of first, last, then middle.
+    pub sequential: bool,
+    /// First and last piece of every file before any other queued piece.
+    pub first_last_piece_priority: bool,
+}
+
 pub struct ChunkTracker {
     // This forms the basis of a "queue" to pull from.
     // It's set to 1 if we need a piece, but the moment we start requesting a peer,
@@ -237,12 +246,21 @@ impl ChunkTracker {
         &'a self,
         file_priorities: &'a FilePriorities,
         file_infos: &'a FileInfos,
+        order: PieceOrder,
     ) -> impl Iterator<Item = ValidPieceIndex> + 'a {
-        file_priorities
+        let files = file_priorities
             .iter()
             .filter_map(|p| Some((*p, file_infos.get(*p)?)))
-            .filter(|(id, f)| self.per_file_bytes[*id] != f.len)
-            .flat_map(|(_id, f)| f.iter_piece_priorities())
+            .filter(|(id, f)| self.per_file_bytes[*id] != f.len);
+        // A boosted piece is yielded again later; the caller reserves the
+        // first one that is still queued, so the repeat is harmless.
+        let boosted = files
+            .clone()
+            .filter(move |_| order.first_last_piece_priority)
+            .flat_map(|(_id, f)| f.iter_first_last_pieces());
+        let rest = files.flat_map(move |(_id, f)| f.iter_piece_order(order.sequential));
+        boosted
+            .chain(rest)
             .filter(|id| self.queue_pieces[*id])
             .filter_map(|id| id.try_into().ok())
             .filter_map(|id| self.lengths.validate_piece_index(id))
