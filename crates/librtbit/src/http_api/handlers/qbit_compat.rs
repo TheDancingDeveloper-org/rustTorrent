@@ -3328,6 +3328,84 @@ async fn h_clientdata_store(State(state): State<Arc<QbitState>>, body: Bytes) ->
 }
 
 // ---------------------------------------------------------------------------
+// Log + peer bans
+// ---------------------------------------------------------------------------
+
+fn log_filter_default() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+struct LogMainQuery {
+    #[serde(default = "log_filter_default")]
+    normal: bool,
+    #[serde(default = "log_filter_default")]
+    info: bool,
+    #[serde(default = "log_filter_default")]
+    warning: bool,
+    #[serde(default = "log_filter_default")]
+    critical: bool,
+    #[serde(default = "default_last_known_id")]
+    last_known_id: i64,
+}
+
+#[derive(Deserialize)]
+struct LogPeersQuery {
+    #[serde(default = "default_last_known_id")]
+    last_known_id: i64,
+}
+
+fn default_last_known_id() -> i64 {
+    -1
+}
+
+/// `-1` (or any negative id) means "everything retained".
+fn after_id(last_known_id: i64) -> Option<u64> {
+    u64::try_from(last_known_id).ok()
+}
+
+async fn h_log_main(Query(q): Query<LogMainQuery>) -> Response {
+    use crate::log_ring::LogSeverity;
+    let entries = crate::log_ring::global().main_since(after_id(q.last_known_id), |s| match s {
+        LogSeverity::Normal => q.normal,
+        LogSeverity::Info => q.info,
+        LogSeverity::Warning => q.warning,
+        LogSeverity::Critical => q.critical,
+    });
+    axum::Json(entries).into_response()
+}
+
+async fn h_log_peers(Query(q): Query<LogPeersQuery>) -> Response {
+    axum::Json(crate::log_ring::global().peers_since(after_id(q.last_known_id))).into_response()
+}
+
+#[derive(Deserialize, Default)]
+struct BanPeersForm {
+    /// Pipe-separated `host:port` peers; the port is ignored.
+    #[serde(default)]
+    peers: String,
+}
+
+/// Parse one `transfer/banPeers` entry: `ip:port`, `[v6]:port` or a bare IP.
+fn parse_ban_peer(raw: &str) -> Option<std::net::IpAddr> {
+    let raw = raw.trim();
+    raw.parse::<std::net::SocketAddr>()
+        .map(|a| a.ip())
+        .or_else(|_| raw.parse::<std::net::IpAddr>())
+        .ok()
+}
+
+async fn h_transfer_ban_peers(State(state): State<Arc<QbitState>>, body: Bytes) -> Response {
+    let form: BanPeersForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
+    let ips: Vec<_> = form.peers.split('|').filter_map(parse_ban_peer).collect();
+    if ips.is_empty() {
+        return qbit_error(StatusCode::BAD_REQUEST, "peers is required");
+    }
+    state.api_state.api.session().ban_peers(ips);
+    "".into_response()
+}
+
+// ---------------------------------------------------------------------------
 // Router construction
 // ---------------------------------------------------------------------------
 
@@ -3446,7 +3524,12 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
             post(h_transfer_set_speed_limits_mode),
         )
         .route("/pauseSession", post(h_transfer_pause_session))
-        .route("/resumeSession", post(h_transfer_resume_session));
+        .route("/resumeSession", post(h_transfer_resume_session))
+        .route("/banPeers", post(h_transfer_ban_peers));
+
+    let log_router = Router::new()
+        .route("/main", get(h_log_main))
+        .route("/peers", get(h_log_peers));
 
     // Sync (main polling endpoint). Must stay nested inside protected_router so
     // it runs behind the SID-cookie auth layer.
@@ -3470,6 +3553,7 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
         .nest("/app", app_router)
         .nest("/torrents", torrents_router)
         .nest("/transfer", transfer_router)
+        .nest("/log", log_router)
         .nest("/sync", sync_router)
         .nest("/torrentcreator", torrentcreator_router)
         .nest("/clientdata", clientdata_router)

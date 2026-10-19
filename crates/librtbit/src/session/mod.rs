@@ -29,7 +29,7 @@ use types::torrent_from_bytes;
 use std::{
     borrow::Cow,
     collections::HashSet,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     num::NonZeroU16,
     path::{Component, Path, PathBuf},
     sync::{Arc, atomic::AtomicUsize},
@@ -148,6 +148,8 @@ pub struct Session {
 
     pub blocklist: IpRanges,
     pub allowlist: Option<IpRanges>,
+    /// IPs banned at runtime (WebUI `transfer/banPeers`); not persisted.
+    banned_peers: RwLock<HashSet<IpAddr>>,
 
     // Monitoring / tracing / logging
     pub(crate) stats: Arc<SessionStats>,
@@ -516,6 +518,7 @@ impl Session {
                 _disable_upload: opts.disable_upload,
                 blocklist,
                 allowlist,
+                banned_peers: Default::default(),
                 lsd,
                 fastresume_validation_denom: opts.fastresume_validation_denom,
                 category_manager,

@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{Context, bail};
 use futures::{StreamExt, TryFutureExt, stream::FuturesUnordered};
@@ -22,6 +26,31 @@ use super::Session;
 use super::types::CheckedIncomingConnection;
 
 impl Session {
+    /// Ban peers by IP for the rest of this session's life. New connections
+    /// to or from a banned IP are refused. Returns how many were newly added.
+    pub fn ban_peers(&self, ips: impl IntoIterator<Item = IpAddr>) -> usize {
+        let mut banned = self.banned_peers.write();
+        let mut added = 0;
+        for ip in ips {
+            let ip = ip.to_canonical();
+            if banned.insert(ip) {
+                added += 1;
+                crate::log_ring::global().push_peer(ip, true, "manually banned");
+            }
+        }
+        added
+    }
+
+    pub fn is_peer_banned(&self, ip: IpAddr) -> bool {
+        self.banned_peers.read().contains(&ip.to_canonical())
+    }
+
+    pub fn banned_peers(&self) -> Vec<IpAddr> {
+        let mut ips: Vec<IpAddr> = self.banned_peers.read().iter().copied().collect();
+        ips.sort();
+        ips
+    }
+
     pub(super) async fn check_incoming_connection(
         self: Arc<Self>,
         addr: SocketAddr,
@@ -48,6 +77,14 @@ impl Session {
                 .blocked_incoming
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             bail!("Incoming ip {incoming_ip} is not in allowlist");
+        }
+        if self.is_peer_banned(incoming_ip) {
+            self.stats
+                .counters
+                .blocked_incoming
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            crate::log_ring::global().push_peer(incoming_ip, true, "banned peer (incoming)");
+            bail!("Incoming ip {incoming_ip} is banned");
         }
 
         let mut read_buf = ReadBuf::new();

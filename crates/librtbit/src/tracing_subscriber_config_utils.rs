@@ -51,6 +51,48 @@ impl std::io::Write for Writer {
     }
 }
 
+/// Feeds the in-memory [`crate::log_ring`] so recent history can be served
+/// over the HTTP API.
+struct RingLayer;
+
+#[derive(Default)]
+struct RingVisitor {
+    message: String,
+    fields: String,
+}
+
+impl tracing::field::Visit for RingVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        use std::fmt::Write;
+        if field.name() == "message" {
+            let _ = write!(self.message, "{value:?}");
+        } else {
+            let _ = write!(self.fields, " {}={value:?}", field.name());
+        }
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "message" {
+            self.message.push_str(value);
+        } else {
+            self.record_debug(field, &value);
+        }
+    }
+}
+
+impl<S: tracing::Subscriber> Layer<S> for RingLayer {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut visitor = RingVisitor::default();
+        event.record(&mut visitor);
+        visitor.message.push_str(&visitor.fields);
+        crate::log_ring::global().push((*event.metadata().level()).into(), visitor.message);
+    }
+}
+
 /// Output format for the console and log-file layers. The HTTP API log broadcast is always JSON.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum LogFormat {
@@ -176,6 +218,8 @@ pub fn init_logging(opts: InitLoggingOptions) -> anyhow::Result<InitLoggingResul
         .with(file_layer)
         // Console logging layer.
         .with(fmt_layer(opts.log_format, std::io::stdout, true).with_filter(stderr_filter))
+        // Retained log history for the HTTP API.
+        .with(RingLayer.with_filter(EnvFilter::builder().parse("info").unwrap()))
         // HTTP API log broadcast layer.
         .with(
             fmt::layer()
