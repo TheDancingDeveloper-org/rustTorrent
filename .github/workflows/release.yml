@@ -286,6 +286,9 @@ jobs:
     runs-on: [self-hosted]
     permissions:
       contents: write
+    outputs:
+      tag: ${{ steps.artifacts.outputs.tag }}
+      prerelease: ${{ steps.artifacts.outputs.prerelease }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -360,3 +363,36 @@ jobs:
             gh release create "$tag" --verify-tag --title "rustTorrent $tag" "${notes_args[@]}" "${prerelease_args[@]}"
           fi
           gh release upload "$tag" release-artifacts/* --clobber
+
+  # Submits each channel rendered by `channels` once the GitHub release (and so
+  # every download URL the renders point at) exists. Stable releases only. A
+  # channel whose secret is unset is skipped with a notice; see
+  # packaging/scripts/submit-channel.sh for the secrets each one needs.
+  submit:
+    needs: publish
+    if: needs.publish.outputs.prerelease == 'false'
+    runs-on: [self-hosted]
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [aur, homebrew, winget, flatpak]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.publish.outputs.tag }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: channel-${{ matrix.channel }}
+          path: rendered/
+      - name: Submit ${{ matrix.channel }}
+        env:
+          AUR_SSH_KEY: ${{ matrix.channel == 'aur' && secrets.AUR_SSH_KEY || '' }}
+          AUR_KNOWN_HOSTS: ${{ matrix.channel == 'aur' && secrets.AUR_KNOWN_HOSTS || '' }}
+          HOMEBREW_TAP_TOKEN: ${{ matrix.channel == 'homebrew' && secrets.HOMEBREW_TAP_TOKEN || '' }}
+          HOMEBREW_TAP: ${{ vars.HOMEBREW_TAP }}
+          WINGET_TOKEN: ${{ matrix.channel == 'winget' && secrets.WINGET_TOKEN || '' }}
+          FLATHUB_TOKEN: ${{ matrix.channel == 'flatpak' && secrets.FLATHUB_TOKEN || '' }}
+        shell: bash
+        run: packaging/scripts/submit-channel.sh "${{ matrix.channel }}" "${{ needs.publish.outputs.tag }}" rendered
