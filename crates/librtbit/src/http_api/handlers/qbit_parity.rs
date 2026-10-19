@@ -118,7 +118,7 @@ fn parse_spec() -> Spec {
     serde_json::from_str(SPEC_JSON).expect("qbit_parity_spec.json must be valid JSON")
 }
 
-async fn make_router() -> (axum::Router, Arc<Session>, tempfile::TempDir) {
+pub(super) async fn make_router() -> (axum::Router, Arc<Session>, tempfile::TempDir) {
     let output = tempfile::TempDir::with_prefix("qbit_parity").unwrap();
     let session = Session::new_with_opts(
         output.path().to_owned(),
@@ -447,10 +447,10 @@ fn check_response(response: &ResponseSpec, content_type: Option<&str>, body: &[u
     errors
 }
 
-struct ProbeResponse {
-    status: StatusCode,
-    content_type: Option<String>,
-    body: bytes::Bytes,
+pub(super) struct ProbeResponse {
+    pub(super) status: StatusCode,
+    pub(super) content_type: Option<String>,
+    pub(super) body: bytes::Bytes,
 }
 
 impl ProbeResponse {
@@ -468,7 +468,10 @@ impl ProbeResponse {
     }
 }
 
-async fn send(router: &axum::Router, request: http::Request<axum::body::Body>) -> ProbeResponse {
+pub(super) async fn send(
+    router: &axum::Router,
+    request: http::Request<axum::body::Body>,
+) -> ProbeResponse {
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let content_type = response
@@ -698,7 +701,11 @@ fn shape_validator_reports_drift() {
 // Behavioural lifecycle over the compat router
 // ---------------------------------------------------------------------------
 
-fn multipart_add_body(boundary: &str, torrent: &[u8], fields: &[(&str, &str)]) -> Vec<u8> {
+pub(super) fn multipart_add_body(
+    boundary: &str,
+    torrent: &[u8],
+    fields: &[(&str, &str)],
+) -> Vec<u8> {
     let mut body = Vec::new();
     for (name, value) in fields {
         body.extend_from_slice(

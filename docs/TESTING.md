@@ -50,3 +50,48 @@ pause actions, configuration, and the responsive mobile card layout. Use
 Woodpecker runs all three layers on pushes, pull requests, tags, and manual
 builds. Failed GUI runs retain a screenshot and Playwright trace in the job
 workspace for diagnosis.
+
+## WebUI API v2 compatibility: client replay and differential testing
+
+Beyond the shape checks in `qbit_parity.rs`, two layers test the compat API the
+way real clients use it. Both read the same fixtures in
+`crates/librtbit/src/http_api/handlers/qbit_replay/`: recorded request
+sequences from Sonarr's download-client proxy and the Python
+`qbittorrent-api` library, each step with the client-visible outcome it
+expects. `qbit_replay.rs` documents the fixture format.
+
+**Client replay (per PR).** `qbit_replay.rs` replays every fixture in-process
+against the compat router and asserts each step's expectations:
+
+```sh
+cargo test -p swarmforge --lib --features http-api qbit_replay
+```
+
+A divergence from upstream that is not fixed yet is recorded on the step as
+`known_gap` (`{status, note}`). The replay asserts the current behaviour, so the
+test fails when the gap is fixed until the entry is removed.
+
+**Differential harness (nightly).** `scripts/qbit-diff/run.sh` starts a real
+qBittorrent container (auth bypassed, DHT/LSD/PeX/queueing off) next to a
+rustTorrent image, replays the fixtures against both in lockstep, and writes a
+Markdown report. Status codes must match. Every JSON field the reference returns
+must exist with the same type unless the parity spec lists it in that
+endpoint's `missing_fields`. Fields named in a step's `diff.values` must be
+equal. This is the only test that shows parity against upstream rather than
+asserting it.
+
+```sh
+RTBIT_IMAGE=ghcr.io/thedancingdeveloper-org/rusttorrent:staging \
+  scripts/qbit-diff/run.sh qbit-diff-report.md --report-only
+```
+
+**Sonarr end to end (nightly).** `tests/sonarr-e2e/run.sh` brings up Sonarr
+and rustTorrent. Through Sonarr's API it configures rustTorrent as a
+qBittorrent download client, runs Sonarr's own connection test, saves the
+client, and checks Sonarr's health reports no download-client problem.
+
+Both container checks run in `.github/workflows/compat-nightly.yml` (nightly
+and on dispatch, against `:staging` by default). The diff job reports without
+failing until the known gaps are closed. Dispatch it with `strict_diff` to gate
+on a clean diff. Each driver runs in a container on the compose network, so it
+also works where the docker daemon does not share the caller's network.

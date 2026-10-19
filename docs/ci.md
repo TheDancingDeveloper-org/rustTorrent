@@ -13,6 +13,10 @@ and run it all again.
 | `merge_group` (the queue) | **everything** | full |
 | `push` to `main`/`dev` | everything | full |
 
+Container-backed compat checks (the real-qBittorrent differential harness and
+the Sonarr end-to-end smoke) run nightly in `compat-nightly.yml`, not per PR.
+See [TESTING.md](TESTING.md#webui-api-v2-compatibility-client-replay-and-differential-testing).
+
 ### Path scoping on a pull request
 
 `ci.yml`'s `classify changes` job diffs the PR against its merge base:
