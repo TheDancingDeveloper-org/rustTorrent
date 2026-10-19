@@ -2217,10 +2217,14 @@ async fn h_torrents_remove_trackers(
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .collect();
-    if let Err(error) = api.session().remove_trackers(&handle, &urls).await {
-        warn!(%error, "qbit compat: error removing trackers");
+    match api.session().remove_trackers(&handle, &urls).await {
+        Ok(0) if !urls.is_empty() => qbit_error(StatusCode::CONFLICT, "All urls were not found"),
+        Ok(_) => (StatusCode::OK, "Ok.").into_response(),
+        Err(error) => {
+            warn!(%error, "qbit compat: error removing trackers");
+            (StatusCode::OK, "Ok.").into_response()
+        }
     }
-    (StatusCode::OK, "Ok.").into_response()
 }
 
 #[derive(Deserialize, Default)]
@@ -2250,27 +2254,28 @@ async fn h_torrents_edit_tracker(
         Ok(h) => h,
         Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
-    // Validate newUrl *before* removing origUrl so a bad newUrl can't leave the
-    // torrent with neither tracker.
-    let valid_new = url::Url::parse(&form.new_url)
+    let Some(new_url) = url::Url::parse(&form.new_url)
         .ok()
-        .is_some_and(|u| matches!(u.scheme(), "http" | "https" | "udp"));
-    if !valid_new {
+        .filter(|u| matches!(u.scheme(), "http" | "https" | "udp"))
+    else {
         return qbit_error(StatusCode::BAD_REQUEST, "invalid newUrl");
-    }
-    let removed = api
-        .session()
-        .remove_trackers(&handle, std::slice::from_ref(&form.orig_url))
-        .await
-        .unwrap_or(0);
-    if removed == 0 {
-        return qbit_error(StatusCode::CONFLICT, "origUrl not found");
+    };
+    {
+        let configured = handle.shared().trackers.read();
+        let orig_known = url::Url::parse(&form.orig_url).is_ok_and(|u| configured.contains(&u));
+        if !orig_known {
+            return qbit_error(StatusCode::CONFLICT, "origUrl not found");
+        }
+        if configured.contains(&new_url) {
+            return qbit_error(StatusCode::CONFLICT, "newUrl already exists");
+        }
     }
     match api
-        .api_torrent_action_add_trackers(idx, vec![form.new_url])
+        .session()
+        .edit_tracker(&handle, &form.orig_url, &form.new_url)
         .await
     {
-        Ok(_) => (StatusCode::OK, "Ok.").into_response(),
+        Ok(()) => (StatusCode::OK, "Ok.").into_response(),
         Err(error) => {
             warn!(%error, "qbit compat: error editing tracker");
             qbit_error(StatusCode::CONFLICT, "Failed")

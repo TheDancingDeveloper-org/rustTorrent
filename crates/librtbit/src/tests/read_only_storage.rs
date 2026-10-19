@@ -466,3 +466,74 @@ async fn adding_tracker_to_live_torrent_starts_announcing() -> anyhow::Result<()
     tracker.shutdown().await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reannounce_and_removal_drive_live_tracker_loop() -> anyhow::Result<()> {
+    let tracker = MockUdpTracker::start().await;
+    let payload_dir = TempDir::with_prefix("rtbit_tracker_remove_payload")?;
+    std::fs::write(
+        payload_dir.path().join("payload.bin"),
+        vec![0xae; 32 * 1024],
+    )?;
+    let torrent = create_single_file_torrent(payload_dir.path()).await?;
+    let session_dir = TempDir::with_prefix("rtbit_tracker_remove_session")?;
+    let session = Session::new_with_opts(
+        session_dir.path().to_owned(),
+        SessionOptions {
+            disable_dht: true,
+            disable_local_service_discovery: true,
+            ..Default::default()
+        },
+    )
+    .await?;
+    let handle = session
+        .add_torrent(
+            AddTorrent::from_bytes(torrent),
+            Some(AddTorrentOptions {
+                overwrite: true,
+                output_folder: Some(payload_dir.path().to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+        )
+        .await?
+        .into_handle()
+        .context("expected a torrent handle")?;
+    timeout(Duration::from_secs(10), handle.wait_until_initialized()).await??;
+
+    session.add_trackers(&handle, vec![tracker.url()]).await?;
+    wait_until(
+        || {
+            anyhow::ensure!(tracker.stats().announces > 0, "no first announce");
+            Ok(())
+        },
+        Duration::from_secs(5),
+    )
+    .await?;
+
+    // The mock asks for a 5s interval; a forced reannounce must not wait it out.
+    let before = tracker.stats().announces;
+    assert!(handle.reannounce());
+    wait_until(
+        || {
+            anyhow::ensure!(tracker.stats().announces > before, "no reannounce");
+            Ok(())
+        },
+        Duration::from_secs(2),
+    )
+    .await?;
+
+    let removed = session.remove_trackers(&handle, &[tracker.url()]).await?;
+    assert_eq!(removed, 1);
+    assert!(handle.shared().trackers.read().is_empty());
+    assert!(handle.shared().tracker_status.snapshot().is_empty());
+
+    // Past one full interval (and a reannounce), the removed URL stays quiet.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let after_remove = tracker.stats().announces;
+    handle.reannounce();
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert_eq!(tracker.stats().announces, after_remove);
+
+    tracker.shutdown().await;
+    Ok(())
+}

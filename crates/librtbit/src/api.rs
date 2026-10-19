@@ -369,6 +369,46 @@ impl Api {
         Ok(Default::default())
     }
 
+    pub async fn api_torrent_action_remove_trackers(
+        &self,
+        idx: TorrentIdOrHash,
+        trackers: Vec<String>,
+    ) -> Result<RemoveTrackersResponse> {
+        let handle = self.mgr_handle(idx)?;
+        let removed = self
+            .session
+            .remove_trackers(&handle, &trackers)
+            .await
+            .with_status(StatusCode::BAD_REQUEST)?;
+        Ok(RemoveTrackersResponse { removed })
+    }
+
+    pub async fn api_torrent_action_edit_tracker(
+        &self,
+        idx: TorrentIdOrHash,
+        orig_url: String,
+        new_url: String,
+    ) -> Result<EmptyJsonResponse> {
+        let handle = self.mgr_handle(idx)?;
+        self.session
+            .edit_tracker(&handle, &orig_url, &new_url)
+            .await
+            .with_status(StatusCode::BAD_REQUEST)?;
+        Ok(Default::default())
+    }
+
+    /// Ask every tracker to be announced to now. Returns whether the torrent
+    /// was live (a paused torrent has no announce loops to wake).
+    pub fn api_torrent_action_reannounce(
+        &self,
+        idx: TorrentIdOrHash,
+    ) -> Result<ReannounceResponse> {
+        let handle = self.mgr_handle(idx)?;
+        Ok(ReannounceResponse {
+            live: handle.reannounce(),
+        })
+    }
+
     pub async fn api_torrent_action_forget(
         &self,
         idx: TorrentIdOrHash,
@@ -809,6 +849,20 @@ pub struct TorrentListResponse {
 pub struct TrackerStatusResponse {
     #[cfg_attr(feature = "swagger", schema(value_type = Vec<Object>))]
     pub trackers: Vec<tracker_comms::TrackerStatus>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(feature = "swagger", derive(utoipa::ToSchema))]
+pub struct RemoveTrackersResponse {
+    /// How many of the requested URLs were configured and removed.
+    pub removed: usize,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(feature = "swagger", derive(utoipa::ToSchema))]
+pub struct ReannounceResponse {
+    /// False when the torrent is paused and there was nothing to announce.
+    pub live: bool,
 }
 
 #[derive(Serialize, Deserialize)]

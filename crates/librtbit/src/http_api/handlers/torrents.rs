@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use super::ApiState;
 #[cfg(feature = "swagger")]
 use crate::api::{
-    ApiAddTorrentResponse, EmptyJsonResponse, TorrentDetailsResponse, TorrentListResponse,
+    ApiAddTorrentResponse, EmptyJsonResponse, ReannounceResponse, RemoveTrackersResponse,
+    TorrentDetailsResponse, TorrentListResponse,
 };
 use crate::{
     AddTorrent, ApiError, CreateTorrentOptions, SUPPORTED_SCHEMES,
@@ -348,6 +349,76 @@ pub async fn h_torrent_action_add_trackers(
         .api_torrent_action_add_trackers(idx, req.trackers)
         .await
         .map(axum::Json)
+}
+
+#[derive(Deserialize)]
+#[cfg_attr(feature = "swagger", derive(utoipa::ToSchema))]
+pub struct RemoveTrackersRequest {
+    trackers: Vec<String>,
+}
+
+#[cfg_attr(feature = "swagger", utoipa::path(
+    post,
+    path = "/torrents/{id}/trackers/remove",
+    params(("id" = String, Path, description = "Torrent ID or info hash")),
+    request_body(content = RemoveTrackersRequest, description = "Tracker announce URLs to remove"),
+    responses(
+        (status = 200, description = "Trackers removed; their announce loops stop", body = RemoveTrackersResponse)
+    )
+))]
+pub async fn h_torrent_action_remove_trackers(
+    State(state): State<ApiState>,
+    Path(idx): Path<TorrentIdOrHash>,
+    axum::Json(req): axum::Json<RemoveTrackersRequest>,
+) -> Result<impl IntoResponse> {
+    state
+        .api
+        .api_torrent_action_remove_trackers(idx, req.trackers)
+        .await
+        .map(axum::Json)
+}
+
+#[derive(Deserialize)]
+#[cfg_attr(feature = "swagger", derive(utoipa::ToSchema))]
+pub struct EditTrackerRequest {
+    orig_url: String,
+    new_url: String,
+}
+
+#[cfg_attr(feature = "swagger", utoipa::path(
+    post,
+    path = "/torrents/{id}/trackers/edit",
+    params(("id" = String, Path, description = "Torrent ID or info hash")),
+    request_body(content = EditTrackerRequest, description = "Tracker URL to replace and its replacement"),
+    responses(
+        (status = 200, description = "Tracker replaced", body = EmptyJsonResponse)
+    )
+))]
+pub async fn h_torrent_action_edit_tracker(
+    State(state): State<ApiState>,
+    Path(idx): Path<TorrentIdOrHash>,
+    axum::Json(req): axum::Json<EditTrackerRequest>,
+) -> Result<impl IntoResponse> {
+    state
+        .api
+        .api_torrent_action_edit_tracker(idx, req.orig_url, req.new_url)
+        .await
+        .map(axum::Json)
+}
+
+#[cfg_attr(feature = "swagger", utoipa::path(
+    post,
+    path = "/torrents/{id}/reannounce",
+    params(("id" = String, Path, description = "Torrent ID or info hash")),
+    responses(
+        (status = 200, description = "Announce loops woken for an immediate announce", body = ReannounceResponse)
+    )
+))]
+pub async fn h_torrent_action_reannounce(
+    State(state): State<ApiState>,
+    Path(idx): Path<TorrentIdOrHash>,
+) -> Result<impl IntoResponse> {
+    state.api.api_torrent_action_reannounce(idx).map(axum::Json)
 }
 
 #[cfg_attr(feature = "swagger", utoipa::path(
@@ -710,7 +781,11 @@ mod tests {
     use axum::extract::{Path, State};
     use tempfile::TempDir;
 
-    use super::{AddTrackersRequest, h_torrent_action_add_trackers, h_torrent_action_recheck};
+    use super::{
+        AddTrackersRequest, EditTrackerRequest, RemoveTrackersRequest,
+        h_torrent_action_add_trackers, h_torrent_action_edit_tracker, h_torrent_action_recheck,
+        h_torrent_action_remove_trackers,
+    };
     use crate::{
         AddTorrent, AddTorrentOptions, Api, CreateTorrentOptions, Session, SessionOptions,
         create_torrent,
@@ -783,6 +858,79 @@ mod tests {
         .await
         .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         assert_eq!(handle.shared().trackers.read().len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn edit_and_remove_tracker_handlers_mutate_list() -> anyhow::Result<()> {
+        let (state, handle, _payload) = torrent_api().await?;
+        let orig = "https://tracker.example.test/announce".to_string();
+        let new = "udp://tracker.example.test:6969/announce".to_string();
+        h_torrent_action_add_trackers(
+            State(state.clone()),
+            Path(handle.id().into()),
+            axum::Json(AddTrackersRequest {
+                trackers: vec![orig.clone()],
+            }),
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+
+        // A bad replacement is rejected and leaves the original in place.
+        let bad = h_torrent_action_edit_tracker(
+            State(state.clone()),
+            Path(handle.id().into()),
+            axum::Json(EditTrackerRequest {
+                orig_url: orig.clone(),
+                new_url: "ftp://nope.example.test/".to_string(),
+            }),
+        )
+        .await;
+        assert!(bad.is_err());
+        assert!(
+            handle
+                .shared()
+                .trackers
+                .read()
+                .iter()
+                .any(|t| t.as_str() == orig)
+        );
+
+        h_torrent_action_edit_tracker(
+            State(state.clone()),
+            Path(handle.id().into()),
+            axum::Json(EditTrackerRequest {
+                orig_url: orig.clone(),
+                new_url: new.clone(),
+            }),
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        {
+            let trackers = handle.shared().trackers.read();
+            assert_eq!(trackers.len(), 1);
+            assert!(trackers.iter().any(|t| t.as_str() == new));
+        }
+        let urls: Vec<String> = handle
+            .shared()
+            .tracker_status
+            .snapshot()
+            .into_iter()
+            .map(|t| t.url)
+            .collect();
+        assert_eq!(urls, vec![new.clone()]);
+
+        h_torrent_action_remove_trackers(
+            State(state),
+            Path(handle.id().into()),
+            axum::Json(RemoveTrackersRequest {
+                trackers: vec![new, orig],
+            }),
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert!(handle.shared().trackers.read().is_empty());
+        assert!(handle.shared().tracker_status.snapshot().is_empty());
         Ok(())
     }
 
