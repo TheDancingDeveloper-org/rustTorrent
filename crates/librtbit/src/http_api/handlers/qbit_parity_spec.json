@@ -548,7 +548,7 @@
       "endpoint": "torrentcreator/addTask",
       "method": "POST",
       "status": "partial",
-      "notes": "Bridges native create_torrent (sourcePath/trackers/pieceSize/name); other options ignored. Requires server create to be enabled. Tasks not persisted across restarts.",
+      "notes": "Bridges native create_torrent: sourcePath, torrentFilePath, trackers, urlSeeds, pieceSize, private, comment, startSeeding. v1 format only (v2/hybrid refused with 400); source, optimizeAlignment and paddedFileSizeLimit are recorded but not applied. Requires server create to be enabled. Tasks not persisted across restarts.",
       "response": {
         "content": "json",
         "schema": {
@@ -560,7 +560,7 @@
       "endpoint": "torrentcreator/deleteTask",
       "method": "POST",
       "status": "full",
-      "notes": "Removes a task from the in-memory store.",
+      "notes": "Removes a task from the in-memory store; 404 for an unknown taskID.",
       "response": {
         "content": "text"
       }
@@ -582,11 +582,6 @@
             "private": "boolean",
             "timeAdded": "string"
           }
-        ],
-        "missing_fields": [
-          "*.pieceSize",
-          "*.private",
-          "*.timeAdded"
         ]
       }
     },

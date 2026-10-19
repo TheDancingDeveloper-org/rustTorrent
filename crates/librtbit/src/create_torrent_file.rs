@@ -9,7 +9,9 @@ use buffers::ByteBufOwned;
 use bytes::Bytes;
 use librtbit_core::Id20;
 use librtbit_core::magnet::Magnet;
-use librtbit_core::torrent_metainfo::{TorrentMetaV1File, TorrentMetaV1Info, TorrentMetaV1Owned};
+use librtbit_core::torrent_metainfo::{
+    TorrentMetaV1File, TorrentMetaV1Info, TorrentMetaV1Owned, UrlList,
+};
 use sha1w::ISha1;
 
 use crate::spawn_utils::BlockingSpawner;
@@ -19,6 +21,11 @@ pub struct CreateTorrentOptions<'a> {
     pub name: Option<&'a str>,
     pub trackers: Vec<String>,
     pub piece_length: Option<u32>,
+    /// Set the info dict's `private` flag (BEP 27). Changes the info hash.
+    pub private: bool,
+    pub comment: Option<&'a str>,
+    /// Web seed URLs (BEP 19 `url-list`).
+    pub url_seeds: Vec<String>,
 }
 
 fn walk_dir_find_paths(dir: &Path, out: &mut Vec<Cow<'_, Path>>) -> anyhow::Result<()> {
@@ -220,7 +227,19 @@ pub async fn create_torrent<'a>(
         .iter()
         .map(|t| ByteBufOwned::from(t.as_bytes()))
         .collect();
-    let res = create_torrent_raw(path, options, spawner).await?;
+    let comment = options.comment.map(|c| ByteBufOwned::from(c.as_bytes()));
+    let url_list = match options.url_seeds.as_slice() {
+        [] => None,
+        seeds => Some(UrlList::Multi(
+            seeds
+                .iter()
+                .map(|s| ByteBufOwned::from(s.as_bytes()))
+                .collect(),
+        )),
+    };
+    let private = options.private;
+    let mut res = create_torrent_raw(path, options, spawner).await?;
+    res.info.private = private;
     let (info_hash, bytes) = compute_info_hash(&res.info).context("error computing info hash")?;
     Ok(CreateTorrentResult {
         meta: TorrentMetaV1Owned {
@@ -230,12 +249,12 @@ pub async fn create_torrent<'a>(
                 data: res.info,
                 raw_bytes: ByteBufOwned(bytes),
             },
-            comment: None,
+            comment,
             created_by: None,
             encoding: Some(b"utf-8"[..].into()),
             publisher: None,
             publisher_url: None,
-            url_list: None,
+            url_list,
             creation_date: None,
             info_hash,
         },

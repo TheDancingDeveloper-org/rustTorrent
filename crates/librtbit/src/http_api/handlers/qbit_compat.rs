@@ -188,33 +188,51 @@ async fn migrate_legacy_tag_store(api: &Api, path: &Path) {
 // Torrent-creator task store (bridges the native create_torrent)
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 enum CreatorStatus {
     Running,
     Finished,
     Failed,
 }
 
+/// What an `addTask` asked for, echoed back by `status`.
+#[derive(Clone, Default)]
+struct CreatorParams {
+    source_path: String,
+    torrent_file_path: String,
+    format: String,
+    piece_size: u32,
+    private: bool,
+    start_seeding: bool,
+    comment: String,
+    source: String,
+    trackers: Vec<String>,
+    url_seeds: Vec<String>,
+    optimize_alignment: bool,
+    padded_file_size_limit: i64,
+}
+
 #[derive(Clone)]
 struct CreatorTask {
     status: CreatorStatus,
-    source_path: String,
-    format: String,
+    params: CreatorParams,
     error: Option<String>,
     torrent_bytes: Option<Bytes>,
     info_hash: Option<String>,
+    time_added: chrono::DateTime<chrono::Utc>,
+    time_finished: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// In-memory registry of torrent-creation tasks. rtbit creates torrents
-/// synchronously via `create_torrent`; each qBittorrent "task" runs that on a
-/// spawned future and records the result here. Not persisted across restarts.
+/// with the native `create_torrent`; each task runs that on a spawned
+/// future and records the result here. Not persisted across restarts.
 #[derive(Default)]
 struct QbitTorrentCreator {
     tasks: RwLock<HashMap<String, CreatorTask>>,
 }
 
 impl QbitTorrentCreator {
-    fn new_task(&self, source_path: String, format: String) -> String {
+    fn new_task(&self, params: CreatorParams) -> String {
         let id: String = (0..16)
             .map(|_| format!("{:02x}", rand::random::<u8>()))
             .collect();
@@ -222,11 +240,12 @@ impl QbitTorrentCreator {
             id.clone(),
             CreatorTask {
                 status: CreatorStatus::Running,
-                source_path,
-                format,
+                params,
                 error: None,
                 torrent_bytes: None,
                 info_hash: None,
+                time_added: chrono::Utc::now(),
+                time_finished: None,
             },
         );
         id
@@ -237,6 +256,7 @@ impl QbitTorrentCreator {
             task.status = CreatorStatus::Finished;
             task.torrent_bytes = torrent_bytes;
             task.info_hash = Some(info_hash);
+            task.time_finished = Some(chrono::Utc::now());
         }
     }
 
@@ -244,6 +264,7 @@ impl QbitTorrentCreator {
         if let Some(task) = self.tasks.write().get_mut(id) {
             task.status = CreatorStatus::Failed;
             task.error = Some(error);
+            task.time_finished = Some(chrono::Utc::now());
         }
     }
 
@@ -252,11 +273,14 @@ impl QbitTorrentCreator {
     }
 
     fn all(&self) -> Vec<(String, CreatorTask)> {
-        self.tasks
+        let mut all: Vec<_> = self
+            .tasks
             .read()
             .iter()
             .map(|(id, task)| (id.clone(), task.clone()))
-            .collect()
+            .collect();
+        all.sort_by_key(|(_, task)| task.time_added);
+        all
     }
 
     fn remove(&self, id: &str) -> bool {
@@ -3102,17 +3126,80 @@ async fn h_sync_torrent_peers(
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 struct AddTaskForm {
-    #[serde(default, alias = "sourcePath")]
+    #[serde(default)]
     source_path: String,
+    #[serde(default)]
+    torrent_file_path: String,
     #[serde(default)]
     format: String,
     #[serde(default)]
     trackers: String,
-    #[serde(default, alias = "pieceSize")]
+    #[serde(default)]
+    url_seeds: String,
+    #[serde(default)]
     piece_size: u32,
-    #[serde(default, alias = "torrentName", alias = "name")]
+    #[serde(default, alias = "torrentName")]
     name: String,
+    #[serde(default)]
+    private: String,
+    #[serde(default)]
+    start_seeding: String,
+    #[serde(default)]
+    comment: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    optimize_alignment: String,
+    #[serde(default)]
+    padded_file_size_limit: i64,
+}
+
+fn form_bool(raw: &str) -> bool {
+    matches!(raw.trim(), "true" | "1")
+}
+
+/// Trackers and web seeds arrive one per line; trackers may also be split
+/// with `|`. Blank entries (tier separators) are dropped: rtbit writes a
+/// single tracker tier.
+fn split_url_list(raw: &str, also_pipe: bool) -> Vec<String> {
+    raw.split(|c| c == '\n' || c == '\r' || (also_pipe && c == '|'))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Validate an `addTask` form into task parameters. The native creator only
+/// writes v1 torrents, so v2 and hybrid are refused rather than silently
+/// produced as v1.
+fn creator_params(form: AddTaskForm) -> Result<CreatorParams, &'static str> {
+    if form.source_path.trim().is_empty() {
+        return Err("sourcePath is required");
+    }
+    let format = match form.format.trim() {
+        "" | "v1" => "v1",
+        "v2" | "hybrid" => return Err("only the v1 torrent format is supported"),
+        _ => return Err("format must be one of v1, v2, hybrid"),
+    };
+    if form.piece_size != 0 && (!form.piece_size.is_power_of_two() || form.piece_size < 16_384) {
+        return Err("pieceSize must be 0 (auto) or a power of two of at least 16 KiB");
+    }
+    Ok(CreatorParams {
+        source_path: form.source_path,
+        torrent_file_path: form.torrent_file_path.trim().to_owned(),
+        format: format.to_owned(),
+        piece_size: form.piece_size,
+        private: form_bool(&form.private),
+        start_seeding: form_bool(&form.start_seeding),
+        comment: form.comment,
+        source: form.source,
+        trackers: split_url_list(&form.trackers, true),
+        url_seeds: split_url_list(&form.url_seeds, false),
+        optimize_alignment: form_bool(&form.optimize_alignment),
+        padded_file_size_limit: form.padded_file_size_limit,
+    })
 }
 
 async fn h_torrentcreator_add_task(
@@ -3127,48 +3214,68 @@ async fn h_torrentcreator_add_task(
             .into_response();
     }
     let form: AddTaskForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
-    if form.source_path.trim().is_empty() {
-        return qbit_error(StatusCode::BAD_REQUEST, "sourcePath is required");
-    }
-
-    let format = if form.format.is_empty() {
-        "v1".to_string()
-    } else {
-        form.format.clone()
-    };
-    let task_id = state.creator.new_task(form.source_path.clone(), format);
-
-    // Run the (synchronous) creation off the request path and record the result.
-    let trackers: Vec<String> = form
-        .trackers
-        .lines()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect();
     let name = (!form.name.trim().is_empty()).then(|| form.name.clone());
-    let piece_length = (form.piece_size > 0).then_some(form.piece_size);
-    let source = form.source_path.clone();
+    let params = match creator_params(form) {
+        Ok(params) => params,
+        Err(message) => return qbit_error(StatusCode::BAD_REQUEST, message),
+    };
+    let task_id = state.creator.new_task(params.clone());
+
     let state = state.clone();
     let spawned_id = task_id.clone();
     tokio::spawn(async move {
-        let spawner = BlockingSpawner::new(1);
-        let options = CreateTorrentOptions {
-            name: name.as_deref(),
-            trackers,
-            piece_length,
-        };
-        match create_torrent(std::path::Path::new(&source), options, &spawner).await {
-            Ok(result) => {
-                let bytes = result.as_bytes().ok();
-                let info_hash = result.info_hash().as_string();
-                state.creator.finish(&spawned_id, bytes, info_hash);
-            }
+        match run_creator_task(&state, &params, name.as_deref()).await {
+            Ok((bytes, info_hash)) => state.creator.finish(&spawned_id, Some(bytes), info_hash),
             Err(error) => state.creator.fail(&spawned_id, format!("{error:#}")),
         }
     });
 
     axum::Json(serde_json::json!({ "taskID": task_id })).into_response()
+}
+
+/// Create the torrent, then do what the task asked with it: save it to
+/// `torrentFilePath` and/or add it to the session seeding from the source.
+async fn run_creator_task(
+    state: &QbitState,
+    params: &CreatorParams,
+    name: Option<&str>,
+) -> anyhow::Result<(Bytes, String)> {
+    use anyhow::Context as _;
+    let spawner = BlockingSpawner::new(1);
+    let options = CreateTorrentOptions {
+        name,
+        trackers: params.trackers.clone(),
+        piece_length: (params.piece_size > 0).then_some(params.piece_size),
+        private: params.private,
+        comment: (!params.comment.is_empty()).then_some(params.comment.as_str()),
+        url_seeds: params.url_seeds.clone(),
+    };
+    let result = create_torrent(Path::new(&params.source_path), options, &spawner).await?;
+    let bytes = result.as_bytes()?;
+    let info_hash = result.info_hash().as_string();
+
+    if !params.torrent_file_path.is_empty() {
+        tokio::fs::write(&params.torrent_file_path, &bytes)
+            .await
+            .with_context(|| format!("error writing {}", params.torrent_file_path))?;
+    }
+    if params.start_seeding {
+        state
+            .api_state
+            .api
+            .session()
+            .add_torrent(
+                AddTorrent::from_bytes(bytes.clone()),
+                Some(AddTorrentOptions {
+                    overwrite: true,
+                    output_folder: Some(result.output_folder.to_string_lossy().into_owned()),
+                    ..Default::default()
+                }),
+            )
+            .await
+            .context("error adding the created torrent for seeding")?;
+    }
+    Ok((bytes, info_hash))
 }
 
 #[derive(Serialize)]
@@ -3177,23 +3284,53 @@ struct CreatorTaskStatus {
     #[serde(rename = "taskID")]
     task_id: String,
     source_path: String,
+    torrent_file_path: String,
     format: String,
+    piece_size: u32,
+    private: bool,
+    comment: String,
+    source: String,
+    trackers: Vec<String>,
+    url_seeds: Vec<String>,
+    optimize_alignment: bool,
+    padded_file_size_limit: i64,
     status: CreatorStatus,
     error_message: String,
+    /// Percent, 0–100.
     progress: f64,
+    time_added: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time_started: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time_finished: Option<String>,
 }
 
 fn creator_task_status(id: String, task: CreatorTask) -> CreatorTaskStatus {
+    let time_added = task.time_added.to_rfc2822();
+    let params = task.params;
     CreatorTaskStatus {
         progress: match task.status {
-            CreatorStatus::Finished => 1.0,
+            CreatorStatus::Finished => 100.0,
             _ => 0.0,
         },
         error_message: task.error.unwrap_or_default(),
         task_id: id,
-        source_path: task.source_path,
-        format: task.format,
+        source_path: params.source_path,
+        torrent_file_path: params.torrent_file_path,
+        format: params.format,
+        piece_size: params.piece_size,
+        private: params.private,
+        comment: params.comment,
+        source: params.source,
+        trackers: params.trackers,
+        url_seeds: params.url_seeds,
+        optimize_alignment: params.optimize_alignment,
+        padded_file_size_limit: params.padded_file_size_limit,
         status: task.status,
+        // Tasks start as soon as they are added.
+        time_started: Some(time_added.clone()),
+        time_added,
+        time_finished: task.time_finished.map(|t| t.to_rfc2822()),
     }
 }
 
@@ -3224,9 +3361,9 @@ async fn h_torrentcreator_status(
     axum::Json(all).into_response()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct RequiredTaskIdQuery {
-    #[serde(alias = "taskID")]
+    #[serde(default, alias = "taskID")]
     task_id: String,
 }
 
@@ -3234,12 +3371,20 @@ async fn h_torrentcreator_torrent_file(
     State(state): State<Arc<QbitState>>,
     Query(query): Query<RequiredTaskIdQuery>,
 ) -> axum::response::Response {
+    if query.task_id.is_empty() {
+        return qbit_error(StatusCode::BAD_REQUEST, "taskID is required");
+    }
     match state.creator.get(&query.task_id) {
-        Some(task) if matches!(task.status, CreatorStatus::Finished) => match task.torrent_bytes {
-            Some(bytes) => ([("content-type", "application/x-bittorrent")], bytes).into_response(),
-            None => (StatusCode::INTERNAL_SERVER_ERROR, "no torrent bytes").into_response(),
+        Some(task) => match (task.status, task.torrent_bytes) {
+            (CreatorStatus::Finished, Some(bytes)) => {
+                ([("content-type", "application/x-bittorrent")], bytes).into_response()
+            }
+            (CreatorStatus::Failed, _) => qbit_error(
+                StatusCode::CONFLICT,
+                format!("task failed: {}", task.error.unwrap_or_default()),
+            ),
+            _ => qbit_error(StatusCode::CONFLICT, "task has not finished"),
         },
-        Some(_) => qbit_error(StatusCode::CONFLICT, "task has not finished"),
         None => qbit_error(StatusCode::NOT_FOUND, "task not found"),
     }
 }
@@ -3253,10 +3398,16 @@ struct DeleteTaskForm {
 async fn h_torrentcreator_delete_task(
     State(state): State<Arc<QbitState>>,
     body: Bytes,
-) -> &'static str {
+) -> axum::response::Response {
     let form: DeleteTaskForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
-    state.creator.remove(&form.task_id);
-    "Ok."
+    if form.task_id.is_empty() {
+        return qbit_error(StatusCode::BAD_REQUEST, "taskID is required");
+    }
+    if state.creator.remove(&form.task_id) {
+        (StatusCode::OK, "Ok.").into_response()
+    } else {
+        qbit_error(StatusCode::NOT_FOUND, "task not found")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3746,8 +3897,10 @@ mod tests {
     };
 
     use super::{
-        CreatorStatus, QbitSessions, QbitState, QbitTorrentCreator, SyncSnapshots,
-        h_app_preferences, h_app_set_preferences, h_app_version, h_torrentcreator_add_task,
+        AddTaskForm, CreatorParams, CreatorStatus, CreatorTask, QbitSessions, QbitState,
+        QbitTorrentCreator, RequiredTaskIdQuery, SyncSnapshots, creator_params,
+        creator_task_status, h_app_preferences, h_app_set_preferences, h_app_version,
+        h_torrentcreator_add_task, h_torrentcreator_delete_task, h_torrentcreator_torrent_file,
         h_torrents_add_tags, h_torrents_create_tags, h_torrents_delete_tags, h_torrents_info,
         h_torrents_recheck, h_torrents_remove_tags, h_torrents_set_tags, matches_category,
         origin_allowed, qbit_file_name,
@@ -4911,10 +5064,13 @@ mod tests {
     #[test]
     fn torrent_creator_task_store_lifecycle() {
         let creator = QbitTorrentCreator::default();
-        let id = creator.new_task("/data/movie".to_string(), "v1".to_string());
+        let id = creator.new_task(CreatorParams {
+            source_path: "/data/movie".to_string(),
+            ..Default::default()
+        });
         let task = creator.get(&id).unwrap();
         assert!(matches!(task.status, CreatorStatus::Running));
-        assert_eq!(task.source_path, "/data/movie");
+        assert_eq!(task.params.source_path, "/data/movie");
         assert_eq!(creator.all().len(), 1);
 
         creator.finish(
@@ -4927,7 +5083,7 @@ mod tests {
         assert_eq!(task.info_hash.as_deref(), Some("abc"));
         assert_eq!(task.torrent_bytes.as_deref(), Some(&b"torrent"[..]));
 
-        let failing = creator.new_task("/data/x".to_string(), "v2".to_string());
+        let failing = creator.new_task(CreatorParams::default());
         creator.fail(&failing, "boom".to_string());
         let task = creator.get(&failing).unwrap();
         assert!(matches!(task.status, CreatorStatus::Failed));
@@ -4974,6 +5130,199 @@ mod tests {
             "expected generated torrent bytes"
         );
         assert!(task.info_hash.is_some());
+    }
+
+    async fn wait_for_creator_task(state: &QbitState, id: &str) -> CreatorTask {
+        for _ in 0..250 {
+            let task = state.creator.get(id).unwrap();
+            if task.status != CreatorStatus::Running {
+                return task;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("creator task {id} did not finish");
+    }
+
+    fn task_id_of(response: axum::response::Response) -> String {
+        assert_eq!(response.status(), StatusCode::OK);
+        let all = futures::executor::block_on(axum::body::to_bytes(response.into_body(), 1 << 16))
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&all).unwrap();
+        json["taskID"].as_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn creator_params_validate_and_parse_the_form() {
+        let form = |body: &str| -> AddTaskForm { serde_urlencoded::from_str(body).unwrap() };
+
+        assert!(creator_params(form("")).is_err());
+        assert!(creator_params(form("sourcePath=/d&format=v2")).is_err());
+        assert!(creator_params(form("sourcePath=/d&format=hybrid")).is_err());
+        assert!(creator_params(form("sourcePath=/d&format=v9")).is_err());
+        assert!(creator_params(form("sourcePath=/d&pieceSize=1000")).is_err());
+        assert!(creator_params(form("sourcePath=/d&pieceSize=8192")).is_err());
+
+        let params = creator_params(form(
+            "sourcePath=/d&pieceSize=65536&private=true&startSeeding=1&comment=hi\
+             &trackers=http%3A%2F%2Fa%2Fann%7Chttp%3A%2F%2Fb%2Fann%0A%0Ahttp%3A%2F%2Fc%2Fann\
+             &urlSeeds=http%3A%2F%2Fseed%2F%0A",
+        ))
+        .unwrap();
+        assert_eq!(params.format, "v1");
+        assert_eq!(params.piece_size, 65536);
+        assert!(params.private);
+        assert!(params.start_seeding);
+        assert_eq!(params.comment, "hi");
+        assert_eq!(
+            params.trackers,
+            vec!["http://a/ann", "http://b/ann", "http://c/ann"]
+        );
+        assert_eq!(params.url_seeds, vec!["http://seed/"]);
+    }
+
+    #[tokio::test]
+    async fn torrentcreator_add_task_honours_private_comment_seeds_and_file_path() {
+        let (state, _session, output) = qbit_state().await;
+        let src = output.path().join("src");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("data.bin"), vec![7u8; 40_000]).unwrap();
+        let out_file = output.path().join("made.torrent");
+
+        let body = serde_urlencoded::to_string([
+            ("sourcePath", src.to_string_lossy().as_ref()),
+            ("torrentFilePath", out_file.to_string_lossy().as_ref()),
+            ("private", "true"),
+            ("comment", "made by test"),
+            ("trackers", "http://t1/announce|http://t2/announce"),
+            ("urlSeeds", "http://seed.example/"),
+            ("pieceSize", "16384"),
+        ])
+        .unwrap();
+        let response =
+            h_torrentcreator_add_task(axum::extract::State(state.clone()), Bytes::from(body))
+                .await
+                .into_response();
+        let id = task_id_of(response);
+        let task = wait_for_creator_task(&state, &id).await;
+        assert_eq!(task.status, CreatorStatus::Finished, "{:?}", task.error);
+
+        let bytes = task.torrent_bytes.unwrap();
+        assert_eq!(std::fs::read(&out_file).unwrap(), bytes.as_ref());
+        let meta = librtbit_core::torrent_metainfo::torrent_from_bytes(&bytes).unwrap();
+        assert!(meta.info.data.private);
+        assert_eq!(meta.info.data.piece_length, 16384);
+        assert_eq!(
+            meta.comment.as_ref().map(|c| c.as_ref()),
+            Some(&b"made by test"[..])
+        );
+        let trackers: Vec<_> = meta.iter_announce().map(|t| t.as_ref().to_vec()).collect();
+        assert_eq!(
+            trackers,
+            vec![
+                b"http://t1/announce".to_vec(),
+                b"http://t2/announce".to_vec()
+            ]
+        );
+        let seeds: Vec<_> = meta
+            .url_list
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|u| u.as_ref().to_vec())
+            .collect();
+        assert_eq!(seeds, vec![b"http://seed.example/".to_vec()]);
+
+        let status = creator_task_status(id.clone(), state.creator.get(&id).unwrap());
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["status"], "Finished");
+        assert_eq!(json["progress"], 100.0);
+        assert_eq!(json["private"], true);
+        assert_eq!(json["pieceSize"], 16384);
+        assert!(json["timeFinished"].is_string());
+    }
+
+    #[tokio::test]
+    async fn torrentcreator_start_seeding_adds_the_torrent_to_the_session() {
+        let (state, session, output) = qbit_state().await;
+        let src = output.path().join("seedme");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.bin"), vec![3u8; 20_000]).unwrap();
+
+        let body = serde_urlencoded::to_string([
+            ("sourcePath", src.to_string_lossy().as_ref()),
+            ("startSeeding", "true"),
+        ])
+        .unwrap();
+        let response =
+            h_torrentcreator_add_task(axum::extract::State(state.clone()), Bytes::from(body))
+                .await
+                .into_response();
+        let id = task_id_of(response);
+        let task = wait_for_creator_task(&state, &id).await;
+        assert_eq!(task.status, CreatorStatus::Finished, "{:?}", task.error);
+
+        let info_hash = <librtbit_core::Id20 as std::str::FromStr>::from_str(
+            task.info_hash.as_deref().unwrap(),
+        )
+        .unwrap();
+        let handle = session
+            .get(crate::api::TorrentIdOrHash::Hash(info_hash))
+            .expect("created torrent should be managed");
+        assert_eq!(handle.output_folder(), src);
+    }
+
+    #[tokio::test]
+    async fn torrentcreator_failed_task_and_unknown_ids() {
+        let (state, _session, output) = qbit_state().await;
+        let missing = output.path().join("does-not-exist");
+        let body = format!("sourcePath={}", missing.to_string_lossy());
+        let response =
+            h_torrentcreator_add_task(axum::extract::State(state.clone()), Bytes::from(body))
+                .await
+                .into_response();
+        let id = task_id_of(response);
+        let task = wait_for_creator_task(&state, &id).await;
+        assert_eq!(task.status, CreatorStatus::Failed);
+        assert!(task.error.is_some());
+
+        let file = h_torrentcreator_torrent_file(
+            axum::extract::State(state.clone()),
+            axum::extract::Query(RequiredTaskIdQuery {
+                task_id: id.clone(),
+            }),
+        )
+        .await;
+        assert_eq!(file.status(), StatusCode::CONFLICT);
+        let unknown = h_torrentcreator_torrent_file(
+            axum::extract::State(state.clone()),
+            axum::extract::Query(RequiredTaskIdQuery {
+                task_id: "nope".into(),
+            }),
+        )
+        .await;
+        assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+
+        let deleted = h_torrentcreator_delete_task(
+            axum::extract::State(state.clone()),
+            Bytes::from(format!("taskID={id}")),
+        )
+        .await;
+        assert_eq!(deleted.status(), StatusCode::OK);
+        let again = h_torrentcreator_delete_task(
+            axum::extract::State(state.clone()),
+            Bytes::from(format!("taskID={id}")),
+        )
+        .await;
+        assert_eq!(again.status(), StatusCode::NOT_FOUND);
+
+        let bad = h_torrentcreator_add_task(
+            axum::extract::State(state.clone()),
+            Bytes::from_static(b"sourcePath=/x&format=v2"),
+        )
+        .await
+        .into_response();
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+        assert!(state.creator.all().is_empty());
     }
 
     #[test]
