@@ -1360,11 +1360,12 @@ impl Session {
             let mut configured = handle.shared().trackers.write();
             let mut removed = 0;
             for tracker in trackers {
-                let matched = url::Url::parse(tracker)
-                    .ok()
-                    .map(|url| configured.remove(&url))
-                    .unwrap_or(false);
-                if matched {
+                let Ok(url) = url::Url::parse(tracker) else {
+                    continue;
+                };
+                if configured.remove(&url) {
+                    // Dropping the status entry stops the live announce loop.
+                    handle.shared().tracker_status.remove(url.as_str());
                     removed += 1;
                 }
             }
@@ -1375,6 +1376,32 @@ impl Session {
             self.try_update_persistence_metadata(handle).await;
         }
         Ok(removed)
+    }
+
+    /// Replace `orig` with `new` in the torrent's tracker list. `new` is
+    /// validated before `orig` is removed, so a bad URL leaves the list as is.
+    pub async fn edit_tracker(
+        self: &Arc<Self>,
+        handle: &ManagedTorrentHandle,
+        orig: &str,
+        new: &str,
+    ) -> anyhow::Result<()> {
+        let new_url =
+            url::Url::parse(new).with_context(|| format!("invalid tracker URL {new:?}"))?;
+        if !matches!(new_url.scheme(), "http" | "https" | "udp") {
+            bail!("unsupported tracker URL scheme {:?}", new_url.scheme());
+        }
+        if handle.shared().trackers.read().contains(&new_url) {
+            bail!("tracker {new:?} is already configured");
+        }
+        if self
+            .remove_trackers(handle, std::slice::from_ref(&orig.to_owned()))
+            .await?
+            == 0
+        {
+            bail!("tracker {orig:?} is not configured");
+        }
+        self.add_trackers(handle, vec![new.to_owned()]).await
     }
 
     pub async fn update_only_files(

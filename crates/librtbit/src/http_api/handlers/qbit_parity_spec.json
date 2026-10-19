@@ -715,8 +715,8 @@
     {
       "endpoint": "torrents/editTracker",
       "method": "POST",
-      "status": "partial",
-      "notes": "Replaces origUrl with newUrl (remove + add); validates newUrl before removing so a bad newUrl is non-destructive.",
+      "status": "full",
+      "notes": "Replaces origUrl with newUrl (remove + add): 400 for an invalid newUrl, 409 when origUrl is missing or newUrl already exists. The old URL's announce loop stops and the new one starts announcing on live torrents.",
       "response": {
         "content": "text"
       }
@@ -950,8 +950,8 @@
     {
       "endpoint": "torrents/reannounce",
       "method": "POST",
-      "status": "partial",
-      "notes": "Signals a fresh tracker announce / peer re-discovery on live torrents; a no-op for paused or finished-idle torrents.",
+      "status": "full",
+      "notes": "Wakes every tracker announce loop for an immediate announce (skipping the remaining interval) and signals peer re-discovery; a no-op for paused torrents.",
       "response": {
         "content": "text"
       }
@@ -984,8 +984,8 @@
     {
       "endpoint": "torrents/removeTrackers",
       "method": "POST",
-      "status": "partial",
-      "notes": "Removes URLs from the tracker set (persisted); an in-flight announce loop for a removed tracker stops at the next re-discovery.",
+      "status": "full",
+      "notes": "Removes URLs from the tracker set (persisted) and from the status list; the live announce loop for a removed tracker stops immediately and sends no further announces; 409 when none of the URLs were configured.",
       "response": {
         "content": "text"
       }

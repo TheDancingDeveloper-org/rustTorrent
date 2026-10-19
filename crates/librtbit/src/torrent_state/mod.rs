@@ -526,6 +526,7 @@ impl ManagedTorrent {
     /// from DHT/trackers). Returns false if the torrent is not live, in which
     /// case there is no announce loop to signal.
     pub fn reannounce(&self) -> bool {
+        self.shared.tracker_status.request_reannounce();
         match self.live() {
             Some(live) => {
                 live.rediscovery_notify.notify_one();

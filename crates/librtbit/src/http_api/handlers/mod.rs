@@ -159,6 +159,18 @@ pub fn make_api_router(state: ApiState) -> Router {
                 post(torrents::h_torrent_action_add_trackers),
             )
             .route(
+                "/torrents/{id}/trackers/remove",
+                post(torrents::h_torrent_action_remove_trackers),
+            )
+            .route(
+                "/torrents/{id}/trackers/edit",
+                post(torrents::h_torrent_action_edit_tracker),
+            )
+            .route(
+                "/torrents/{id}/reannounce",
+                post(torrents::h_torrent_action_reannounce),
+            )
+            .route(
                 "/torrents/{id}/forget",
                 post(torrents::h_torrent_action_forget),
             )

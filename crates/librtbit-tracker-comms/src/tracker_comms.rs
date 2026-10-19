@@ -14,6 +14,7 @@ use futures::StreamExt;
 use futures::future::Either;
 use futures::stream::BoxStream;
 use futures::stream::FuturesUnordered;
+use tokio::sync::watch;
 use tracing::Instrument;
 use tracing::debug;
 use tracing::debug_span;
@@ -88,6 +89,14 @@ type Sender = tokio::sync::mpsc::Sender<SocketAddr>;
 enum SupportedTracker {
     Udp(Url),
     Http(Url),
+}
+
+impl SupportedTracker {
+    fn url(&self) -> &Url {
+        match self {
+            SupportedTracker::Udp(u) | SupportedTracker::Http(u) => u,
+        }
+    }
 }
 
 impl std::fmt::Debug for SupportedTracker {
@@ -207,14 +216,15 @@ impl TrackerComms {
             return None;
         }
 
-        if let Some(s) = &status {
-            for t in &trackers {
-                let url = match t {
-                    SupportedTracker::Udp(u) | SupportedTracker::Http(u) => u,
-                };
-                s.ensure(url.as_str());
-            }
-        }
+        // Capture each tracker's registry generation now, so a loop stops if
+        // its tracker is removed (or removed and re-added) later.
+        let trackers = trackers
+            .into_iter()
+            .map(|t| {
+                let generation = status.as_ref().map(|s| s.ensure(t.url().as_str()));
+                (t, generation)
+            })
+            .collect::<Vec<_>>();
 
         tracing::trace!(?trackers);
 
@@ -234,8 +244,8 @@ impl TrackerComms {
                 status,
             });
             let mut futures = FuturesUnordered::new();
-            for tracker in trackers {
-                futures.push(comms.add_tracker(tracker, udp_client.as_ref()))
+            for (tracker, generation) in trackers {
+                futures.push(comms.add_tracker(tracker, generation, udp_client.as_ref()))
             }
             while !(futures.is_empty()) {
                 tokio::select! {
@@ -259,6 +269,7 @@ impl TrackerComms {
     fn add_tracker(
         &self,
         url: SupportedTracker,
+        generation: Option<u64>,
         client: Option<&UdpTrackerClient>,
     ) -> Either<
         impl std::future::Future<Output = anyhow::Result<()>> + '_ + Send,
@@ -269,7 +280,7 @@ impl TrackerComms {
             SupportedTracker::Udp(url) => {
                 // Safe to unwrap: UDP trackers are filtered out when client is None
                 let span = debug_span!(parent: None, "udp_tracker", tracker = %url, info_hash = ?info_hash);
-                self.task_single_tracker_monitor_udp(url, client.unwrap().clone())
+                self.task_single_tracker_monitor_udp(url, generation, client.unwrap().clone())
                     .instrument(span)
                     .right_future()
             }
@@ -280,19 +291,54 @@ impl TrackerComms {
                     tracker = %url,
                     info_hash = ?info_hash
                 );
-                self.task_single_tracker_monitor_http(url)
+                self.task_single_tracker_monitor_http(url, generation)
                     .instrument(span)
                     .left_future()
             }
         }
     }
 
-    async fn task_single_tracker_monitor_http(&self, tracker_url: Url) -> anyhow::Result<()> {
+    /// Whether the loop for `url` started at `generation` should keep going.
+    /// Without a status registry there is no way to remove a tracker.
+    fn is_active(&self, url: &Url, generation: Option<u64>) -> bool {
+        match (&self.status, generation) {
+            (Some(s), Some(generation)) => s.is_current(url.as_str(), generation),
+            _ => true,
+        }
+    }
+
+    /// Sleep for `interval`, waking early on a reannounce request or removal.
+    async fn wait(&self, interval: Duration, kick: &mut Option<watch::Receiver<u64>>) {
+        match kick {
+            Some(kick) => {
+                tokio::select! {
+                    _ = tokio::time::sleep(interval) => {}
+                    changed = kick.changed() => {
+                        if changed.is_err() {
+                            tokio::time::sleep(interval).await;
+                        }
+                    }
+                }
+            }
+            None => tokio::time::sleep(interval).await,
+        }
+    }
+
+    async fn task_single_tracker_monitor_http(
+        &self,
+        tracker_url: Url,
+        generation: Option<u64>,
+    ) -> anyhow::Result<()> {
         trace!(url=%tracker_url, "starting monitor");
         let mut first = true;
         let mut was_completed = false;
+        let mut kick = self.status.as_ref().map(|s| s.subscribe());
 
         loop {
+            if !self.is_active(&tracker_url, generation) {
+                debug!("tracker removed, stopping announces");
+                return Ok(());
+            }
             let stats = self.stats.get();
             let is_completed = stats.is_completed();
 
@@ -313,27 +359,40 @@ impl TrackerComms {
                 s.record_updating(tracker_url.as_str());
             }
 
-            let interval = (|| self.tracker_one_request_http(&tracker_url, event))
-                .retry(
-                    ExponentialBuilder::new()
-                        .without_max_times()
-                        .with_jitter()
-                        .with_factor(2.)
-                        .with_min_delay(Duration::from_secs(10))
-                        .with_max_delay(Duration::from_secs(600)),
-                )
-                .notify(|err, retry_in| {
-                    if let Some(s) = &self.status {
-                        s.record_error(tracker_url.as_str(), &format!("{err:#}"));
-                    }
-                    debug!(?retry_in, "error calling tracker: {err:#}")
-                })
-                .await
-                .context("this shouldn't fail")?;
+            let interval = (|| async {
+                if !self.is_active(&tracker_url, generation) {
+                    bail!("tracker removed");
+                }
+                self.tracker_one_request_http(&tracker_url, event).await
+            })
+            .retry(
+                ExponentialBuilder::new()
+                    .without_max_times()
+                    .with_jitter()
+                    .with_factor(2.)
+                    .with_min_delay(Duration::from_secs(10))
+                    .with_max_delay(Duration::from_secs(600)),
+            )
+            .when(|_| self.is_active(&tracker_url, generation))
+            .notify(|err, retry_in| {
+                if let Some(s) = &self.status {
+                    s.record_error(tracker_url.as_str(), &format!("{err:#}"));
+                }
+                debug!(?retry_in, "error calling tracker: {err:#}")
+            })
+            .await;
+            let interval = match interval {
+                Ok(interval) => interval,
+                Err(_) if !self.is_active(&tracker_url, generation) => {
+                    debug!("tracker removed, stopping announces");
+                    return Ok(());
+                }
+                Err(e) => return Err(e).context("this shouldn't fail"),
+            };
 
             let interval = self.force_tracker_interval.unwrap_or(interval);
             debug!("sleeping for {:?} after calling tracker", interval);
-            tokio::time::sleep(interval).await;
+            self.wait(interval, &mut kick).await;
         }
     }
 
@@ -412,6 +471,7 @@ impl TrackerComms {
     async fn task_single_tracker_monitor_udp(
         &self,
         url: Url,
+        generation: Option<u64>,
         client: UdpTrackerClient,
     ) -> anyhow::Result<()> {
         if url.scheme() != "udp" {
@@ -424,10 +484,15 @@ impl TrackerComms {
 
         let mut sleep_interval: Option<Duration> = None;
         let mut prev_addrs: Option<UdpTrackerResolveResult> = None;
+        let mut kick = self.status.as_ref().map(|s| s.subscribe());
         loop {
             if let Some(i) = sleep_interval {
                 trace!(interval=?sleep_interval, "sleeping");
-                tokio::time::sleep(i).await;
+                self.wait(i, &mut kick).await;
+            }
+            if !self.is_active(&url, generation) {
+                debug!("tracker removed, stopping announces");
+                return Ok(());
             }
 
             if let Some(s) = &self.status {

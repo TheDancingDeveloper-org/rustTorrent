@@ -41,6 +41,9 @@ mod webui;
         handlers::torrents::h_torrent_action_start,
         handlers::torrents::h_torrent_action_recheck,
         handlers::torrents::h_torrent_action_add_trackers,
+        handlers::torrents::h_torrent_action_remove_trackers,
+        handlers::torrents::h_torrent_action_edit_tracker,
+        handlers::torrents::h_torrent_action_reannounce,
         handlers::torrents::h_torrent_action_forget,
         handlers::torrents::h_torrent_action_delete,
         handlers::torrents::h_torrent_action_update_only_files,
@@ -66,9 +69,13 @@ mod webui;
         crate::api::TorrentDetailsResponseFile,
         crate::api::EmptyJsonResponse,
         crate::api::ApiAddTorrentResponse,
+        crate::api::RemoveTrackersResponse,
+        crate::api::ReannounceResponse,
         crate::limits::LimitsConfig,
         handlers::torrents::UpdateOnlyFilesRequest,
         handlers::torrents::AddTrackersRequest,
+        handlers::torrents::RemoveTrackersRequest,
+        handlers::torrents::EditTrackerRequest,
     ))
 )]
 struct ApiDoc;
