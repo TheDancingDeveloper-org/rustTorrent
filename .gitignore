@@ -22,7 +22,8 @@ node_modules
 
 # Fetched test data
 /linux-torrents/
-tests/sonarr-e2e/
+tests/sonarr-e2e/data/
+tests/sonarr-e2e/.env
 .gitea/
 .env
 docker-compose.indexarr.test.yml
