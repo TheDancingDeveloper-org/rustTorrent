@@ -176,6 +176,7 @@ impl JsonSessionPersistenceStore {
             share_limits,
             uploaded_bytes,
             part_files,
+            rate_limits: super::TorrentRateLimits::of(torrent),
             output_folder: torrent.shared().options.output_folder.clone(),
             output_folder_root: torrent.shared().options.output_folder_root.clone(),
             category: torrent.shared().category.read().clone(),

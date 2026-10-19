@@ -1025,6 +1025,7 @@ fn build_torrent_info(
     let content_path = qbit_content_path(handle, &name);
     let forced = handle.is_force_started();
     let qbit_state = map_state(stats.state, stats.finished, handle.is_queued(), forced);
+    let limits = handle.rate_limits();
     let category = handle.shared().category.read().clone().unwrap_or_default();
     let share_limits = *handle.shared().share_limits.read();
     let ratio_limit = ratio_to_qbit(share_limits.max_ratio);
@@ -1104,7 +1105,7 @@ fn build_torrent_info(
             -1
         },
         content_path,
-        dl_limit: -1,
+        dl_limit: qbit_torrent_limit(limits.download_bps),
         dlspeed: dl_speed,
         download_path: String::new(),
         downloaded: stats.progress_bytes,
@@ -1158,7 +1159,7 @@ fn build_torrent_info(
         total_size: stats.total_bytes,
         tracker,
         trackers_count,
-        up_limit: -1,
+        up_limit: qbit_torrent_limit(limits.upload_bps),
         uploaded: stats.uploaded_bytes,
         uploaded_session: stats.uploaded_bytes,
         upspeed: up_speed,
@@ -1354,8 +1355,8 @@ async fn h_torrents_properties(
         total_uploaded_session: stats.uploaded_bytes,
         total_downloaded: stats.progress_bytes,
         total_downloaded_session: stats.progress_bytes,
-        up_limit: -1,
-        dl_limit: -1,
+        up_limit: qbit_torrent_limit(handle.rate_limits().upload_bps),
+        dl_limit: qbit_torrent_limit(handle.rate_limits().download_bps),
         time_elapsed: now.saturating_sub(added_on),
         seeding_time: if completion_on > 0 {
             now.saturating_sub(completion_on)
@@ -1678,6 +1679,7 @@ async fn h_torrents_add(
     let mut savepath: Option<String> = None;
     let mut category: Option<String> = None;
     let mut tags: Vec<String> = Vec::new();
+    let mut ratelimits = LimitsConfig::default();
     let mut paused = false;
 
     while let Ok(Some(field)) = multipart.next_field().await {
@@ -1715,6 +1717,20 @@ async fn h_torrents_add(
                     tags = parse_tags(&text);
                 }
             }
+            // Per-torrent limits in bytes per second; 0 or -1 is unlimited.
+            "dlLimit" | "upLimit" => {
+                let is_download = field_name == "dlLimit";
+                if let Ok(text) = field.text().await
+                    && let Ok(limit) = text.trim().parse::<i64>()
+                {
+                    let bps = parse_torrent_limit(limit);
+                    if is_download {
+                        ratelimits.download_bps = bps;
+                    } else {
+                        ratelimits.upload_bps = bps;
+                    }
+                }
+            }
             "savepath" => {
                 if let Ok(text) = field.text().await
                     && !text.is_empty()
@@ -1746,6 +1762,7 @@ async fn h_torrents_add(
             output_folder_root: savepath.clone(),
             category: category.clone(),
             tags: tags.clone(),
+            ratelimits,
             ..Default::default()
         };
         if let Err(e) = api
@@ -1764,6 +1781,7 @@ async fn h_torrents_add(
             output_folder_root: savepath.clone(),
             category: category.clone(),
             tags: tags.clone(),
+            ratelimits,
             ..Default::default()
         };
         if let Err(e) = api
@@ -2390,6 +2408,31 @@ fn torrent_limit_map(
     map
 }
 
+/// A per-torrent limit as qBittorrent reports it in `torrents/info` and
+/// `torrents/properties`: bytes per second, or -1 for unlimited.
+fn qbit_torrent_limit(bps: Option<NonZeroU32>) -> i32 {
+    bps.map_or(-1, |bps| i32::try_from(bps.get()).unwrap_or(i32::MAX))
+}
+
+/// Set one direction of the speed limit on every torrent named by `hashes`,
+/// keeping the other direction, and save it with the torrent.
+async fn set_torrent_limit(
+    api: &Api,
+    hashes: &str,
+    bps: Option<NonZeroU32>,
+    apply: impl Fn(&mut crate::TorrentRateLimits, Option<NonZeroU32>),
+) {
+    for idx in resolve_hashes(api, hashes) {
+        let Ok(mut limits) = api.api_torrent_rate_limits(idx) else {
+            continue;
+        };
+        apply(&mut limits, bps);
+        if let Err(error) = api.api_set_torrent_rate_limits(idx, limits).await {
+            warn!(%error, "qbit compat: error setting torrent speed limit");
+        }
+    }
+}
+
 fn parse_torrent_limit(limit: i64) -> Option<NonZeroU32> {
     if limit <= 0 {
         None
@@ -2421,11 +2464,7 @@ async fn h_torrents_set_download_limit(
     let form: SetTorrentLimitForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
     let api = &state.api_state.api;
     let bps = parse_torrent_limit(form.limit);
-    for idx in resolve_hashes(api, &form.hashes) {
-        if let Ok(handle) = api.mgr_handle(idx) {
-            handle.set_download_limit(bps);
-        }
-    }
+    set_torrent_limit(api, &form.hashes, bps, |l, bps| l.download_bps = bps).await;
     "Ok."
 }
 
@@ -2436,11 +2475,7 @@ async fn h_torrents_set_upload_limit(
     let form: SetTorrentLimitForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
     let api = &state.api_state.api;
     let bps = parse_torrent_limit(form.limit);
-    for idx in resolve_hashes(api, &form.hashes) {
-        if let Ok(handle) = api.mgr_handle(idx) {
-            handle.set_upload_limit(bps);
-        }
-    }
+    set_torrent_limit(api, &form.hashes, bps, |l, bps| l.upload_bps = bps).await;
     "Ok."
 }
 

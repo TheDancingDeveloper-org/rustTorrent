@@ -159,7 +159,10 @@ Remaining work, roughly by cost:
    and reports the limits but does not auto-pause/remove at the threshold — a
    periodic session task is the v2). Done since: per-torrent rate limits
    (`ratelimit_override` on `ManagedTorrentShared`, enforced by the live
-   limiter), `reannounce` (signals the live re-discovery notify), **file/folder/
+   limiter under the session limiter, saved in session state, reported as
+   `dl_limit`/`up_limit` in `torrents/info` and `properties`, settable at
+   `torrents/add` via `dlLimit`/`upLimit`, and exposed natively at
+   `GET/POST /torrents/{id}/limits`), `reannounce` (signals the live re-discovery notify), **file/folder/
    display rename** (see below), and **`setLocation`/`setSavePath`**
    (whole-torrent relocation — see below).
 2. **Thin bridges still open**: `torrents/setComment`, web-seed mutation

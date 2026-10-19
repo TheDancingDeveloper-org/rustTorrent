@@ -71,6 +71,7 @@ mod read_buf;
 pub mod rss;
 mod session;
 mod session_persistence;
+pub use session_persistence::TorrentRateLimits;
 pub mod session_stats;
 pub mod spawn_utils;
 pub mod tag;

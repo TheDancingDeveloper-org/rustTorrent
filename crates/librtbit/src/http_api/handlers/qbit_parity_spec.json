@@ -696,7 +696,7 @@
       "endpoint": "torrents/downloadLimit",
       "method": "GET",
       "status": "partial",
-      "notes": "Per-torrent limit persisted on the torrent and enforced while live (resets are avoided across pause/unpause).",
+      "notes": "Per-torrent token bucket layered under the session limiter, enforced on the peer read/write path while live, kept across pause/unpause and saved in session state, so it survives a restart. 0 or -1 clears the limit.",
       "response": {
         "content": "json",
         "schema": {
@@ -785,7 +785,7 @@
       "endpoint": "torrents/info",
       "method": "GET",
       "status": "partial",
-      "notes": "Core fields real; state uses 2.11 stoppedDL/stoppedUP; filter accepts 2.11 stopped/running and legacy paused/resumed. tags are real and the tag filter treats an empty value as untagged. priority is the 1-based queue position of unfinished torrents while queueing is on (0 otherwise); queued and force-started torrents report queuedDL/queuedUP and forcedDL/forcedUP. Several fields stubbed (limits, magnet_uri).",
+      "notes": "Core fields real; state uses 2.11 stoppedDL/stoppedUP; filter accepts 2.11 stopped/running and legacy paused/resumed. tags are real and the tag filter treats an empty value as untagged. priority is the 1-based queue position of unfinished torrents while queueing is on (0 otherwise); queued and force-started torrents report queuedDL/queuedUP and forcedDL/forcedUP. dl_limit/up_limit report the per-torrent limits (-1 unlimited). Several fields stubbed (magnet_uri).",
       "response": {
         "content": "json",
         "schema": [
@@ -907,7 +907,7 @@
       "endpoint": "torrents/properties",
       "method": "GET",
       "status": "partial",
-      "notes": "Some fields stubbed (creation_date, comment, wasted, reannounce).",
+      "notes": "dl_limit/up_limit report the per-torrent limits (-1 unlimited). Some fields stubbed (creation_date, comment, wasted, reannounce).",
       "response": {
         "content": "json",
         "schema": {
@@ -1060,7 +1060,7 @@
       "endpoint": "torrents/setDownloadLimit",
       "method": "POST",
       "status": "partial",
-      "notes": "Per-torrent limit persisted on the torrent and enforced while live (resets are avoided across pause/unpause).",
+      "notes": "Per-torrent token bucket layered under the session limiter, enforced on the peer read/write path while live, kept across pause/unpause and saved in session state, so it survives a restart. 0 or -1 clears the limit.",
       "response": {
         "content": "text"
       }
@@ -1130,7 +1130,7 @@
       "endpoint": "torrents/setUploadLimit",
       "method": "POST",
       "status": "partial",
-      "notes": "Per-torrent limit persisted on the torrent and enforced while live (resets are avoided across pause/unpause).",
+      "notes": "Per-torrent token bucket layered under the session limiter, enforced on the peer read/write path while live, kept across pause/unpause and saved in session state, so it survives a restart. 0 or -1 clears the limit.",
       "response": {
         "content": "text"
       }
@@ -1209,7 +1209,7 @@
       "endpoint": "torrents/uploadLimit",
       "method": "GET",
       "status": "partial",
-      "notes": "Per-torrent limit persisted on the torrent and enforced while live (resets are avoided across pause/unpause).",
+      "notes": "Per-torrent token bucket layered under the session limiter, enforced on the peer read/write path while live, kept across pause/unpause and saved in session state, so it survives a restart. 0 or -1 clears the limit.",
       "response": {
         "content": "json",
         "schema": {

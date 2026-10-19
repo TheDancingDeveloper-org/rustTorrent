@@ -85,6 +85,35 @@ pub struct SerializedTorrent {
     /// state, which falls back to the session setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     part_files: Option<bool>,
+    /// Per-torrent speed limits. Absent in older state, which means unlimited.
+    #[serde(default, skip_serializing_if = "TorrentRateLimits::is_unlimited")]
+    rate_limits: TorrentRateLimits,
+}
+
+/// The per-torrent speed limits kept in session state. `None` is unlimited.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "swagger", derive(utoipa::ToSchema))]
+pub struct TorrentRateLimits {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "swagger", schema(value_type = Option<u32>))]
+    pub download_bps: Option<std::num::NonZeroU32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "swagger", schema(value_type = Option<u32>))]
+    pub upload_bps: Option<std::num::NonZeroU32>,
+}
+
+impl TorrentRateLimits {
+    pub fn is_unlimited(&self) -> bool {
+        self.download_bps.is_none() && self.upload_bps.is_none()
+    }
+
+    pub(crate) fn of(torrent: &ManagedTorrentHandle) -> Self {
+        let config = torrent.rate_limits();
+        Self {
+            download_bps: config.download_bps,
+            upload_bps: config.upload_bps,
+        }
+    }
 }
 
 fn is_zero(v: &u64) -> bool {
@@ -163,6 +192,11 @@ impl SerializedTorrent {
             added_on: self.added_on,
             completion_on: self.completion_on,
             trackers: Some(trackers),
+            ratelimits: crate::limits::LimitsConfig {
+                download_bps: self.rate_limits.download_bps,
+                upload_bps: self.rate_limits.upload_bps,
+                ..Default::default()
+            },
             ..Default::default()
         };
 

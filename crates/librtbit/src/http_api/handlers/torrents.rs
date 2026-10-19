@@ -683,6 +683,25 @@ pub async fn h_set_torrent_category(
         .map(axum::Json)
 }
 
+pub async fn h_get_torrent_rate_limits(
+    State(state): State<ApiState>,
+    Path(idx): Path<TorrentIdOrHash>,
+) -> Result<impl IntoResponse> {
+    state.api.api_torrent_rate_limits(idx).map(axum::Json)
+}
+
+pub async fn h_set_torrent_rate_limits(
+    State(state): State<ApiState>,
+    Path(idx): Path<TorrentIdOrHash>,
+    axum::Json(limits): axum::Json<crate::session_persistence::TorrentRateLimits>,
+) -> Result<impl IntoResponse> {
+    state
+        .api
+        .api_set_torrent_rate_limits(idx, limits)
+        .await
+        .map(axum::Json)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
