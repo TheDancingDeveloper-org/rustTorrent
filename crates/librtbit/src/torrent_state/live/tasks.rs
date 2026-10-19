@@ -253,6 +253,17 @@ impl TorrentStateLive {
                 continue;
             }
 
+            if session.is_peer_banned(addr.ip()) {
+                session
+                    .stats
+                    .counters
+                    .blocked_outgoing
+                    .fetch_add(1, Ordering::Relaxed);
+                crate::log_ring::global().push_peer(addr.ip(), true, "banned peer (outgoing)");
+                debug!(?addr, "blocked outgoing connection (banned peer)");
+                continue;
+            }
+
             let permit = state.peer_semaphore.clone().acquire_owned().await?;
             state.spawn(
                 debug_span!(parent: state.shared.span.clone(), "manage_peer", peer = ?addr),

@@ -1616,3 +1616,87 @@ async fn bridge_endpoints_through_compat_router() {
         StatusCode::BAD_REQUEST
     );
 }
+
+#[tokio::test]
+async fn ban_peers_and_logs_through_compat_router() {
+    let (router, session, _output) = make_router().await;
+
+    let banned = post_form(
+        &router,
+        "/transfer/banPeers",
+        &[("peers", "10.9.8.7:6881|[2001:db8::1]:51413|bogus")],
+    )
+    .await;
+    assert_eq!(banned.status, StatusCode::OK);
+    assert!(session.is_peer_banned("10.9.8.7".parse().unwrap()));
+    assert!(session.is_peer_banned("2001:db8::1".parse().unwrap()));
+    // IPv4-mapped IPv6 (dual-stack listeners) matches the IPv4 ban.
+    assert!(session.is_peer_banned("::ffff:10.9.8.7".parse().unwrap()));
+    assert!(!session.is_peer_banned("10.9.8.6".parse().unwrap()));
+    assert_eq!(
+        post_form(&router, "/transfer/banPeers", &[("peers", "")])
+            .await
+            .status,
+        StatusCode::BAD_REQUEST
+    );
+
+    let peers = get(&router, "/log/peers").await.json();
+    let entry = peers
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["ip"] == "10.9.8.7")
+        .expect("ban recorded in log/peers");
+    assert_eq!(entry["blocked"], true);
+    let id = entry["id"].as_i64().unwrap();
+    let newer = get(&router, &format!("/log/peers?last_known_id={id}"))
+        .await
+        .json();
+    assert!(
+        newer
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["id"].as_i64().unwrap() > id)
+    );
+
+    // The ring is process-wide; find our own entries by message.
+    let ring = crate::log_ring::global();
+    ring.push(
+        crate::log_ring::LogSeverity::Warning,
+        "wi22-probe-warning".into(),
+    );
+    ring.push(
+        crate::log_ring::LogSeverity::Normal,
+        "wi22-probe-normal".into(),
+    );
+    let messages = |v: &Value| -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["message"].as_str().unwrap().to_owned())
+            .filter(|m| m.starts_with("wi22-probe"))
+            .collect()
+    };
+    let all = get(&router, "/log/main").await.json();
+    assert_eq!(
+        messages(&all),
+        vec!["wi22-probe-warning", "wi22-probe-normal"]
+    );
+    let warnings_only = get(&router, "/log/main?normal=false&info=false&critical=false")
+        .await
+        .json();
+    assert_eq!(messages(&warnings_only), vec!["wi22-probe-warning"]);
+    let warn_id = all
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["message"] == "wi22-probe-warning")
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let after = get(&router, &format!("/log/main?last_known_id={warn_id}"))
+        .await
+        .json();
+    assert_eq!(messages(&after), vec!["wi22-probe-normal"]);
+}

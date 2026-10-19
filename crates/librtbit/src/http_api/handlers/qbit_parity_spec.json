@@ -194,13 +194,37 @@
     {
       "endpoint": "log/main",
       "method": "GET",
-      "status": "missing",
-      "notes": "No persistent log ring buffer; native API streams logs instead."
+      "status": "full",
+      "notes": "Bounded in-memory ring (last 1000 info-and-above events, process lifetime). ERROR->critical, WARN->warning, INFO->normal, DEBUG/TRACE->info.",
+      "response": {
+        "content": "json",
+        "schema": [
+          {
+            "id": "integer",
+            "message": "string",
+            "timestamp": "integer",
+            "type": "integer"
+          }
+        ]
+      }
     },
     {
       "endpoint": "log/peers",
       "method": "GET",
-      "status": "missing"
+      "status": "partial",
+      "notes": "Records manual bans and connections refused for banned IPs; blocklist/allowlist rejections are not logged.",
+      "response": {
+        "content": "json",
+        "schema": [
+          {
+            "id": "integer",
+            "ip": "string",
+            "timestamp": "integer",
+            "blocked": "boolean",
+            "reason": "string"
+          }
+        ]
+      }
     },
     {
       "endpoint": "rss/addFeed",
@@ -1242,7 +1266,11 @@
     {
       "endpoint": "transfer/banPeers",
       "method": "POST",
-      "status": "missing"
+      "status": "partial",
+      "notes": "Session-level IP ban consulted on incoming and outgoing connects; not persisted across restarts and already-connected peers are not dropped.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "transfer/downloadLimit",
