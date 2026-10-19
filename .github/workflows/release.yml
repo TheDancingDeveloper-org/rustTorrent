@@ -91,6 +91,16 @@ jobs:
           cargo vendor --locked vendor > "$vendor_stage/.cargo/config.toml"
           mv vendor "$vendor_stage/vendor"
           tar --owner=0 --group=0 --numeric-owner -C "$vendor_stage" -cJf "release-artifacts/rtbit-$tag-vendor.tar.xz" .
+          # CycloneDX SBOM of the rtbit crate graph, built with the release
+          # features. Its rtbit-* name puts it under SHA256SUMS, the
+          # provenance attestation and the cosign signature.
+          cargo install --locked cargo-cyclonedx --version 0.5.7 --root "$RUNNER_TEMP/cyclonedx"
+          "$RUNNER_TEMP/cyclonedx/bin/cargo-cyclonedx" cyclonedx \
+            --manifest-path crates/rtbit/Cargo.toml \
+            --no-default-features --features default-tls \
+            --format json --spec-version 1.5 \
+            --override-filename rtbit-sbom
+          mv crates/rtbit/rtbit-sbom.json "release-artifacts/rtbit-$tag-sbom.cdx.json"
           (cd release-artifacts && sha256sum rtbit-*) > "release-artifacts/SHA256SUMS-$tag.txt"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
