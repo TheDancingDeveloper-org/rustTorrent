@@ -20,7 +20,7 @@ services:
       exec /init'
 
   rtbit:
-    image: ${RTBIT_IMAGE:-ausagentsmith/rusttorrent:latest}
+    image: ${RTBIT_IMAGE:-ghcr.io/thedancingdeveloper-org/rusttorrent:staging}
     environment:
       RTBIT_UPNP_SERVER_ENABLE: "false"
       RTBIT_HTTP_API_LISTEN_ADDR: "0.0.0.0:3030"
