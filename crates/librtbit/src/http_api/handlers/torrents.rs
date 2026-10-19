@@ -661,7 +661,7 @@ pub async fn h_create_torrent(
     let create_opts = CreateTorrentOptions {
         name: opts.name.as_deref(),
         trackers: opts.trackers,
-        piece_length: None,
+        ..Default::default()
     };
 
     let (torrent, handle) = state
