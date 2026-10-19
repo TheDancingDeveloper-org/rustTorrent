@@ -1,0 +1,54 @@
+# Differential harness stack: a real qBittorrent (reference) next to rustTorrent
+# (candidate). Both are driven by scripts/qbit-diff/qbit_diff.py; see
+# docs/TESTING.md. Not run per-PR (image pulls); the nightly workflow uses it.
+services:
+  qbittorrent:
+    image: ${QBIT_IMAGE:-lscr.io/linuxserver/qbittorrent:5.2.4}
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      WEBUI_PORT: "8080"
+    ports:
+      - "${QBIT_PORT:-18080}:8080"
+    configs:
+      - source: qbittorrent-conf
+        target: /defaults-diff/qBittorrent.conf
+    # Copied rather than used in place: qBittorrent rewrites its config.
+    entrypoint: >-
+      sh -c 'mkdir -p /config/qBittorrent &&
+      cp -n /defaults-diff/qBittorrent.conf /config/qBittorrent/ &&
+      exec /init'
+
+  rtbit:
+    image: ${RTBIT_IMAGE:-ausagentsmith/rusttorrent:latest}
+    environment:
+      RTBIT_UPNP_SERVER_ENABLE: "false"
+      RTBIT_HTTP_API_LISTEN_ADDR: "0.0.0.0:3030"
+      RTBIT_HTTP_BASIC_AUTH_USERPASS: "admin:adminadmin"
+      RTBIT_DHT_DISABLE: "true"
+      RTBIT_DOWNLOAD_FOLDER: "/home/rtbit/downloads"
+    ports:
+      - "${RTBIT_PORT:-13030}:3030"
+
+configs:
+  # Auth is bypassed for every subnet so the harness needs no temporary
+  # password; queueing, DHT, LSD and PeX are off to keep the run hermetic.
+  qbittorrent-conf:
+    content: |
+      [LegalNotice]
+      Accepted=true
+
+      [BitTorrent]
+      Session\DefaultSavePath=/downloads
+      Session\QueueingSystemEnabled=false
+      Session\DHTEnabled=false
+      Session\LSDEnabled=false
+      Session\PeXEnabled=false
+
+      [Preferences]
+      WebUI\Port=8080
+      WebUI\AuthSubnetWhitelistEnabled=true
+      WebUI\AuthSubnetWhitelist=0.0.0.0/0
+      WebUI\LocalHostAuth=false
+      WebUI\HostHeaderValidation=false
+      WebUI\CSRFProtection=false

@@ -10,6 +10,9 @@ services:
     environment:
       RTBIT_UPNP_SERVER_ENABLE: "false"
       RTBIT_HTTP_API_LISTEN_ADDR: "0.0.0.0:3030"
+      # Fixed credentials so Sonarr (and tests/sonarr-e2e/smoke.py) can log in
+      # without the first-run setup flow.
+      RTBIT_HTTP_BASIC_AUTH_USERPASS: "${RTBIT_USERPASS:-admin:adminadmin}"
       RTBIT_LISTEN_PORT: "4241"
       RTBIT_FASTRESUME: "true"
       RTBIT_DOWNLOAD_FOLDER: "/home/rtbit/downloads"
@@ -20,7 +23,9 @@ services:
       - ${RTBIT_DOWNLOADS:-./data/rtbit/downloads}:/home/rtbit/downloads
       - ${RTBIT_COMPLETED:-./data/rtbit/completed}:/home/rtbit/completed
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3030/ || exit 1"]
+      # Any HTTP answer means the API is up (older images lack /healthz, and
+      # other routes sit behind auth).
+      test: ["CMD-SHELL", "wget -S -O /dev/null http://127.0.0.1:3030/healthz 2>&1 | grep -q 'HTTP/'"]
       interval: 5s
       timeout: 5s
       retries: 30
