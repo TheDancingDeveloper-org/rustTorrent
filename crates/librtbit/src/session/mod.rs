@@ -7,7 +7,9 @@ mod types;
 
 pub use on_complete::{CompletedTorrent, OnCompleteHook};
 pub(crate) use scheduler::PolicyFlags;
+pub use scheduler::QueueMove;
 pub use scheduler::ShareLimits;
+use scheduler::encode_limit;
 
 /// How often a running session saves torrent state when no interval is configured.
 const PERSIST_INTERVAL: Duration = Duration::from_secs(60);
@@ -435,6 +437,8 @@ impl Session {
 
             let mut resolved_output_folder = default_output_folder;
             let mut resolved_completed_folder = opts.completed_folder.clone();
+            let mut max_active_downloads = 0;
+            let mut max_active_seeds = 0;
             if let Some(p) = persistence.as_ref() {
                 match p.load_session_settings().await {
                     Ok(settings) => {
@@ -444,6 +448,8 @@ impl Session {
                         if resolved_completed_folder.is_none() {
                             resolved_completed_folder = settings.completed_folder;
                         }
+                        max_active_downloads = encode_limit(settings.max_active_downloads);
+                        max_active_seeds = encode_limit(settings.max_active_seeds);
                     }
                     Err(e) => warn!("error loading session settings from persistence: {e:#}"),
                 }
@@ -516,8 +522,8 @@ impl Session {
                 tag_manager,
                 completed_folder: RwLock::new(resolved_completed_folder),
                 on_complete: RwLock::new(OnCompleteHook::default()),
-                max_active_downloads: AtomicUsize::new(0),
-                max_active_seeds: AtomicUsize::new(0),
+                max_active_downloads: AtomicUsize::new(max_active_downloads),
+                max_active_seeds: AtomicUsize::new(max_active_seeds),
                 min_free_disk_space: std::sync::atomic::AtomicU64::new(0),
                 use_part_files: std::sync::atomic::AtomicBool::new(false),
                 alt_speed: Default::default(),
@@ -1048,6 +1054,8 @@ impl Session {
                 cancellation_token: parking_lot::Mutex::new(self.cancellation_token.child_token()),
                 share_limits: RwLock::new(ShareLimits::default()),
                 queued: std::sync::atomic::AtomicBool::new(false),
+                queue_position: std::sync::atomic::AtomicI64::new(id as i64),
+                force_start: std::sync::atomic::AtomicBool::new(false),
                 held_for_disk: std::sync::atomic::AtomicBool::new(false),
                 share_paused: std::sync::atomic::AtomicBool::new(false),
                 uploaded_bytes_base: std::sync::atomic::AtomicU64::new(0),
@@ -1241,6 +1249,10 @@ impl Session {
         // A user pause takes the torrent out of the queue and off the disk guard's
         // hands; it stays paused until the user resumes it.
         PolicyFlags::default().store(handle.shared());
+        handle
+            .shared()
+            .force_start
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         handle.pause()?;
         self.try_update_persistence_metadata(handle).await;
         Ok(())
@@ -1389,6 +1401,8 @@ impl Session {
             .store_session_settings(&SessionSettings {
                 output_folder: Some(self.output_folder()),
                 completed_folder: self.completed_folder(),
+                max_active_downloads: self.max_active_downloads(),
+                max_active_seeds: self.max_active_seeds(),
             })
             .await
     }

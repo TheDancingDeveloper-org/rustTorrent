@@ -137,33 +137,87 @@ pub(crate) struct QueuePlan {
     pub promote: Vec<TorrentId>,
 }
 
+/// A torrent's place in a queue: its queue position, then its id to break ties.
+pub(crate) type QueueKey = (i64, TorrentId);
+
 /// Decide which torrents to run given a limit.
 ///
-/// The oldest torrents (lowest id) keep their slots. Running torrents beyond
-/// the limit are demoted, and waiting torrents fill whatever slots remain in
-/// id order. `limit == None` means unlimited: nothing is demoted and every
-/// waiting torrent is promoted.
+/// The torrents at the front of the queue (lowest position) hold the slots.
+/// When the queue is full, a waiting torrent ahead of a running one takes its
+/// slot, so moving a torrent up the queue starts it. `limit == None` means
+/// unlimited: nothing is demoted and every waiting torrent is promoted.
 pub(crate) fn plan_queue(
-    running: &[TorrentId],
-    waiting: &[TorrentId],
+    running: &[QueueKey],
+    waiting: &[QueueKey],
     limit: Option<usize>,
 ) -> QueuePlan {
-    let mut running = running.to_vec();
-    running.sort_unstable();
-    let mut waiting = waiting.to_vec();
-    waiting.sort_unstable();
-
     let Some(limit) = limit else {
+        let mut waiting = waiting.to_vec();
+        waiting.sort_unstable();
         return QueuePlan {
             demote: Vec::new(),
-            promote: waiting,
+            promote: waiting.into_iter().map(|(_, id)| id).collect(),
         };
     };
 
-    let demote = running.split_off(limit.min(running.len()));
-    let free_slots = limit - running.len();
-    let promote = waiting.into_iter().take(free_slots).collect();
-    QueuePlan { demote, promote }
+    let mut all: Vec<(QueueKey, bool)> = running
+        .iter()
+        .map(|&k| (k, true))
+        .chain(waiting.iter().map(|&k| (k, false)))
+        .collect();
+    all.sort_unstable();
+    let mut plan = QueuePlan::default();
+    for (rank, ((_, id), is_running)) in all.into_iter().enumerate() {
+        match (rank < limit, is_running) {
+            (true, false) => plan.promote.push(id),
+            (false, true) => plan.demote.push(id),
+            _ => {}
+        }
+    }
+    plan
+}
+
+/// A move within the queue, as the WebUI API's priority endpoints request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueueMove {
+    Top,
+    Bottom,
+    Up,
+    Down,
+}
+
+/// Apply `mv` to the torrents in `selected` within `order` (every torrent's
+/// id, front of the queue first). Returns the new order. Selected torrents
+/// keep their relative order; `Up`/`Down` move each one past one neighbour
+/// that is not selected.
+pub(crate) fn reorder_queue(
+    order: &[TorrentId],
+    selected: &std::collections::HashSet<TorrentId>,
+    mv: QueueMove,
+) -> Vec<TorrentId> {
+    let (picked, rest): (Vec<_>, Vec<_>) = order.iter().partition(|id| selected.contains(id));
+    match mv {
+        QueueMove::Top => picked.into_iter().chain(rest).collect(),
+        QueueMove::Bottom => rest.into_iter().chain(picked).collect(),
+        QueueMove::Up => {
+            let mut v = order.to_vec();
+            for i in 1..v.len() {
+                if selected.contains(&v[i]) && !selected.contains(&v[i - 1]) {
+                    v.swap(i, i - 1);
+                }
+            }
+            v
+        }
+        QueueMove::Down => {
+            let mut v = order.to_vec();
+            for i in (0..v.len().saturating_sub(1)).rev() {
+                if selected.contains(&v[i]) && !selected.contains(&v[i + 1]) {
+                    v.swap(i, i + 1);
+                }
+            }
+            v
+        }
+    }
 }
 
 /// What the low-disk guard should do for a download.
@@ -249,6 +303,68 @@ impl Session {
             .store(encode_limit(limit), Ordering::Relaxed);
     }
 
+    /// Set both queue limits and save them with the session settings.
+    pub async fn set_queue_limits(
+        &self,
+        max_active_downloads: Option<usize>,
+        max_active_seeds: Option<usize>,
+    ) -> anyhow::Result<()> {
+        self.set_max_active_downloads(max_active_downloads);
+        self.set_max_active_seeds(max_active_seeds);
+        self.persist_session_settings().await
+    }
+
+    /// True when either queue limit is set.
+    pub fn queueing_enabled(&self) -> bool {
+        self.max_active_downloads().is_some() || self.max_active_seeds().is_some()
+    }
+
+    /// Every torrent id, front of the queue first.
+    pub fn queue_order(&self) -> Vec<TorrentId> {
+        let mut keyed: Vec<QueueKey> =
+            self.with_torrents(|it| it.map(|(id, h)| (h.queue_position(), id)).collect());
+        keyed.sort_unstable();
+        keyed.into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// Move torrents within the queue. Positions are renumbered densely, and
+    /// changed ones are saved. The next policy pass applies the new order.
+    pub async fn move_in_queue(&self, ids: &[TorrentId], mv: QueueMove) {
+        let selected = ids.iter().copied().collect();
+        let order = reorder_queue(&self.queue_order(), &selected, mv);
+        for (position, id) in order.into_iter().enumerate() {
+            let Some(handle) = self.get(id.into()) else {
+                continue;
+            };
+            let previous = handle
+                .shared()
+                .queue_position
+                .swap(position as i64, Ordering::Relaxed);
+            if previous != position as i64 {
+                self.try_update_persistence_metadata(&handle).await;
+            }
+        }
+    }
+
+    /// Turn force-start on or off. Turning it on starts the torrent at once,
+    /// outside the queue limits; turning it off hands it back to the queue.
+    pub async fn set_force_start(
+        self: &Arc<Self>,
+        handle: &ManagedTorrentHandle,
+        enabled: bool,
+    ) -> anyhow::Result<()> {
+        handle
+            .shared()
+            .force_start
+            .store(enabled, Ordering::Relaxed);
+        if enabled && (handle.is_paused() || handle.is_queued()) {
+            // unpause clears the policy flags and saves the torrent.
+            return self.unpause(handle).await;
+        }
+        self.try_update_persistence_metadata(handle).await;
+        Ok(())
+    }
+
     /// Free-space threshold in bytes below which downloads are held. `None`
     /// disables the guard.
     pub fn min_free_disk_space(&self) -> Option<u64> {
@@ -289,6 +405,9 @@ impl Session {
             return;
         }
         PolicyFlags::for_pause(reason).store(handle.shared());
+        if reason == PolicyPause::ShareLimit {
+            handle.shared().force_start.store(false, Ordering::Relaxed);
+        }
         self.try_update_persistence_metadata(handle).await;
     }
 
@@ -352,6 +471,11 @@ impl Session {
                 continue;
             }
 
+            // A force-started torrent runs outside the queue and takes no slot.
+            if handle.is_force_started() {
+                continue;
+            }
+
             let queued = handle.shared().queued.load(Ordering::Relaxed);
             let is_seed = stats.finished;
             let is_running = !handle.is_paused() && is_live_or_init;
@@ -362,7 +486,7 @@ impl Session {
                 (false, false, true) => &mut running_dl,
                 _ => continue,
             };
-            bucket.push(id);
+            bucket.push((handle.queue_position(), id));
             if is_seed {
                 seeds_by_id.insert(id, handle.clone());
             } else {
@@ -475,38 +599,77 @@ mod tests {
         assert_eq!(share_limit_reached(&l, 0, 100, 0), None);
     }
 
+    /// Keys whose position is the id, as for torrents never moved in the queue.
+    fn keys(ids: &[TorrentId]) -> Vec<QueueKey> {
+        ids.iter().map(|&id| (id as i64, id)).collect()
+    }
+
     #[test]
     fn plan_queue_unlimited_promotes_everything_waiting() {
-        let plan = plan_queue(&[3, 1], &[5, 4], None);
+        let plan = plan_queue(&keys(&[3, 1]), &keys(&[5, 4]), None);
         assert_eq!(plan.demote, Vec::<TorrentId>::new());
         assert_eq!(plan.promote, vec![4, 5]);
     }
 
     #[test]
     fn plan_queue_keeps_oldest_running_and_demotes_newest() {
-        let plan = plan_queue(&[9, 2, 5], &[], Some(2));
+        let plan = plan_queue(&keys(&[9, 2, 5]), &[], Some(2));
         assert_eq!(plan.demote, vec![9]);
         assert!(plan.promote.is_empty());
     }
 
     #[test]
     fn plan_queue_fills_free_slots_in_id_order() {
-        let plan = plan_queue(&[1], &[7, 3, 8], Some(3));
+        let plan = plan_queue(&keys(&[1]), &keys(&[7, 3, 8]), Some(3));
         assert_eq!(plan.demote, Vec::<TorrentId>::new());
         assert_eq!(plan.promote, vec![3, 7]);
     }
 
     #[test]
     fn plan_queue_full_leaves_waiting_alone() {
-        let plan = plan_queue(&[1, 2], &[3], Some(2));
+        let plan = plan_queue(&keys(&[1, 2]), &keys(&[3]), Some(2));
         assert_eq!(plan, QueuePlan::default());
     }
 
     #[test]
     fn plan_queue_zero_limit_holds_everything() {
-        let plan = plan_queue(&[1], &[2], Some(0));
+        let plan = plan_queue(&keys(&[1]), &keys(&[2]), Some(0));
         assert_eq!(plan.demote, vec![1]);
         assert!(plan.promote.is_empty());
+    }
+
+    #[test]
+    fn plan_queue_follows_positions_not_ids() {
+        // Torrent 9 was moved to the front; it takes the slot from torrent 1.
+        let plan = plan_queue(&[(1, 1)], &[(-1, 9)], Some(1));
+        assert_eq!(plan.promote, vec![9]);
+        assert_eq!(plan.demote, vec![1]);
+    }
+
+    #[test]
+    fn reorder_queue_moves() {
+        let order = [1, 2, 3, 4, 5];
+        let sel = |ids: &[TorrentId]| ids.iter().copied().collect();
+        assert_eq!(
+            reorder_queue(&order, &sel(&[4, 2]), QueueMove::Top),
+            vec![2, 4, 1, 3, 5]
+        );
+        assert_eq!(
+            reorder_queue(&order, &sel(&[1, 3]), QueueMove::Bottom),
+            vec![2, 4, 5, 1, 3]
+        );
+        assert_eq!(
+            reorder_queue(&order, &sel(&[1, 3]), QueueMove::Up),
+            vec![1, 3, 2, 4, 5]
+        );
+        assert_eq!(
+            reorder_queue(&order, &sel(&[3, 5]), QueueMove::Down),
+            vec![1, 2, 4, 3, 5]
+        );
+        assert_eq!(
+            reorder_queue(&order, &sel(&[4, 5]), QueueMove::Up),
+            vec![1, 2, 4, 5, 3]
+        );
     }
 
     #[test]

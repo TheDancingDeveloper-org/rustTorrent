@@ -75,6 +75,8 @@ impl TorrentsTableRecord {
                 queued: self.queued,
                 held_for_disk: self.held_for_disk,
                 share_paused: self.share_paused,
+                queue_position: None,
+                force_start: false,
                 share_limits: ShareLimits {
                     max_ratio: self.share_max_ratio,
                     max_seeding_time: self

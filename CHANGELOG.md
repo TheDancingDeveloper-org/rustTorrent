@@ -24,6 +24,15 @@ upgrade notes in each release describe what to back up and check.
   `deleteTags`, `addTags`, `removeTags`, `setTags`), the `tags` field and `tag`
   filter of `torrents/info`, and `torrents/add`'s `tags` field now use them. A
   legacy `qbit-tags.json` is imported once at startup.
+- Torrent queue ordering and force-start: each torrent has a persisted queue
+  position that the policy pass follows when it fills the active-download and
+  active-seed slots, and force-started torrents run outside the limits. The
+  queue limits are saved with the session settings. WebUI API v2 compat:
+  `topPrio`/`bottomPrio`/`increasePrio`/`decreasePrio` move torrents in the
+  queue, `setForceStart` sets force-start, `torrents/info` reports `priority`,
+  `force_start` and the `queuedDL`/`queuedUP`/`forcedDL`/`forcedUP` states, and
+  `app/preferences` reads and sets `queueing_enabled`, `max_active_downloads`
+  and `max_active_uploads`.
 - WebUI API v2 compat conformance tests: every routed endpoint in
   `qbit_parity_spec.json` declares a response contract that is validated
   against a live torrent, plus an add/stop/start/recheck/setCategory/delete

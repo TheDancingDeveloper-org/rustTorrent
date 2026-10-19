@@ -660,3 +660,95 @@ async fn share_limits_saved_on_set_survive_drop_without_stop() -> anyhow::Result
     session.stop().await;
     Ok(())
 }
+
+/// Moving a waiting download to the top of the queue gives it the slot, and
+/// the queue order survives a restart.
+#[tokio::test(flavor = "multi_thread")]
+async fn queue_moves_reassign_slots_and_persist() -> anyhow::Result<()> {
+    setup_test_logging();
+
+    let root = TempDir::with_prefix("policy_order_out")?;
+    let persist = TempDir::with_prefix("policy_order_state")?;
+    let session = create_session(root.path(), Some(persist.path())).await?;
+    let first = add_download(
+        &session,
+        random_torrent("policy_order_a").await?,
+        &root.path().join("first"),
+    )
+    .await?;
+    let second = add_download(
+        &session,
+        random_torrent("policy_order_b").await?,
+        &root.path().join("second"),
+    )
+    .await?;
+    let (first_id, second_id) = (first.id(), second.id());
+
+    session.set_queue_limits(Some(1), None).await?;
+    session.policy_pass().await;
+    assert!(second.is_queued());
+
+    session
+        .move_in_queue(&[second_id], crate::session::QueueMove::Top)
+        .await;
+    assert_eq!(session.queue_order(), vec![second_id, first_id]);
+    session.policy_pass().await;
+    assert!(!second.is_paused(), "the moved download takes the slot");
+    assert!(
+        first.is_queued(),
+        "the other download goes back to the queue"
+    );
+
+    session.stop().await;
+    drop(session);
+
+    let session = create_session(root.path(), Some(persist.path())).await?;
+    assert_eq!(session.max_active_downloads(), Some(1), "limit persisted");
+    assert_eq!(session.queue_order(), vec![second_id, first_id]);
+    assert!(handle_by_id(&session, first_id)?.is_queued());
+
+    session.stop().await;
+    Ok(())
+}
+
+/// A force-started download runs outside the queue limit and takes no slot;
+/// a user pause clears force-start.
+#[tokio::test(flavor = "multi_thread")]
+async fn force_start_bypasses_queue_limit() -> anyhow::Result<()> {
+    setup_test_logging();
+
+    let root = TempDir::with_prefix("policy_force_out")?;
+    let session = create_session(root.path(), None).await?;
+    let first = add_download(
+        &session,
+        random_torrent("policy_force_a").await?,
+        &root.path().join("first"),
+    )
+    .await?;
+    let second = add_download(
+        &session,
+        random_torrent("policy_force_b").await?,
+        &root.path().join("second"),
+    )
+    .await?;
+
+    session.set_max_active_downloads(Some(1));
+    session.policy_pass().await;
+    assert!(second.is_queued());
+
+    session.set_force_start(&second, true).await?;
+    assert!(second.is_force_started());
+    assert!(!second.is_paused() && !second.is_queued());
+    session.policy_pass().await;
+    assert!(!second.is_paused(), "force-started download is not demoted");
+    assert!(!first.is_paused(), "and it does not take the queued slot");
+
+    session.pause(&second).await?;
+    assert!(
+        !second.is_force_started(),
+        "a user pause clears force-start"
+    );
+
+    session.stop().await;
+    Ok(())
+}

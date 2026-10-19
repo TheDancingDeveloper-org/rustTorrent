@@ -29,7 +29,7 @@ still-`missing` in-scope endpoints.
 |---|---|---|
 | `auth` | 2 / 2 | login (per-client backoff) / logout with SID cookies |
 | `app` | 6 / 10 | version info (5.x line), `defaultSavePath`, minimal preferences (7 descoped) |
-| `torrents` | 46 / 60 | lifecycle, categories, tags (persisted), trackers (add/remove/edit), reannounce, rename (name/file/folder), setLocation/setSavePath, pieces, file prio, per-torrent + share limits, export, webseeds; queue-position endpoints are no-ops |
+| `torrents` | 46 / 60 | lifecycle, categories, tags (persisted), trackers (add/remove/edit), reannounce, rename (name/file/folder), setLocation/setSavePath, pieces, file prio, per-torrent + share limits, export, webseeds; queue positions and force-start |
 | `transfer` | 10 / 13 | info (real session limits) + session rate limits + alt-speed mode + session pause/resume |
 | `sync` | 2 / 2 | `maindata` and `torrentPeers` with rid deltas (changed fields + `*_removed`; full update for rid 0 or an expired rid) |
 | `torrentcreator` | 4 / 4 | task API over the native `create_torrent` (in-memory tasks) |
@@ -69,9 +69,18 @@ of H4, and tag persistence):
   `qbit-tags.json` left by an earlier version is imported once at startup and
   renamed to `qbit-tags.json.migrated`; tags for torrents no longer in the
   session are dropped. The postgres store does not persist tags yet.
-- **Queue and force-start**: `torrents/setForceStart` is routed to resume.
-  `torrents/topPrio`, `bottomPrio`, `increasePrio` and `decreasePrio` succeed as
-  no-ops, since there is no download queue and `queueing_enabled` is `false`.
+- **Queue and force-start**: the session queue keeps a persisted position per
+  torrent, and the policy pass (every 5 s) runs the front of the queue up to
+  `max_active_downloads` / `max_active_uploads` (seeds). `topPrio`,
+  `bottomPrio`, `increasePrio` and `decreasePrio` move torrents in that queue,
+  and `priority` in `torrents/info` is the 1-based position among unfinished
+  torrents (0 when queueing is off, and for seeds). `setForceStart` runs a
+  torrent outside the limits without taking a slot; a stop clears it.
+  Queueing is on while either limit is set: `app/setPreferences` with
+  `queueing_enabled=false` clears both, and turning it on without limits uses
+  qBittorrent's default of 3. There is no combined `max_active_torrents` limit
+  (reported as -1). A newly added torrent starts at once and is moved back to
+  the queue by the next pass if the queue is full.
 - **Errors**: compat handlers return plain-text errors through one helper, with
   lowercase messages. Serde parse details are no longer echoed to clients.
 
@@ -142,11 +151,10 @@ done: `torrents/stop`/`start`, `sync/maindata` (rid deltas) + `sync/torrentPeers
 
 Remaining work, roughly by cost:
 
-1. **Needs a new engine method** (the `will be built` items): a real download
-   queue behind `topPrio` / `bottomPrio` / `increasePrio` / `decreasePrio`
-   (routed as no-ops for now), `setSuperSeeding`, `toggleSequentialDownload`,
-   `setAutoManagement`, `setDownloadPath` (incomplete-file path). Force-start
-   gets its own state once a queue exists (`setForceStart` currently resumes). And the
+1. **Needs a new engine method** (the `will be built` items):
+   `setSuperSeeding`, `toggleSequentialDownload`,
+   `setAutoManagement`, `setDownloadPath` (incomplete-file path). Done since: the
+   download queue and force-start (see "Queue and force-start" above). And the
    **auto-enforcement** half of share limits (`setShareLimits` currently stores
    and reports the limits but does not auto-pause/remove at the threshold — a
    periodic session task is the v2). Done since: per-torrent rate limits
