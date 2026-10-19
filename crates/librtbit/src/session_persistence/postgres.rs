@@ -33,22 +33,25 @@ struct TorrentsTableRecord {
     share_paused: bool,
     share_max_ratio: Option<f64>,
     share_max_seeding_secs: Option<i64>,
+    share_max_inactive_secs: Option<i64>,
     uploaded_bytes: i64,
     part_files: Option<bool>,
 }
 
-/// The four columns for share limits, upload total and `.part` choice, in the
+/// The five columns for share limits, upload total and `.part` choice, in the
 /// order they are bound.
-type RuntimeColumns = (Option<f64>, Option<i64>, i64, Option<bool>);
+type RuntimeColumns = (Option<f64>, Option<i64>, Option<i64>, i64, Option<bool>);
+
+fn duration_secs(d: Option<Duration>) -> anyhow::Result<Option<i64>> {
+    Ok(d.map(|d| i64::try_from(d.as_secs())).transpose()?)
+}
 
 fn runtime_columns(torrent: &ManagedTorrentHandle) -> anyhow::Result<RuntimeColumns> {
     let (_, limits, uploaded, part_files) = runtime_fields(torrent);
     Ok((
         limits.max_ratio,
-        limits
-            .max_seeding_time
-            .map(|d| i64::try_from(d.as_secs()))
-            .transpose()?,
+        duration_secs(limits.max_seeding_time)?,
+        duration_secs(limits.max_inactive_seeding_time)?,
         i64::try_from(uploaded)?,
         part_files,
     ))
@@ -81,6 +84,9 @@ impl TorrentsTableRecord {
                     max_ratio: self.share_max_ratio,
                     max_seeding_time: self
                         .share_max_seeding_secs
+                        .map(|s| Duration::from_secs(s.max(0) as u64)),
+                    max_inactive_seeding_time: self
+                        .share_max_inactive_secs
                         .map(|s| Duration::from_secs(s.max(0) as u64)),
                 },
                 uploaded_bytes: self.uploaded_bytes.max(0) as u64,
@@ -137,6 +143,7 @@ impl PostgresSessionStorage {
         );
         exec!("ALTER TABLE torrents ADD COLUMN IF NOT EXISTS share_max_ratio DOUBLE PRECISION");
         exec!("ALTER TABLE torrents ADD COLUMN IF NOT EXISTS share_max_seeding_secs BIGINT");
+        exec!("ALTER TABLE torrents ADD COLUMN IF NOT EXISTS share_max_inactive_secs BIGINT");
         exec!(
             "ALTER TABLE torrents ADD COLUMN IF NOT EXISTS uploaded_bytes BIGINT NOT NULL DEFAULT 0"
         );
@@ -170,10 +177,15 @@ impl SessionPersistenceStore for PostgresSessionStorage {
             .iter()
             .map(|tracker| tracker.to_string())
             .collect::<Vec<_>>();
-        let (share_max_ratio, share_max_seeding_secs, uploaded_bytes, part_files) =
-            runtime_columns(torrent)?;
-        let q = "INSERT INTO torrents (id, info_hash, torrent_bytes, trackers, output_folder, output_folder_root, only_files, is_paused, share_max_ratio, share_max_seeding_secs, uploaded_bytes, part_files)
-        VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        let (
+            share_max_ratio,
+            share_max_seeding_secs,
+            share_max_inactive_secs,
+            uploaded_bytes,
+            part_files,
+        ) = runtime_columns(torrent)?;
+        let q = "INSERT INTO torrents (id, info_hash, torrent_bytes, trackers, output_folder, output_folder_root, only_files, is_paused, share_max_ratio, share_max_seeding_secs, share_max_inactive_secs, uploaded_bytes, part_files)
+        VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         ON CONFLICT(id) DO NOTHING";
         sqlx::query(q)
             .bind::<i32>(id.try_into()?)
@@ -206,6 +218,8 @@ impl SessionPersistenceStore for PostgresSessionStorage {
             .bind(torrent.is_paused())
             .bind(share_max_ratio)
             .bind(share_max_seeding_secs)
+            .bind(share_max_inactive_secs)
+            .bind(share_max_inactive_secs)
             .bind(uploaded_bytes)
             .bind(part_files)
             .execute(&self.pool)
@@ -247,10 +261,15 @@ impl SessionPersistenceStore for PostgresSessionStorage {
             .map(|tracker| tracker.to_string())
             .collect::<Vec<_>>();
         let (policy, _, _, _) = runtime_fields(torrent);
-        let (share_max_ratio, share_max_seeding_secs, uploaded_bytes, part_files) =
-            runtime_columns(torrent)?;
+        let (
+            share_max_ratio,
+            share_max_seeding_secs,
+            share_max_inactive_secs,
+            uploaded_bytes,
+            part_files,
+        ) = runtime_columns(torrent)?;
         sqlx::query(
-            "UPDATE torrents SET trackers = $1, only_files = $2, is_paused = $3, queued = $4, held_for_disk = $5, share_paused = $6, share_max_ratio = $7, share_max_seeding_secs = $8, uploaded_bytes = $9, part_files = $10 WHERE id = $11",
+            "UPDATE torrents SET trackers = $1, only_files = $2, is_paused = $3, queued = $4, held_for_disk = $5, share_paused = $6, share_max_ratio = $7, share_max_seeding_secs = $8, share_max_inactive_secs = $9, uploaded_bytes = $10, part_files = $11 WHERE id = $12",
         )
         .bind(trackers)
         .bind(torrent.only_files().map(|v| {
@@ -264,6 +283,7 @@ impl SessionPersistenceStore for PostgresSessionStorage {
         .bind(policy.share_paused)
         .bind(share_max_ratio)
         .bind(share_max_seeding_secs)
+        .bind(share_max_inactive_secs)
         .bind(uploaded_bytes)
         .bind(part_files)
         .bind::<i32>(id.try_into()?)

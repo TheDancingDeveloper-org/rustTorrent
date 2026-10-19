@@ -32,7 +32,7 @@ use crate::{
     api::{Api, TorrentIdOrHash},
     create_torrent,
     limits::LimitsConfig,
-    session::QueueMove,
+    session::{QueueMove, ShareLimits},
     spawn_utils::BlockingSpawner,
     stream_connect::ConnectionKind,
     torrent_state::{peer::stats::snapshot::PeerStatsFilter, stats::TorrentStatsState},
@@ -233,37 +233,25 @@ impl QbitTorrentCreator {
     }
 }
 
-/// In-memory per-torrent share limits (max ratio + max seeding minutes). rtbit
-/// does not auto-enforce these; they are stored so the values round-trip and are
-/// surfaced in `torrents/info` for clients that enforce removal themselves
-/// (e.g. Sonarr/Radarr). Not persisted across restarts.
-#[derive(Default)]
-struct QbitShareLimits {
-    limits: RwLock<HashMap<String, (f64, i64)>>,
+/// WebUI API v2 share-limit encoding: `-1` (and `-2`, "use the global
+/// limit", which rtbit leaves disabled) mean no limit.
+fn ratio_from_qbit(raw: f64) -> Option<f64> {
+    (raw >= 0.0).then_some(raw)
 }
 
-impl QbitShareLimits {
-    fn set(&self, hashes: &[String], ratio_limit: f64, seeding_time_limit: i64) {
-        let mut limits = self.limits.write();
-        for hash in hashes {
-            limits.insert(hash.clone(), (ratio_limit, seeding_time_limit));
-        }
-    }
-
-    fn get(&self, hash: &str) -> Option<(f64, i64)> {
-        self.limits.read().get(hash).copied()
-    }
+fn ratio_to_qbit(limit: Option<f64>) -> f64 {
+    limit.unwrap_or(-1.0)
 }
 
-/// Overlay stored share limits onto a torrent info view (reporting only).
-fn apply_share_limits(info: &mut QbitTorrentInfo, store: &QbitShareLimits) {
-    if let Some((ratio_limit, seeding_time_limit)) = store.get(&info.hash) {
-        info.ratio_limit = ratio_limit;
-        info.max_ratio = ratio_limit;
-        let minutes = i32::try_from(seeding_time_limit).unwrap_or(-1);
-        info.seeding_time_limit = minutes;
-        info.max_seeding_time = minutes;
-    }
+/// Minutes on the wire, `Duration` in the session; negative means no limit.
+fn minutes_from_qbit(raw: i64) -> Option<std::time::Duration> {
+    u64::try_from(raw)
+        .ok()
+        .map(|m| std::time::Duration::from_secs(m.saturating_mul(60)))
+}
+
+fn minutes_to_qbit(limit: Option<std::time::Duration>) -> i32 {
+    limit.map_or(-1, |d| i32::try_from(d.as_secs() / 60).unwrap_or(i32::MAX))
 }
 
 fn parse_tags(raw: &str) -> Vec<String> {
@@ -286,7 +274,6 @@ pub(crate) struct QbitState {
     api_state: ApiState,
     sessions: QbitSessions,
     creator: QbitTorrentCreator,
-    share_limits: QbitShareLimits,
     sync: SyncSnapshots,
 }
 
@@ -313,10 +300,12 @@ struct QbitTorrentInfo {
     f_l_piece_prio: bool,
     force_start: bool,
     hash: String,
+    inactive_seeding_time_limit: i32,
     infohash_v1: String,
     infohash_v2: String,
     last_activity: u64,
     magnet_uri: String,
+    max_inactive_seeding_time: i32,
     max_ratio: f64,
     max_seeding_time: i32,
     name: String,
@@ -1037,6 +1026,10 @@ fn build_torrent_info(
     let forced = handle.is_force_started();
     let qbit_state = map_state(stats.state, stats.finished, handle.is_queued(), forced);
     let category = handle.shared().category.read().clone().unwrap_or_default();
+    let share_limits = *handle.shared().share_limits.read();
+    let ratio_limit = ratio_to_qbit(share_limits.max_ratio);
+    let seeding_time_limit = minutes_to_qbit(share_limits.max_seeding_time);
+    let inactive_seeding_time_limit = minutes_to_qbit(share_limits.max_inactive_seeding_time);
 
     let dl_speed = stats
         .live
@@ -1120,6 +1113,7 @@ fn build_torrent_info(
         f_l_piece_prio: false,
         force_start: forced,
         hash: info_hash.clone(),
+        inactive_seeding_time_limit,
         infohash_v1: info_hash,
         infohash_v2: String::new(),
         last_activity: if completion_on > 0 {
@@ -1127,9 +1121,10 @@ fn build_torrent_info(
         } else {
             added_on
         },
+        max_inactive_seeding_time: inactive_seeding_time_limit,
         magnet_uri: String::new(),
-        max_ratio: -1.0,
-        max_seeding_time: -1,
+        max_ratio: ratio_limit,
+        max_seeding_time: seeding_time_limit,
         name,
         num_complete: num_seeds,
         num_incomplete: num_leechs,
@@ -1138,10 +1133,10 @@ fn build_torrent_info(
         priority: 0,
         progress,
         ratio,
-        ratio_limit: -1.0,
+        ratio_limit,
         save_path: output_folder,
         seeding_time,
-        seeding_time_limit: -1,
+        seeding_time_limit,
         seen_complete: if completion_on > 0 {
             i64::try_from(completion_on).unwrap_or(i64::MAX)
         } else {
@@ -1205,7 +1200,6 @@ async fn h_torrents_info(
             let stats = handle.stats();
             let mut info = build_torrent_info(handle, &stats, now);
             info.priority = priorities.get(&handle.id()).copied().unwrap_or(0);
-            apply_share_limits(&mut info, &state.share_limits);
 
             // Filter by hash if specified.
             if let Some(ref hashes) = hash_filter
@@ -2466,24 +2460,14 @@ struct SetShareLimitsForm {
     ratio_limit: f64,
     #[serde(default = "default_seeding_time_limit", alias = "seedingTimeLimit")]
     seeding_time_limit: i64,
+    #[serde(default, alias = "inactiveSeedingTimeLimit")]
+    inactive_seeding_time_limit: Option<i64>,
 }
 
-/// Resolve hash(es) to canonical (lowercase hex) info-hash strings, used as the
-/// key space for the share-limit store. Skips torrents that cannot be resolved.
-fn resolve_info_hashes(api: &Api, hashes_str: &str) -> Vec<String> {
-    resolve_hashes(api, hashes_str)
-        .into_iter()
-        .filter_map(|idx| {
-            api.mgr_handle(idx)
-                .ok()
-                .map(|handle| handle.shared().info_hash.as_string())
-        })
-        .collect()
-}
-
-/// `torrents/setShareLimits` — store per-torrent ratio / seeding-time limits so
-/// they round-trip and appear in `torrents/info`. rtbit does not auto-enforce
-/// them (clients like Sonarr/Radarr apply their own removal policy).
+/// `torrents/setShareLimits` — set per-torrent ratio, seeding-time and
+/// inactive-seeding-time limits. The session's policy pass pauses a seed that
+/// reaches any of them, and the limits are persisted with the torrent. An
+/// omitted `inactiveSeedingTimeLimit` (older clients) keeps the current value.
 async fn h_torrents_set_share_limits(
     State(state): State<Arc<QbitState>>,
     body: Bytes,
@@ -2492,10 +2476,22 @@ async fn h_torrents_set_share_limits(
         Ok(form) => form,
         Err(_) => return "Ok.",
     };
-    let hashes = resolve_info_hashes(&state.api_state.api, &form.hashes);
-    state
-        .share_limits
-        .set(&hashes, form.ratio_limit, form.seeding_time_limit);
+    let api = &state.api_state.api;
+    for idx in resolve_hashes(api, &form.hashes) {
+        let Ok(handle) = api.mgr_handle(idx) else {
+            continue;
+        };
+        let current = api.session().share_limits(&handle);
+        let limits = ShareLimits {
+            max_ratio: ratio_from_qbit(form.ratio_limit),
+            max_seeding_time: minutes_from_qbit(form.seeding_time_limit),
+            max_inactive_seeding_time: match form.inactive_seeding_time_limit {
+                Some(raw) => minutes_from_qbit(raw),
+                None => current.max_inactive_seeding_time,
+            },
+        };
+        api.session().set_share_limits(&handle, limits).await;
+    }
     "Ok."
 }
 
@@ -2750,7 +2746,6 @@ async fn h_sync_maindata(
             let stats = handle.stats();
             let mut info = build_torrent_info(handle, &stats, now);
             info.priority = priorities.get(&handle.id()).copied().unwrap_or(0);
-            apply_share_limits(&mut info, &state.share_limits);
             (info.hash.clone(), info)
         })
         .collect()
@@ -3148,7 +3143,6 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
         api_state: api_state.clone(),
         sessions: QbitSessions::new(),
         creator: QbitTorrentCreator::default(),
-        share_limits: QbitShareLimits::default(),
         sync: SyncSnapshots::default(),
     });
 
@@ -3319,7 +3313,7 @@ mod tests {
     };
 
     use super::{
-        CreatorStatus, QbitSessions, QbitShareLimits, QbitState, QbitTorrentCreator, SyncSnapshots,
+        CreatorStatus, QbitSessions, QbitState, QbitTorrentCreator, SyncSnapshots,
         h_app_preferences, h_app_set_preferences, h_app_version, h_torrentcreator_add_task,
         h_torrents_add_tags, h_torrents_create_tags, h_torrents_delete_tags, h_torrents_info,
         h_torrents_recheck, h_torrents_remove_tags, h_torrents_set_tags, matches_category,
@@ -3363,7 +3357,6 @@ mod tests {
                 api_state,
                 sessions: QbitSessions::new(),
                 creator: QbitTorrentCreator::default(),
-                share_limits: QbitShareLimits::default(),
                 sync: SyncSnapshots::default(),
             }),
             session,
@@ -4193,16 +4186,19 @@ mod tests {
     }
 
     #[test]
-    fn share_limits_store_set_and_get() {
-        let store = super::QbitShareLimits::default();
-        assert_eq!(store.get("h1"), None);
-        store.set(&["h1".to_string(), "h2".to_string()], 2.0, 120);
-        assert_eq!(store.get("h1"), Some((2.0, 120)));
-        assert_eq!(store.get("h2"), Some((2.0, 120)));
-        // Re-setting overwrites, and -1 encodes "no limit".
-        store.set(&["h1".to_string()], -1.0, -1);
-        assert_eq!(store.get("h1"), Some((-1.0, -1)));
-        assert_eq!(store.get("h2"), Some((2.0, 120)));
+    fn share_limit_wire_encoding_round_trips() {
+        use super::{minutes_from_qbit, minutes_to_qbit, ratio_from_qbit, ratio_to_qbit};
+        use std::time::Duration;
+        assert_eq!(ratio_from_qbit(-1.0), None);
+        assert_eq!(ratio_from_qbit(-2.0), None);
+        assert_eq!(ratio_from_qbit(0.0), Some(0.0));
+        assert_eq!(ratio_to_qbit(ratio_from_qbit(1.5)), 1.5);
+        assert_eq!(ratio_to_qbit(None), -1.0);
+        assert_eq!(minutes_from_qbit(-1), None);
+        assert_eq!(minutes_from_qbit(-2), None);
+        assert_eq!(minutes_from_qbit(90), Some(Duration::from_secs(5400)));
+        assert_eq!(minutes_to_qbit(minutes_from_qbit(90)), 90);
+        assert_eq!(minutes_to_qbit(None), -1);
     }
 
     #[test]

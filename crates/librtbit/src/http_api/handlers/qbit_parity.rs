@@ -900,6 +900,125 @@ async fn torrent_lifecycle_through_compat_router() {
     assert!(output.path().join("payload").join("a.bin").exists());
 }
 
+/// `torrents/setShareLimits` reaches the session: the limits show up in
+/// `torrents/info` and the session's own view, and the policy pass stops a
+/// running seed that has reached its ratio.
+#[tokio::test]
+async fn share_limits_through_compat_router_are_enforced() {
+    let spec = parse_spec();
+    let info_contract = spec
+        .endpoints
+        .iter()
+        .find(|ep| ep.endpoint == "torrents/info")
+        .and_then(|ep| ep.response.as_ref())
+        .expect("torrents/info declares a response");
+    let (router, session, output) = make_router().await;
+    let torrent = make_payload_torrent(output.path()).await;
+    let save_path = output.path().to_string_lossy().into_owned();
+
+    let boundary = "qbitShareLimitsBoundary";
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("/torrents/add")
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(axum::body::Body::from(multipart_add_body(
+            boundary,
+            &torrent,
+            &[("savepath", &save_path), ("stopped", "true")],
+        )))
+        .unwrap();
+    assert_eq!(send(&router, request).await.text(), "Ok.");
+    let list = get(&router, "/torrents/info").await.json();
+    let hash = list[0]["hash"].as_str().unwrap().to_owned();
+    assert_eq!(list[0]["ratio_limit"], -1.0);
+    assert_eq!(list[0]["inactive_seeding_time_limit"], -1);
+
+    let set = post_form(
+        &router,
+        "/torrents/setShareLimits",
+        &[
+            ("hashes", hash.as_str()),
+            ("ratioLimit", "2.5"),
+            ("seedingTimeLimit", "120"),
+            ("inactiveSeedingTimeLimit", "30"),
+        ],
+    )
+    .await;
+    assert_eq!(set.text(), "Ok.");
+    let info = wait_for_info(&router, info_contract, &hash, "limited", |t| {
+        t["ratio_limit"] == 2.5
+    })
+    .await;
+    assert_eq!(info["max_ratio"], 2.5);
+    assert_eq!(info["seeding_time_limit"], 120);
+    assert_eq!(info["max_seeding_time"], 120);
+    assert_eq!(info["inactive_seeding_time_limit"], 30);
+    assert_eq!(info["max_inactive_seeding_time"], 30);
+    let handle = session.with_torrents(|it| it.next().map(|(_, h)| h.clone()).unwrap());
+    let limits = session.share_limits(&handle);
+    assert_eq!(limits.max_ratio, Some(2.5));
+    assert_eq!(limits.max_seeding_time, Some(Duration::from_secs(7200)));
+    assert_eq!(
+        limits.max_inactive_seeding_time,
+        Some(Duration::from_secs(1800))
+    );
+
+    // An older client omits inactiveSeedingTimeLimit: that limit is kept, and
+    // -1 / -2 clear the others.
+    let form = [
+        ("hashes", hash.as_str()),
+        ("ratioLimit", "-2"),
+        ("seedingTimeLimit", "-1"),
+    ];
+    assert_eq!(
+        post_form(&router, "/torrents/setShareLimits", &form)
+            .await
+            .text(),
+        "Ok."
+    );
+    let limits = session.share_limits(&handle);
+    assert_eq!(limits.max_ratio, None);
+    assert_eq!(limits.max_seeding_time, None);
+    assert_eq!(
+        limits.max_inactive_seeding_time,
+        Some(Duration::from_secs(1800))
+    );
+
+    // Recheck the complete payload, start seeding, then a zero ratio trips.
+    let form = [("hashes", hash.as_str())];
+    post_form(&router, "/torrents/recheck", &form).await;
+    wait_for_info(&router, info_contract, &hash, "rechecked complete", |t| {
+        state_of(t) == "stoppedUP"
+    })
+    .await;
+    post_form(&router, "/torrents/start", &form).await;
+    wait_for_info(&router, info_contract, &hash, "seeding", |t| {
+        state_of(t) == "uploading" || state_of(t) == "stalledUP"
+    })
+    .await;
+    let set = post_form(
+        &router,
+        "/torrents/setShareLimits",
+        &[
+            ("hashes", hash.as_str()),
+            ("ratioLimit", "0"),
+            ("seedingTimeLimit", "-1"),
+            ("inactiveSeedingTimeLimit", "-1"),
+        ],
+    )
+    .await;
+    assert_eq!(set.text(), "Ok.");
+    session.policy_pass().await;
+    let stopped = wait_for_info(&router, info_contract, &hash, "stopped by ratio", |t| {
+        state_of(t) == "stoppedUP"
+    })
+    .await;
+    assert_eq!(stopped["ratio_limit"], 0.0);
+}
+
 /// Session limits and alternative-speed mode, driven through the compat
 /// router and cross-checked against the native session state the
 /// `/torrents/limits` and `/speed/alt` APIs read, so both views agree.

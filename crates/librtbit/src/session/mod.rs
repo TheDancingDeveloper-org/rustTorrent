@@ -1053,6 +1053,7 @@ impl Session {
                 ),
                 cancellation_token: parking_lot::Mutex::new(self.cancellation_token.child_token()),
                 share_limits: RwLock::new(ShareLimits::default()),
+                upload_activity: parking_lot::Mutex::new((0, 0)),
                 queued: std::sync::atomic::AtomicBool::new(false),
                 queue_position: std::sync::atomic::AtomicI64::new(id as i64),
                 force_start: std::sync::atomic::AtomicBool::new(false),

@@ -272,6 +272,7 @@ async fn share_paused_seed_stays_paused_across_restart() -> anyhow::Result<()> {
             ShareLimits {
                 max_ratio: Some(0.0),
                 max_seeding_time: None,
+                max_inactive_seeding_time: None,
             },
         )
         .await;
@@ -334,6 +335,7 @@ async fn share_limits_and_uploads_survive_restart() -> anyhow::Result<()> {
     let limits = ShareLimits {
         max_ratio: Some(1.5),
         max_seeding_time: Some(Duration::from_secs(3600)),
+        max_inactive_seeding_time: Some(Duration::from_secs(900)),
     };
 
     let session = create_session(root.path(), Some(persist.path())).await?;
@@ -580,6 +582,7 @@ async fn upload_total_saved_by_timer_survives_drop_without_stop() -> anyhow::Res
     let limits = ShareLimits {
         max_ratio: Some(3.0),
         max_seeding_time: None,
+        max_inactive_seeding_time: None,
     };
 
     let kill = tokio_util::sync::CancellationToken::new();
@@ -630,6 +633,7 @@ async fn share_limits_saved_on_set_survive_drop_without_stop() -> anyhow::Result
     let limits = ShareLimits {
         max_ratio: Some(2.5),
         max_seeding_time: Some(Duration::from_secs(7200)),
+        max_inactive_seeding_time: None,
     };
 
     // An hour between timer saves, so the save in `set_share_limits` is the only one.
