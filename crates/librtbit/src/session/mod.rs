@@ -1260,6 +1260,15 @@ impl Session {
     }
 
     pub async fn unpause(self: &Arc<Self>, handle: &ManagedTorrentHandle) -> anyhow::Result<()> {
+        if handle
+            .shared()
+            .share_paused
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            // A user resuming past a share limit restarts the inactivity clock,
+            // so the inactive-seeding limit doesn't trip again on the next pass.
+            *handle.shared().upload_activity.lock() = (0, 0);
+        }
         PolicyFlags::default().store(handle.shared());
         let peer_rx = self.make_peer_rx_managed_torrent(handle, true);
         handle.start(peer_rx, false)?;

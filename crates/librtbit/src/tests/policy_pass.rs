@@ -296,6 +296,12 @@ async fn share_paused_seed_stays_paused_across_restart() -> anyhow::Result<()> {
         "the policy pass must not resume a share-paused seed"
     );
 
+    // A user resume clears the reason and restarts the inactivity clock.
+    *restored.shared().upload_activity.lock() = (42, 1);
+    session.unpause(&restored).await?;
+    assert!(!restored.shared().share_paused.load(Ordering::Relaxed));
+    assert_eq!(*restored.shared().upload_activity.lock(), (0, 0));
+
     session.stop().await;
     Ok(())
 }
