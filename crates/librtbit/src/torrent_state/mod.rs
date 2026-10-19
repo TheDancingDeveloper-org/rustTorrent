@@ -304,6 +304,14 @@ pub struct ManagedTorrentShared {
     /// Set while the torrent waits for a queue slot. Queued torrents are paused.
     pub(crate) queued: AtomicBool,
 
+    /// Position in the queue; lower runs first. Starts as the torrent id, so
+    /// torrents queue in the order they were added until they are moved.
+    pub(crate) queue_position: std::sync::atomic::AtomicI64,
+
+    /// Set by force-start: the torrent runs regardless of the queue limits and
+    /// does not take a queue slot. A user pause clears it.
+    pub(crate) force_start: AtomicBool,
+
     /// Set while the low-disk guard holds this download. The guard resumes it.
     pub(crate) held_for_disk: AtomicBool,
 
@@ -739,6 +747,14 @@ impl ManagedTorrent {
     }
 
     /// True while the torrent is waiting for a download or seed slot.
+    pub fn queue_position(&self) -> i64 {
+        self.shared.queue_position.load(Ordering::Relaxed)
+    }
+
+    pub fn is_force_started(&self) -> bool {
+        self.shared.force_start.load(Ordering::Relaxed)
+    }
+
     pub fn is_queued(&self) -> bool {
         self.shared.queued.load(Ordering::Relaxed)
     }

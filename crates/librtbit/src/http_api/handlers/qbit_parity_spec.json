@@ -66,7 +66,7 @@
       "endpoint": "app/preferences",
       "method": "GET",
       "status": "partial",
-      "notes": "Small subset of preference fields. Seeding-limit fields are reported disabled with qBittorrent default values; rtbit does not enforce them globally.",
+      "notes": "Small subset of preference fields. queueing_enabled, max_active_downloads and max_active_uploads reflect the session queue limits; max_active_torrents is -1 (no combined limit). Seeding-limit fields are reported disabled with qBittorrent default values; rtbit does not enforce them globally.",
       "response": {
         "content": "json",
         "schema": {
@@ -87,6 +87,9 @@
           "pex": "boolean",
           "lsd": "boolean",
           "queueing_enabled": "boolean",
+          "max_active_downloads": "integer",
+          "max_active_uploads": "integer",
+          "max_active_torrents": "integer",
           "max_ratio_enabled": "boolean",
           "max_seeding_time_enabled": "boolean",
           "save_path": "string",
@@ -615,7 +618,7 @@
       "endpoint": "torrents/bottomPrio",
       "method": "POST",
       "status": "partial",
-      "notes": "No-op: rtbit has no download queue and app/preferences reports queueing_enabled=false, so the request succeeds without changing anything.",
+      "notes": "Moves the torrents in the session queue (per-torrent queue position, persisted). The policy pass applies the new order to the active-download and active-seed limits.",
       "response": {
         "content": "text"
       }
@@ -664,7 +667,7 @@
       "endpoint": "torrents/decreasePrio",
       "method": "POST",
       "status": "partial",
-      "notes": "No-op: rtbit has no download queue and app/preferences reports queueing_enabled=false, so the request succeeds without changing anything.",
+      "notes": "Moves the torrents in the session queue (per-torrent queue position, persisted). The policy pass applies the new order to the active-download and active-seed limits.",
       "response": {
         "content": "text"
       }
@@ -775,7 +778,7 @@
       "endpoint": "torrents/increasePrio",
       "method": "POST",
       "status": "partial",
-      "notes": "No-op: rtbit has no download queue and app/preferences reports queueing_enabled=false, so the request succeeds without changing anything.",
+      "notes": "Moves the torrents in the session queue (per-torrent queue position, persisted). The policy pass applies the new order to the active-download and active-seed limits.",
       "response": {
         "content": "text"
       }
@@ -784,7 +787,7 @@
       "endpoint": "torrents/info",
       "method": "GET",
       "status": "partial",
-      "notes": "Core fields real; state uses 2.11 stoppedDL/stoppedUP; filter accepts 2.11 stopped/running and legacy paused/resumed. tags are real and the tag filter treats an empty value as untagged. Several fields stubbed (limits, magnet_uri, priority).",
+      "notes": "Core fields real; state uses 2.11 stoppedDL/stoppedUP; filter accepts 2.11 stopped/running and legacy paused/resumed. tags are real and the tag filter treats an empty value as untagged. priority is the 1-based queue position of unfinished torrents while queueing is on (0 otherwise); queued and force-started torrents report queuedDL/queuedUP and forcedDL/forcedUP. Several fields stubbed (limits, magnet_uri).",
       "response": {
         "content": "json",
         "schema": [
@@ -1075,7 +1078,7 @@
       "endpoint": "torrents/setForceStart",
       "method": "POST",
       "status": "partial",
-      "notes": "Routed to torrents/start (resume). rtbit has no queue, so force-start has no separate state.",
+      "notes": "value=true starts the torrents outside the queue limits (forcedDL/forcedUP); value=false hands them back to the queue. A stop clears force-start.",
       "response": {
         "content": "text"
       }
@@ -1180,7 +1183,7 @@
       "endpoint": "torrents/topPrio",
       "method": "POST",
       "status": "partial",
-      "notes": "No-op: rtbit has no download queue and app/preferences reports queueing_enabled=false, so the request succeeds without changing anything.",
+      "notes": "Moves the torrents in the session queue (per-torrent queue position, persisted). The policy pass applies the new order to the active-download and active-seed limits.",
       "response": {
         "content": "text"
       }

@@ -31,6 +31,11 @@ pub struct SessionSettings {
     pub output_folder: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_folder: Option<PathBuf>,
+    /// Queue limits. Absent means unlimited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_active_downloads: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_active_seeds: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -65,6 +70,11 @@ pub struct SerializedTorrent {
     held_for_disk: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     share_paused: bool,
+    /// Queue position. Absent in older state, which falls back to the torrent id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    queue_position: Option<i64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    force_start: bool,
     /// Share limits as set on the torrent. Absent in older state, which means no limits.
     #[serde(default, skip_serializing_if = "ShareLimits::is_unset")]
     share_limits: ShareLimits,
@@ -96,6 +106,8 @@ impl SerializedTorrent {
             },
             share_limits: self.share_limits,
             uploaded_bytes: self.uploaded_bytes,
+            queue_position: self.queue_position,
+            force_start: self.force_start,
         }
     }
 
@@ -163,6 +175,8 @@ pub(crate) struct RestoredState {
     policy: PolicyFlags,
     share_limits: ShareLimits,
     uploaded_bytes: u64,
+    queue_position: Option<i64>,
+    force_start: bool,
 }
 
 impl RestoredState {
@@ -172,6 +186,14 @@ impl RestoredState {
         shared
             .uploaded_bytes_base
             .store(self.uploaded_bytes, std::sync::atomic::Ordering::Relaxed);
+        if let Some(position) = self.queue_position {
+            shared
+                .queue_position
+                .store(position, std::sync::atomic::Ordering::Relaxed);
+        }
+        shared
+            .force_start
+            .store(self.force_start, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

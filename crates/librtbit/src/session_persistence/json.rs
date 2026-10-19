@@ -171,6 +171,8 @@ impl JsonSessionPersistenceStore {
             queued: policy.queued,
             held_for_disk: policy.held_for_disk,
             share_paused: policy.share_paused,
+            queue_position: Some(torrent.queue_position()),
+            force_start: torrent.is_force_started(),
             share_limits,
             uploaded_bytes,
             part_files,
@@ -475,6 +477,8 @@ mod tests {
         let settings = SessionSettings {
             output_folder: Some(dir.path().join("downloads/{category}")),
             completed_folder: Some(dir.path().join("completed/{category}")),
+            max_active_downloads: Some(3),
+            max_active_seeds: None,
         };
 
         store.store_session_settings(&settings).await.unwrap();

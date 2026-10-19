@@ -32,6 +32,7 @@ use crate::{
     api::{Api, TorrentIdOrHash},
     create_torrent,
     limits::LimitsConfig,
+    session::QueueMove,
     spawn_utils::BlockingSpawner,
     stream_connect::ConnectionKind,
     torrent_state::{peer::stats::snapshot::PeerStatsFilter, stats::TorrentStatsState},
@@ -477,6 +478,9 @@ struct QbitPreferences {
     lsd: bool,
     encryption: u32,
     queueing_enabled: bool,
+    max_active_downloads: i64,
+    max_active_uploads: i64,
+    max_active_torrents: i64,
     locale: &'static str,
     web_ui_port: u16,
     listen_port: u16,
@@ -503,6 +507,55 @@ struct SetPreferencesForm {
 struct SetPreferences {
     #[serde(default)]
     announce_port: Option<u16>,
+    #[serde(default)]
+    queueing_enabled: Option<bool>,
+    #[serde(default)]
+    max_active_downloads: Option<i64>,
+    #[serde(default)]
+    max_active_uploads: Option<i64>,
+}
+
+/// The queue limit qBittorrent reports for an rtbit limit: -1 for unlimited.
+fn limit_to_qbit(limit: Option<usize>) -> i64 {
+    limit.map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX))
+}
+
+/// The rtbit limit for a qBittorrent queue limit, where a negative value means
+/// unlimited.
+fn limit_from_qbit(limit: i64) -> Option<usize> {
+    usize::try_from(limit).ok()
+}
+
+/// qBittorrent's default queue limit, used when queueing is switched on
+/// without limits and none were set before.
+const DEFAULT_QUEUE_LIMIT: usize = 3;
+
+/// Work out the queue limits a preferences update asks for, or `None` if it
+/// does not touch queueing. rtbit has no separate on/off switch: queueing is
+/// on while either limit is set, so turning it off clears both limits.
+fn queue_limits_update(
+    prefs: &SetPreferences,
+    current: (Option<usize>, Option<usize>),
+) -> Option<(Option<usize>, Option<usize>)> {
+    if prefs.queueing_enabled.is_none()
+        && prefs.max_active_downloads.is_none()
+        && prefs.max_active_uploads.is_none()
+    {
+        return None;
+    }
+    let currently_enabled = current.0.is_some() || current.1.is_some();
+    if !prefs.queueing_enabled.unwrap_or(currently_enabled) {
+        return Some((None, None));
+    }
+    let pick = |requested: Option<i64>, current: Option<usize>| match requested {
+        Some(limit) => limit_from_qbit(limit),
+        None if currently_enabled => current,
+        None => Some(DEFAULT_QUEUE_LIMIT),
+    };
+    Some((
+        pick(prefs.max_active_downloads, current.0),
+        pick(prefs.max_active_uploads, current.1),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -630,6 +683,7 @@ async fn h_app_build_info() -> impl IntoResponse {
 
 async fn h_app_preferences(State(state): State<Arc<QbitState>>) -> axum::Json<QbitPreferences> {
     let save_path = state.api_state.api.api_output_folder();
+    let session = state.api_state.api.session();
 
     axum::Json(QbitPreferences {
         save_path,
@@ -645,7 +699,11 @@ async fn h_app_preferences(State(state): State<Arc<QbitState>>) -> axum::Json<Qb
         pex: true,
         lsd: true,
         encryption: 0,
-        queueing_enabled: false,
+        queueing_enabled: session.queueing_enabled(),
+        max_active_downloads: limit_to_qbit(session.max_active_downloads()),
+        max_active_uploads: limit_to_qbit(session.max_active_seeds()),
+        // rtbit has no combined limit; downloads and seeds are limited separately.
+        max_active_torrents: -1,
         locale: "en",
         web_ui_port: state.api_state.opts.web_ui_port.unwrap_or(3030),
         listen_port: state.api_state.api.api_listen_port(),
@@ -658,8 +716,10 @@ async fn h_app_preferences(State(state): State<Arc<QbitState>>) -> axum::Json<Qb
     })
 }
 
-/// `app/setPreferences`. Only `announce_port` is applied. When it is present
-/// it must be a valid port; when it is absent the request still succeeds, so
+/// `app/setPreferences`. `announce_port` and the queue settings
+/// (`queueing_enabled`, `max_active_downloads`, `max_active_uploads`) are
+/// applied; other keys are ignored. `announce_port`, when present, must be a
+/// valid port. Absent keys leave their setting alone, so
 /// read-modify-write clients that post their whole preferences object work.
 async fn h_app_set_preferences(
     State(state): State<Arc<QbitState>>,
@@ -685,6 +745,13 @@ async fn h_app_set_preferences(
             );
         };
         state.api_state.api.api_set_announce_port(port);
+    }
+    let session = state.api_state.api.session();
+    let current = (session.max_active_downloads(), session.max_active_seeds());
+    if let Some((downloads, seeds)) = queue_limits_update(&preferences, current)
+        && let Err(error) = session.set_queue_limits(downloads, seeds).await
+    {
+        warn!(%error, "qbit compat: error saving queue limits");
     }
     (StatusCode::OK, String::new()).into_response()
 }
@@ -884,11 +951,18 @@ fn now_unix() -> u64 {
 /// We advertise WebAPI 2.11.3, so we emit the post-2.11 `stoppedDL`/`stoppedUP`
 /// names (renamed from `pausedDL`/`pausedUP` in 2.11); clients that switch on
 /// the advertised version expect these.
-fn map_state(state: TorrentStatsState, finished: bool) -> &'static str {
+///
+/// A torrent the queue paused reports `queuedDL`/`queuedUP` rather than
+/// stopped, and a force-started live torrent reports `forcedDL`/`forcedUP`.
+fn map_state(state: TorrentStatsState, finished: bool, queued: bool, forced: bool) -> &'static str {
     match (state, finished) {
         (TorrentStatsState::Initializing, _) => "metaDL",
+        (TorrentStatsState::Live, false) if forced => "forcedDL",
+        (TorrentStatsState::Live, true) if forced => "forcedUP",
         (TorrentStatsState::Live, false) => "downloading",
         (TorrentStatsState::Live, true) => "uploading",
+        (TorrentStatsState::Paused, false) if queued => "queuedDL",
+        (TorrentStatsState::Paused, true) if queued => "queuedUP",
         (TorrentStatsState::Paused, false) => "stoppedDL",
         (TorrentStatsState::Paused, true) => "stoppedUP",
         (TorrentStatsState::Error, _) => "error",
@@ -915,13 +989,16 @@ fn matches_filter(
 ) -> bool {
     match filter {
         "all" => true,
-        "downloading" => qbit_state == "downloading" || qbit_state == "metaDL",
-        "seeding" => qbit_state == "uploading",
+        "downloading" => matches!(
+            qbit_state,
+            "downloading" | "metaDL" | "forcedDL" | "queuedDL"
+        ),
+        "seeding" => matches!(qbit_state, "uploading" | "forcedUP" | "queuedUP"),
         "completed" => stats.finished,
         // `paused` was renamed to `stopped` in 2.11; accept both spellings.
         "paused" | "stopped" => qbit_state == "stoppedDL" || qbit_state == "stoppedUP",
-        "active" => qbit_state == "downloading" || qbit_state == "uploading",
-        "inactive" => qbit_state != "downloading" && qbit_state != "uploading",
+        "active" => is_active_state(qbit_state),
+        "inactive" => !is_active_state(qbit_state),
         // `resumed` was renamed to `running` in 2.11; accept both spellings.
         "resumed" | "running" => qbit_state != "stoppedDL" && qbit_state != "stoppedUP",
         "stalled" | "stalled_uploading" | "stalled_downloading" => {
@@ -937,6 +1014,13 @@ fn matches_filter(
     }
 }
 
+fn is_active_state(qbit_state: &str) -> bool {
+    matches!(
+        qbit_state,
+        "downloading" | "uploading" | "forcedDL" | "forcedUP"
+    )
+}
+
 /// Build the qBittorrent `torrents/info` view of a single torrent. Shared by
 /// `torrents/info` and `sync/maindata`.
 fn build_torrent_info(
@@ -950,7 +1034,8 @@ fn build_torrent_info(
         .unwrap_or_else(|| format!("torrent_{}", handle.id()));
     let output_folder = qbit_save_path(handle);
     let content_path = qbit_content_path(handle, &name);
-    let qbit_state = map_state(stats.state, stats.finished);
+    let forced = handle.is_force_started();
+    let qbit_state = map_state(stats.state, stats.finished, handle.is_queued(), forced);
     let category = handle.shared().category.read().clone().unwrap_or_default();
 
     let dl_speed = stats
@@ -1033,7 +1118,7 @@ fn build_torrent_info(
         downloaded_session: 0,
         eta,
         f_l_piece_prio: false,
-        force_start: false,
+        force_start: forced,
         hash: info_hash.clone(),
         infohash_v1: info_hash,
         infohash_v2: String::new(),
@@ -1114,10 +1199,12 @@ async fn h_torrents_info(
         .as_ref()
         .map(|h| h.split('|').map(|s| s.to_lowercase()).collect());
 
+    let priorities = queue_priorities(api);
     let mut torrents: Vec<QbitTorrentInfo> = api.session().with_torrents(|iter| {
         iter.filter_map(|(_id, handle)| {
             let stats = handle.stats();
             let mut info = build_torrent_info(handle, &stats, now);
+            info.priority = priorities.get(&handle.id()).copied().unwrap_or(0);
             apply_share_limits(&mut info, &state.share_limits);
 
             // Filter by hash if specified.
@@ -1767,12 +1854,81 @@ async fn h_torrents_start(state: State<Arc<QbitState>>, body: Bytes) -> &'static
     h_torrents_resume(state, body).await
 }
 
-/// Queue-position endpoints (`topPrio`, `bottomPrio`, `increasePrio`,
-/// `decreasePrio`). rtbit has no download queue, and `app/preferences` reports
-/// `queueing_enabled: false`, so clients should not send these. When they do,
-/// the request succeeds and changes nothing.
-async fn h_torrents_queue_noop() -> &'static str {
+/// Move the torrents named by `hashes` within the session queue.
+async fn move_in_queue(state: &QbitState, body: &[u8], mv: QueueMove) -> &'static str {
+    let form: HashesForm = serde_urlencoded::from_bytes(body).unwrap_or_default();
+    let api = &state.api_state.api;
+    let ids: Vec<_> = resolve_hashes(api, &form.hashes)
+        .into_iter()
+        .filter_map(|idx| api.mgr_handle(idx).ok().map(|h| h.id()))
+        .collect();
+    api.session().move_in_queue(&ids, mv).await;
     "Ok."
+}
+
+async fn h_torrents_top_prio(State(state): State<Arc<QbitState>>, body: Bytes) -> &'static str {
+    move_in_queue(&state, &body, QueueMove::Top).await
+}
+
+async fn h_torrents_bottom_prio(State(state): State<Arc<QbitState>>, body: Bytes) -> &'static str {
+    move_in_queue(&state, &body, QueueMove::Bottom).await
+}
+
+async fn h_torrents_increase_prio(
+    State(state): State<Arc<QbitState>>,
+    body: Bytes,
+) -> &'static str {
+    move_in_queue(&state, &body, QueueMove::Up).await
+}
+
+async fn h_torrents_decrease_prio(
+    State(state): State<Arc<QbitState>>,
+    body: Bytes,
+) -> &'static str {
+    move_in_queue(&state, &body, QueueMove::Down).await
+}
+
+#[derive(Deserialize, Default)]
+struct ForceStartForm {
+    #[serde(default)]
+    hashes: String,
+    #[serde(default)]
+    value: String,
+}
+
+/// `torrents/setForceStart` — `value=true` starts the torrents outside the
+/// queue limits; `value=false` hands them back to the queue.
+async fn h_torrents_set_force_start(
+    State(state): State<Arc<QbitState>>,
+    body: Bytes,
+) -> &'static str {
+    let form: ForceStartForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
+    let enabled = form.value.eq_ignore_ascii_case("true");
+    let api = &state.api_state.api;
+    for idx in resolve_hashes(api, &form.hashes) {
+        let Ok(handle) = api.mgr_handle(idx) else {
+            continue;
+        };
+        if let Err(error) = api.session().set_force_start(&handle, enabled).await {
+            warn!(%error, "qbit compat: error setting force start");
+        }
+    }
+    "Ok."
+}
+
+/// qBittorrent's `priority` field: the 1-based queue position among
+/// unfinished torrents while queueing is enabled, 0 otherwise. Seeds report 0.
+fn queue_priorities(api: &Api) -> HashMap<usize, u32> {
+    let session = api.session();
+    if !session.queueing_enabled() {
+        return HashMap::new();
+    }
+    session
+        .queue_order()
+        .into_iter()
+        .filter(|&id| session.get(id.into()).is_some_and(|h| !h.stats().finished))
+        .zip(1u32..)
+        .collect()
 }
 
 async fn h_torrents_recheck(State(state): State<Arc<QbitState>>, body: Bytes) -> &'static str {
@@ -2588,10 +2744,12 @@ async fn h_sync_maindata(
     let api = &state.api_state.api;
     let now = now_unix();
 
+    let priorities = queue_priorities(api);
     let torrents: HashMap<String, QbitTorrentInfo> = api.session().with_torrents(|iter| {
         iter.map(|(_id, handle)| {
             let stats = handle.stats();
             let mut info = build_torrent_info(handle, &stats, now);
+            info.priority = priorities.get(&handle.id()).copied().unwrap_or(0);
             apply_share_limits(&mut info, &state.share_limits);
             (info.hash.clone(), info)
         })
@@ -2629,7 +2787,7 @@ async fn h_sync_maindata(
         up_info_data: uploaded,
         up_info_speed: session_stats.upload_speed.as_bytes(),
         up_rate_limit: bps_to_u64(config.upload_bps),
-        queueing: false,
+        queueing: api.session().queueing_enabled(),
         use_alt_speed_limits: api.session().alt_speed_enabled(),
         refresh_interval: 1500,
         free_space_on_disk: 0,
@@ -3024,11 +3182,11 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
         .route("/resume", post(h_torrents_resume))
         .route("/stop", post(h_torrents_stop))
         .route("/start", post(h_torrents_start))
-        .route("/setForceStart", post(h_torrents_start))
-        .route("/topPrio", post(h_torrents_queue_noop))
-        .route("/bottomPrio", post(h_torrents_queue_noop))
-        .route("/increasePrio", post(h_torrents_queue_noop))
-        .route("/decreasePrio", post(h_torrents_queue_noop))
+        .route("/setForceStart", post(h_torrents_set_force_start))
+        .route("/topPrio", post(h_torrents_top_prio))
+        .route("/bottomPrio", post(h_torrents_bottom_prio))
+        .route("/increasePrio", post(h_torrents_increase_prio))
+        .route("/decreasePrio", post(h_torrents_decrease_prio))
         .route("/recheck", post(h_torrents_recheck))
         .route("/reannounce", post(h_torrents_reannounce))
         .route("/rename", post(h_torrents_rename))
@@ -3368,6 +3526,166 @@ mod tests {
             .unwrap();
         let response = router.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn map_state_reports_queued_and_forced() {
+        use super::map_state;
+        let (live, paused) = (TorrentStatsState::Live, TorrentStatsState::Paused);
+        assert_eq!(map_state(paused, false, true, false), "queuedDL");
+        assert_eq!(map_state(paused, true, true, false), "queuedUP");
+        assert_eq!(map_state(paused, false, false, false), "stoppedDL");
+        assert_eq!(map_state(live, false, false, true), "forcedDL");
+        assert_eq!(map_state(live, true, false, true), "forcedUP");
+        assert_eq!(map_state(live, true, false, false), "uploading");
+    }
+
+    #[test]
+    fn queue_preferences_map_to_limits() {
+        use super::{SetPreferences, queue_limits_update};
+        let prefs = |json: &str| serde_json::from_str::<SetPreferences>(json).unwrap();
+
+        assert_eq!(queue_limits_update(&prefs("{}"), (None, None)), None);
+        // Turning queueing on with no limits uses the defaults.
+        assert_eq!(
+            queue_limits_update(&prefs(r#"{"queueing_enabled":true}"#), (None, None)),
+            Some((Some(3), Some(3)))
+        );
+        assert_eq!(
+            queue_limits_update(
+                &prefs(
+                    r#"{"queueing_enabled":true,"max_active_downloads":2,"max_active_uploads":-1}"#
+                ),
+                (None, None)
+            ),
+            Some((Some(2), None))
+        );
+        // A limit change while queueing is on keeps the other limit.
+        assert_eq!(
+            queue_limits_update(&prefs(r#"{"max_active_downloads":5}"#), (Some(1), Some(4))),
+            Some((Some(5), Some(4)))
+        );
+        // Limits sent while queueing is off do not turn it on.
+        assert_eq!(
+            queue_limits_update(&prefs(r#"{"max_active_downloads":5}"#), (None, None)),
+            Some((None, None))
+        );
+        assert_eq!(
+            queue_limits_update(&prefs(r#"{"queueing_enabled":false}"#), (Some(1), Some(1))),
+            Some((None, None))
+        );
+    }
+
+    #[tokio::test]
+    async fn prio_endpoints_reorder_queue_and_report_priority() {
+        let (state, session, output) = qbit_state().await;
+        let mut hashes = Vec::new();
+        for byte in [0x41u8, 0x42, 0x43] {
+            let dir = output.path().join(format!("src{byte}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("payload.bin"), vec![byte; 32 * 1024]).unwrap();
+            let torrent = create_torrent(
+                &dir,
+                CreateTorrentOptions {
+                    piece_length: Some(16_384),
+                    ..Default::default()
+                },
+                &BlockingSpawner::new(1),
+            )
+            .await
+            .unwrap()
+            .as_bytes()
+            .unwrap()
+            .to_vec();
+            let handle = session
+                .add_torrent(
+                    AddTorrent::from_bytes(torrent),
+                    Some(AddTorrentOptions {
+                        paused: true,
+                        overwrite: true,
+                        output_folder: Some(
+                            output.path().join("dl").to_string_lossy().into_owned(),
+                        ),
+                        ..Default::default()
+                    }),
+                )
+                .await
+                .unwrap()
+                .into_handle()
+                .unwrap();
+            handle.wait_until_initialized().await.unwrap();
+            hashes.push(handle.info_hash().as_string());
+        }
+        let router = super::make_qbit_router(state.api_state.clone());
+        let post = |action: &str, body: String| {
+            http::Request::builder()
+                .method("POST")
+                .uri(format!("/torrents/{action}"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(axum::body::Body::from(body))
+                .unwrap()
+        };
+        let priorities = || {
+            let router = router.clone();
+            let hashes = hashes.clone();
+            async move {
+                let request = http::Request::builder()
+                    .uri("/torrents/info")
+                    .body(axum::body::Body::empty())
+                    .unwrap();
+                let response = router.oneshot(request).await.unwrap();
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+                hashes
+                    .iter()
+                    .map(|h| {
+                        list.iter().find(|t| t["hash"] == *h).unwrap()["priority"]
+                            .as_u64()
+                            .unwrap()
+                    })
+                    .collect::<Vec<_>>()
+            }
+        };
+
+        // Queueing off: every priority is 0.
+        assert_eq!(priorities().await, vec![0, 0, 0]);
+        session.set_queue_limits(Some(1), None).await.unwrap();
+        assert_eq!(priorities().await, vec![1, 2, 3]);
+
+        for (action, hash, expected) in [
+            ("topPrio", 2, vec![2, 3, 1]),
+            ("increasePrio", 1, vec![3, 2, 1]),
+            ("bottomPrio", 2, vec![2, 1, 3]),
+            ("decreasePrio", 0, vec![3, 1, 2]),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(post(action, format!("hashes={}", hashes[hash])))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{action}");
+            assert_eq!(priorities().await, expected, "{action}");
+        }
+
+        // setForceStart starts the torrent outside the queue.
+        let response = router
+            .clone()
+            .oneshot(post(
+                "setForceStart",
+                format!("hashes={}&value=true", hashes[0]),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let handle = state
+            .api_state
+            .api
+            .mgr_handle(crate::api::TorrentIdOrHash::parse(&hashes[0]).unwrap())
+            .unwrap();
+        assert!(handle.is_force_started());
+        assert!(!handle.is_paused());
     }
 
     #[tokio::test]
