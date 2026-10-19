@@ -219,7 +219,6 @@ impl SessionPersistenceStore for PostgresSessionStorage {
             .bind(share_max_ratio)
             .bind(share_max_seeding_secs)
             .bind(share_max_inactive_secs)
-            .bind(share_max_inactive_secs)
             .bind(uploaded_bytes)
             .bind(part_files)
             .execute(&self.pool)
@@ -460,5 +459,27 @@ impl BitVFactory for PostgresSessionStorage {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Each query in `store` and `update_metadata` binds exactly one value per
+    /// placeholder. Postgres rejects a mismatch at runtime, and CI has no
+    /// Postgres, so check the source.
+    #[test]
+    fn binds_match_placeholders() {
+        let src = include_str!("postgres.rs");
+        for (start, end) in [
+            ("async fn store(", "async fn delete("),
+            ("async fn update_metadata(", "async fn stream_all("),
+        ] {
+            let body = &src[src.find(start).unwrap()..src.find(end).unwrap()];
+            let binds = body.matches(".bind(").count() + body.matches(".bind::<").count();
+            let placeholders = (1..=64)
+                .take_while(|n| body.contains(&format!("${n}")))
+                .count();
+            assert_eq!(binds, placeholders, "{start}");
+        }
     }
 }
