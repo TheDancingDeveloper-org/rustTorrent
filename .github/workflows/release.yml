@@ -108,10 +108,39 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-artifacts
           path: release-artifacts/
+      - name: Ensure osslsigncode is available
+        shell: bash
+        run: |
+          if command -v osslsigncode >/dev/null 2>&1; then
+            exit 0
+          fi
+          sudo=""
+          if [[ "$(id -u)" != 0 ]]; then
+            sudo="sudo -n"
+          fi
+          if ! { $sudo apt-get update -qq && $sudo apt-get install -y --no-install-recommends osslsigncode; }; then
+            echo "::error::osslsigncode is missing and could not be installed; add it to the runner image"
+            exit 1
+          fi
+      # Authenticode-sign the .exe with an RFC 3161 timestamp before anything
+      # hashes it: this rewrites SHA256SUMS so the attestation and the cosign
+      # signature below both cover the signed bytes.
+      - name: Authenticode-sign the Windows executable
+        env:
+          RUSTTORRENT_AUTHENTICODE_PFX_B64: ${{ secrets.RUSTTORRENT_AUTHENTICODE_PFX_B64 }}
+          RUSTTORRENT_AUTHENTICODE_PFX_PASSWORD: ${{ secrets.RUSTTORRENT_AUTHENTICODE_PFX_PASSWORD }}
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          test -n "$tag"
+          bash packaging/scripts/sign-windows.sh "$tag" release-artifacts
       - name: Attest build provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
@@ -189,7 +218,23 @@ jobs:
           # --output-signature/--output-certificate, which sign-blob and
           # verify-release.sh rely on. Stay on v2 until both move to --bundle.
           cosign-release: 'v2.6.5'
-      - name: Verify SHA256SUMS signature and artefact digests
+      - name: Ensure osslsigncode is available
+        shell: bash
+        run: |
+          if command -v osslsigncode >/dev/null 2>&1; then
+            exit 0
+          fi
+          sudo=""
+          if [[ "$(id -u)" != 0 ]]; then
+            sudo="sudo -n"
+          fi
+          if ! { $sudo apt-get update -qq && $sudo apt-get install -y --no-install-recommends osslsigncode; }; then
+            echo "::error::osslsigncode is missing and could not be installed; add it to the runner image"
+            exit 1
+          fi
+      - name: Verify SHA256SUMS signature, artefact digests and Authenticode
+        env:
+          RUSTTORRENT_AUTHENTICODE_CERT_PEM_B64: ${{ secrets.RUSTTORRENT_AUTHENTICODE_CERT_PEM_B64 }}
         shell: bash
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
