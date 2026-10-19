@@ -91,6 +91,7 @@ impl TorrentsTableRecord {
                 },
                 uploaded_bytes: self.uploaded_bytes.max(0) as u64,
                 part_files: self.part_files,
+                rate_limits: Default::default(),
             },
         ))
     }

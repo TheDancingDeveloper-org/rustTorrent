@@ -1352,3 +1352,93 @@ async fn sync_torrent_peers_through_compat_router() {
     }
     assert!(removed, "peer {addr} never reported in peers_removed");
 }
+
+/// Per-torrent speed limits: set at add time and through `setDownloadLimit` /
+/// `setUploadLimit`, read back through `downloadLimit` / `uploadLimit`,
+/// `torrents/info` and `torrents/properties`, and cross-checked against the
+/// torrent's native limits.
+#[tokio::test]
+async fn torrent_limits_through_compat_router() {
+    let (router, session, output) = make_router().await;
+    let torrent = make_payload_torrent(output.path()).await;
+    let save_path = output.path().to_string_lossy().into_owned();
+
+    let boundary = "qbitLimitsBoundary";
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("/torrents/add")
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(axum::body::Body::from(multipart_add_body(
+            boundary,
+            &torrent,
+            &[
+                ("savepath", &save_path),
+                ("stopped", "true"),
+                ("dlLimit", "300000"),
+                ("upLimit", "-1"),
+            ],
+        )))
+        .unwrap();
+    assert_eq!(send(&router, request).await.status, StatusCode::OK);
+    let hash = get(&router, "/torrents/info").await.json()[0]["hash"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let info = || async {
+        get(&router, &format!("/torrents/info?hashes={hash}"))
+            .await
+            .json()[0]
+            .clone()
+    };
+    assert_eq!(info().await["dl_limit"], 300_000);
+    assert_eq!(info().await["up_limit"], -1);
+
+    let ok = |r: ProbeResponse| assert_eq!(r.text(), "Ok.");
+    ok(post_form(
+        &router,
+        "/torrents/setUploadLimit",
+        &[("hashes", &hash), ("limit", "50000")],
+    )
+    .await);
+    ok(post_form(
+        &router,
+        "/torrents/setDownloadLimit",
+        &[("hashes", &hash), ("limit", "0")],
+    )
+    .await);
+
+    // Setting one direction keeps the other.
+    assert_eq!(info().await["dl_limit"], -1);
+    assert_eq!(info().await["up_limit"], 50_000);
+    let props = get(&router, &format!("/torrents/properties?hash={hash}"))
+        .await
+        .json();
+    assert_eq!(
+        (props["dl_limit"].clone(), props["up_limit"].clone()),
+        (Value::from(-1), Value::from(50_000))
+    );
+    assert_eq!(
+        get(&router, &format!("/torrents/uploadLimit?hashes={hash}"))
+            .await
+            .json()[&hash],
+        50_000
+    );
+    assert_eq!(
+        get(&router, &format!("/torrents/downloadLimit?hashes={hash}"))
+            .await
+            .json()[&hash],
+        0
+    );
+
+    let handle = session
+        .get(crate::api::TorrentIdOrHash::parse(&hash).unwrap())
+        .unwrap();
+    assert_eq!(
+        handle.rate_limits().upload_bps.map(|b| b.get()),
+        Some(50_000)
+    );
+    assert_eq!(handle.rate_limits().download_bps, None);
+}

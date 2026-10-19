@@ -23,6 +23,7 @@ use crate::{
     session::{
         AddTorrent, AddTorrentOptions, AddTorrentResponse, ListOnlyResponse, Session, TorrentId,
     },
+    session_persistence::TorrentRateLimits,
     session_stats::snapshot::SessionStatsSnapshot,
     tag::normalize_tags,
     torrent_state::{
@@ -660,6 +661,24 @@ impl Api {
             .persist_categories()
             .await
             .context("error persisting categories")?;
+        Ok(Default::default())
+    }
+
+    pub fn api_torrent_rate_limits(&self, idx: TorrentIdOrHash) -> Result<TorrentRateLimits> {
+        Ok(TorrentRateLimits::of(&self.mgr_handle(idx)?))
+    }
+
+    /// Set a torrent's own speed limits, layered under the session limits.
+    /// Applied to the live limiter at once and saved with the torrent.
+    pub async fn api_set_torrent_rate_limits(
+        &self,
+        idx: TorrentIdOrHash,
+        limits: TorrentRateLimits,
+    ) -> Result<EmptyJsonResponse> {
+        let handle = self.mgr_handle(idx)?;
+        handle.set_download_limit(limits.download_bps);
+        handle.set_upload_limit(limits.upload_bps);
+        self.session.try_update_persistence_metadata(&handle).await;
         Ok(Default::default())
     }
 

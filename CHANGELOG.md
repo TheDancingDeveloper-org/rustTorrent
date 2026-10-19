@@ -33,6 +33,11 @@ upgrade notes in each release describe what to back up and check.
   `force_start` and the `queuedDL`/`queuedUP`/`forcedDL`/`forcedUP` states, and
   `app/preferences` reads and sets `queueing_enabled`, `max_active_downloads`
   and `max_active_uploads`.
+- Per-torrent speed limits are saved in session state and survive a restart,
+  and have a native API (`GET`/`POST /torrents/{id}/limits`). WebUI API v2
+  compat: `torrents/info` and `torrents/properties` report `dl_limit`/`up_limit`
+  (were always -1), `setDownloadLimit`/`setUploadLimit` save the torrent, and
+  `torrents/add` accepts `dlLimit`/`upLimit`.
 - WebUI API v2 compat conformance tests: every routed endpoint in
   `qbit_parity_spec.json` declares a response contract that is validated
   against a live torrent, plus an add/stop/start/recheck/setCategory/delete
