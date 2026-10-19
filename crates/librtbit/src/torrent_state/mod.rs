@@ -301,6 +301,10 @@ pub struct ManagedTorrentShared {
     /// Share limits (ratio and seeding time) checked by the session's policy pass.
     pub(crate) share_limits: RwLock<crate::session::ShareLimits>,
 
+    /// `(uploaded_bytes, seen_at)` from the last policy pass that saw the upload
+    /// counter move. Drives the inactive-seeding-time limit; not persisted.
+    pub(crate) upload_activity: parking_lot::Mutex<(u64, u64)>,
+
     /// Set while the torrent waits for a queue slot. Queued torrents are paused.
     pub(crate) queued: AtomicBool,
 

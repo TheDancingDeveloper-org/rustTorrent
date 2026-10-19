@@ -78,21 +78,27 @@ impl PolicyFlags {
     }
 }
 
-/// Per-torrent limits after which a seeding torrent is paused. Either limit
+/// Per-torrent limits after which a seeding torrent is paused. Any one limit
 /// alone is enough; `None` disables that limit.
 ///
-/// The ratio is `uploaded / total size`, counted from the current session's
-/// upload counter. It is not persisted, so limits reset with the process.
+/// The ratio is `uploaded / total size`, counting uploads from earlier runs.
+/// Seeding time counts from completion. Inactive seeding time counts from the
+/// last pass that saw the upload counter move; that clock is not persisted, so
+/// it restarts with the process.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct ShareLimits {
     pub max_ratio: Option<f64>,
     pub max_seeding_time: Option<Duration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_inactive_seeding_time: Option<Duration>,
 }
 
 impl ShareLimits {
-    /// True when neither limit is set. Used to leave the limits out of state.
+    /// True when no limit is set. Used to leave the limits out of state.
     pub(crate) fn is_unset(&self) -> bool {
-        self.max_ratio.is_none() && self.max_seeding_time.is_none()
+        self.max_ratio.is_none()
+            && self.max_seeding_time.is_none()
+            && self.max_inactive_seeding_time.is_none()
     }
 }
 
@@ -101,17 +107,20 @@ impl ShareLimits {
 pub(crate) enum ShareLimitReason {
     Ratio,
     SeedingTime,
+    InactiveSeedingTime,
 }
 
 /// Decide whether a finished torrent has reached its share limits.
 ///
 /// `seeding_secs` is zero when the completion time is unknown, which disables
-/// the seeding-time check rather than tripping it.
+/// the seeding-time check rather than tripping it. `inactive_secs` is the time
+/// since the upload counter last moved, and zero likewise disables its check.
 pub(crate) fn share_limit_reached(
     limits: &ShareLimits,
     uploaded_bytes: u64,
     total_bytes: u64,
     seeding_secs: u64,
+    inactive_secs: u64,
 ) -> Option<ShareLimitReason> {
     if let Some(max_ratio) = limits.max_ratio
         && total_bytes > 0
@@ -125,7 +134,22 @@ pub(crate) fn share_limit_reached(
     {
         return Some(ShareLimitReason::SeedingTime);
     }
+    if let Some(max_idle) = limits.max_inactive_seeding_time
+        && inactive_secs > 0
+        && inactive_secs >= max_idle.as_secs()
+    {
+        return Some(ShareLimitReason::InactiveSeedingTime);
+    }
     None
+}
+
+/// Seconds since a seed's upload counter last moved, updating the remembered
+/// `(uploaded_bytes, seen_at)` pair when it has. A fresh pair starts the clock.
+pub(crate) fn inactive_seconds(activity: &mut (u64, u64), uploaded_bytes: u64, now: u64) -> u64 {
+    if activity.1 == 0 || activity.0 != uploaded_bytes {
+        *activity = (uploaded_bytes, now);
+    }
+    now.saturating_sub(activity.1)
 }
 
 /// Result of a queue decision for one kind (downloads or seeds).
@@ -454,11 +478,17 @@ impl Session {
                 } else {
                     0
                 };
+                let inactive_secs = inactive_seconds(
+                    &mut handle.shared().upload_activity.lock(),
+                    stats.uploaded_bytes,
+                    now,
+                );
                 if let Some(reason) = share_limit_reached(
                     &limits,
                     stats.uploaded_bytes,
                     stats.total_bytes,
                     seeding_secs,
+                    inactive_secs,
                 ) {
                     info!(id, ?reason, "share limit reached, pausing torrent");
                     self.policy_pause(handle, PolicyPause::ShareLimit).await;
@@ -559,13 +589,14 @@ mod tests {
         ShareLimits {
             max_ratio: ratio,
             max_seeding_time: secs.map(Duration::from_secs),
+            max_inactive_seeding_time: None,
         }
     }
 
     #[test]
     fn no_limits_never_triggers() {
         assert_eq!(
-            share_limit_reached(&ShareLimits::default(), u64::MAX, 1, u64::MAX),
+            share_limit_reached(&ShareLimits::default(), u64::MAX, 1, u64::MAX, 0),
             None
         );
     }
@@ -573,9 +604,9 @@ mod tests {
     #[test]
     fn ratio_triggers_at_threshold() {
         let l = limits(Some(1.5), None);
-        assert_eq!(share_limit_reached(&l, 149, 100, 0), None);
+        assert_eq!(share_limit_reached(&l, 149, 100, 0, 0), None);
         assert_eq!(
-            share_limit_reached(&l, 150, 100, 0),
+            share_limit_reached(&l, 150, 100, 0, 0),
             Some(ShareLimitReason::Ratio)
         );
     }
@@ -583,7 +614,7 @@ mod tests {
     #[test]
     fn ratio_ignores_zero_size_torrent() {
         assert_eq!(
-            share_limit_reached(&limits(Some(0.0), None), 10, 0, 0),
+            share_limit_reached(&limits(Some(0.0), None), 10, 0, 0, 0),
             None
         );
     }
@@ -591,12 +622,35 @@ mod tests {
     #[test]
     fn seeding_time_triggers_and_unknown_completion_does_not() {
         let l = limits(None, Some(3600));
-        assert_eq!(share_limit_reached(&l, 0, 100, 3599), None);
+        assert_eq!(share_limit_reached(&l, 0, 100, 3599, 0), None);
         assert_eq!(
-            share_limit_reached(&l, 0, 100, 3600),
+            share_limit_reached(&l, 0, 100, 3600, 0),
             Some(ShareLimitReason::SeedingTime)
         );
-        assert_eq!(share_limit_reached(&l, 0, 100, 0), None);
+        assert_eq!(share_limit_reached(&l, 0, 100, 0, 0), None);
+    }
+
+    #[test]
+    fn inactive_seeding_time_triggers_and_zero_does_not() {
+        let l = ShareLimits {
+            max_inactive_seeding_time: Some(Duration::from_secs(600)),
+            ..Default::default()
+        };
+        assert_eq!(share_limit_reached(&l, 0, 100, 5000, 599), None);
+        assert_eq!(
+            share_limit_reached(&l, 0, 100, 5000, 600),
+            Some(ShareLimitReason::InactiveSeedingTime)
+        );
+        assert_eq!(share_limit_reached(&l, 0, 100, 5000, 0), None);
+    }
+
+    #[test]
+    fn inactivity_clock_resets_when_uploads_move() {
+        let mut activity = (0, 0);
+        assert_eq!(inactive_seconds(&mut activity, 10, 1000), 0);
+        assert_eq!(inactive_seconds(&mut activity, 10, 1300), 300);
+        assert_eq!(inactive_seconds(&mut activity, 11, 1400), 0);
+        assert_eq!(inactive_seconds(&mut activity, 11, 1450), 50);
     }
 
     /// Keys whose position is the id, as for torrents never moved in the queue.

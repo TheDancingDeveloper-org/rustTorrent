@@ -459,8 +459,6 @@
         "missing_fields": [
           "torrents.*.comment",
           "torrents.*.has_metadata",
-          "torrents.*.inactive_seeding_time_limit",
-          "torrents.*.max_inactive_seeding_time",
           "torrents.*.popularity",
           "torrents.*.private",
           "torrents.*.reannounce",
@@ -854,8 +852,6 @@
         "missing_fields": [
           "*.comment",
           "*.has_metadata",
-          "*.inactive_seeding_time_limit",
-          "*.max_inactive_seeding_time",
           "*.popularity",
           "*.private",
           "*.reannounce",
@@ -1111,7 +1107,7 @@
       "endpoint": "torrents/setShareLimits",
       "method": "POST",
       "status": "partial",
-      "notes": "Stores ratio/seeding-time limits and reports them in torrents/info; not auto-enforced (clients apply their own removal). Not persisted across restarts.",
+      "notes": "Sets ratio, seeding-time and inactive-seeding-time limits; the session pauses a seed that reaches one (stop action only; -2 global limits are treated as unlimited). Persisted with the torrent and reported in torrents/info.",
       "response": {
         "content": "text"
       }
