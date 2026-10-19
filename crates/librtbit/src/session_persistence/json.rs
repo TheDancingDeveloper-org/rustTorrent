@@ -173,6 +173,8 @@ impl JsonSessionPersistenceStore {
             share_paused: policy.share_paused,
             queue_position: Some(torrent.queue_position()),
             force_start: torrent.is_force_started(),
+            sequential_download: torrent.is_sequential_download(),
+            first_last_piece_priority: torrent.is_first_last_piece_priority(),
             share_limits,
             uploaded_bytes,
             part_files,

@@ -316,6 +316,13 @@ pub struct ManagedTorrentShared {
     /// does not take a queue slot. A user pause clears it.
     pub(crate) force_start: AtomicBool,
 
+    /// Piece-picker mode: download the pieces of each file in ascending order.
+    pub(crate) sequential_download: AtomicBool,
+
+    /// Piece-picker mode: fetch the first and last piece of every file before
+    /// any other queued piece.
+    pub(crate) first_last_piece_priority: AtomicBool,
+
     /// Set while the low-disk guard holds this download. The guard resumes it.
     pub(crate) held_for_disk: AtomicBool,
 
@@ -758,6 +765,28 @@ impl ManagedTorrent {
 
     pub fn is_force_started(&self) -> bool {
         self.shared.force_start.load(Ordering::Relaxed)
+    }
+
+    pub fn is_sequential_download(&self) -> bool {
+        self.shared.sequential_download.load(Ordering::Relaxed)
+    }
+
+    pub fn set_sequential_download(&self, enabled: bool) {
+        self.shared
+            .sequential_download
+            .store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn is_first_last_piece_priority(&self) -> bool {
+        self.shared
+            .first_last_piece_priority
+            .load(Ordering::Relaxed)
+    }
+
+    pub fn set_first_last_piece_priority(&self, enabled: bool) {
+        self.shared
+            .first_last_piece_priority
+            .store(enabled, Ordering::Relaxed);
     }
 
     pub fn is_queued(&self) -> bool {

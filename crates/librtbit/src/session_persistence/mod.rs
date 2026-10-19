@@ -75,6 +75,11 @@ pub struct SerializedTorrent {
     queue_position: Option<i64>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     force_start: bool,
+    /// Piece-picker modes. Absent in older state, which reads as off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    sequential_download: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    first_last_piece_priority: bool,
     /// Share limits as set on the torrent. Absent in older state, which means no limits.
     #[serde(default, skip_serializing_if = "ShareLimits::is_unset")]
     share_limits: ShareLimits,
@@ -137,6 +142,8 @@ impl SerializedTorrent {
             uploaded_bytes: self.uploaded_bytes,
             queue_position: self.queue_position,
             force_start: self.force_start,
+            sequential_download: self.sequential_download,
+            first_last_piece_priority: self.first_last_piece_priority,
         }
     }
 
@@ -211,6 +218,8 @@ pub(crate) struct RestoredState {
     uploaded_bytes: u64,
     queue_position: Option<i64>,
     force_start: bool,
+    sequential_download: bool,
+    first_last_piece_priority: bool,
 }
 
 impl RestoredState {
@@ -228,6 +237,14 @@ impl RestoredState {
         shared
             .force_start
             .store(self.force_start, std::sync::atomic::Ordering::Relaxed);
+        shared.sequential_download.store(
+            self.sequential_download,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        shared.first_last_piece_priority.store(
+            self.first_last_piece_priority,
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 }
 

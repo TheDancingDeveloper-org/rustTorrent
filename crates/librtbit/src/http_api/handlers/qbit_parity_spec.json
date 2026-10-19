@@ -1168,12 +1168,20 @@
     {
       "endpoint": "torrents/toggleFirstLastPiecePrio",
       "method": "POST",
-      "status": "missing"
+      "status": "partial",
+      "notes": "Flips the per-torrent first/last-piece boost: the first and last piece of every selected file are fetched before any other queued piece. Persisted; applies live. Not settable at add time yet.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/toggleSequentialDownload",
       "method": "POST",
-      "status": "missing"
+      "status": "partial",
+      "notes": "Flips per-torrent sequential mode: pieces of each file in ascending order, files in file-priority order. Persisted; applies live. Not settable at add time yet.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/topPrio",

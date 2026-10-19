@@ -33,6 +33,24 @@ impl FileInfo {
     pub fn iter_piece_priorities(&self) -> impl Iterator<Item = usize> {
         iter_piece_priorities(self.piece_range_usize())
     }
+
+    /// The pieces of this file in the order the picker should try them.
+    pub fn iter_piece_order(&self, sequential: bool) -> impl Iterator<Item = usize> {
+        let range = self.piece_range_usize();
+        let in_order = sequential.then(|| range.clone()).into_iter().flatten();
+        let default = (!sequential)
+            .then(|| iter_piece_priorities(range))
+            .into_iter()
+            .flatten();
+        in_order.chain(default)
+    }
+
+    /// The first and last piece of this file (one piece if they coincide).
+    pub fn iter_first_last_pieces(&self) -> impl Iterator<Item = usize> {
+        let r = self.piece_range_usize();
+        let len = r.len().min(2);
+        [r.start, r.end.saturating_sub(1)].into_iter().take(len)
+    }
 }
 
 #[cfg(test)]
