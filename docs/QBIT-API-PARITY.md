@@ -8,12 +8,12 @@ and enforced, and where we currently stand.
 
 ## Current standing (upstream WebAPI 2.16.2, refreshed 2026-10-17)
 
-**72 of 93 in-scope endpoints routed (~77%)** — 28 full, 44 partial — plus 2
+**74 of 95 in-scope endpoints routed (~78%)** — 30 full, 44 partial — plus 2
 legacy aliases (`torrents/pause`, `torrents/resume`) that upstream removed in
-WebAPI 2.11. 37 of the 130 upstream endpoints were descoped on 2026-08-30
+WebAPI 2.11. 35 of the 130 upstream endpoints are descoped (since 2026-08-30;
+`clientdata/*` was brought back in scope for WI-17)
 (marked `out_of_scope`, enforced as unrouted): `search/*` (Indexarr covers
-discovery), `rss/*` (native `/rss` + Indexarr are the RSS story), `clientdata/*`,
-SSL parameters, and qBittorrent-internal app misc (email, cookies, API keys,
+discovery), `rss/*` (native `/rss` + Indexarr are the RSS story), SSL parameters, and qBittorrent-internal app misc (email, cookies, API keys,
 processInfo, getDirectoryContent).
 
 Counts are taken from `qbit_parity_spec.json`; `cargo test -p swarmforge
@@ -34,7 +34,8 @@ still-`missing` in-scope endpoints.
 | `sync` | 2 / 2 | `maindata` and `torrentPeers` with rid deltas (changed fields + `*_removed`; full update for rid 0 or an expired rid) |
 | `torrentcreator` | 4 / 4 | task API over the native `create_torrent` (in-memory tasks) |
 | `log` | 0 / 2 | no persistent log ring buffer |
-| `rss`, `search`, `clientdata` | — | descoped entirely |
+| `clientdata` | 2 / 2 | `load`/`store` over a small JSON KV file in the session data directory (`qbit-clientdata.json`; `null` deletes) |
+| `rss`, `search` | — | descoped entirely |
 
 ### Compat hardening (2026-10-17)
 
@@ -170,7 +171,7 @@ Remaining work, roughly by cost:
    currently immutable). (`torrentcreator/*` is now done — an in-memory task
    store over the native `create_torrent`; tasks are not persisted.)
 3. **Probably out of scope**: `search/*` (plugin system),
-   `app/sendTestEmail`, `app/processInfo`, `clientdata/*`,
+   `app/sendTestEmail`, `app/processInfo`,
    `torrents/SSLParameters`, `log/*`.
 
 ### Relocation (setLocation, v1, 2026-08-31)

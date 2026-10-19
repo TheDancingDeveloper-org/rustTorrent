@@ -173,14 +173,23 @@
     {
       "endpoint": "clientdata/load",
       "method": "GET",
-      "status": "out_of_scope",
-      "notes": "Out of scope: WebUI client-state KV store; not needed for targeted clients."
+      "status": "full",
+      "notes": "Returns the stored pairs named by the optional `keys` JSON array (all pairs when absent).",
+      "response": {
+        "content": "json",
+        "schema": {
+          "*": "any"
+        }
+      }
     },
     {
       "endpoint": "clientdata/store",
       "method": "POST",
-      "status": "out_of_scope",
-      "notes": "Out of scope: WebUI client-state KV store; not needed for targeted clients."
+      "status": "full",
+      "notes": "Merges the `data` JSON object into a small KV file in the session data directory; a null value removes its key.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "log/main",
@@ -907,7 +916,7 @@
       "endpoint": "torrents/properties",
       "method": "GET",
       "status": "partial",
-      "notes": "dl_limit/up_limit report the per-torrent limits (-1 unlimited). Some fields stubbed (creation_date, comment, wasted, reannounce).",
+      "notes": "dl_limit/up_limit report the per-torrent limits (-1 unlimited). comment, created_by and creation_date come from the .torrent file (-1 creation_date when absent or for magnets). total_wasted and reannounce are stubbed at 0.",
       "response": {
         "content": "json",
         "schema": {
