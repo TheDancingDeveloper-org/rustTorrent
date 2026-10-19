@@ -66,7 +66,7 @@
       "endpoint": "app/preferences",
       "method": "GET",
       "status": "partial",
-      "notes": "Small subset of preference fields. queueing_enabled, max_active_downloads and max_active_uploads reflect the session queue limits; max_active_torrents is -1 (no combined limit). Seeding-limit fields are reported disabled with qBittorrent default values; rtbit does not enforce them globally.",
+      "notes": "Subset of preference fields. dl_limit/up_limit and alt_dl_limit/alt_up_limit report the live normal and alternative session limits (bytes/s, 0 unlimited); scheduler_enabled is false. queueing_enabled, max_active_downloads and max_active_uploads reflect the session queue limits; max_active_torrents is -1 (no combined limit). Seeding-limit fields are reported disabled with qBittorrent default values; rtbit does not enforce them globally.",
       "response": {
         "content": "json",
         "schema": {
@@ -127,7 +127,7 @@
       "endpoint": "app/setPreferences",
       "method": "POST",
       "status": "partial",
-      "notes": "announce_port is applied when present (must be 1-65535). Other fields are accepted and ignored, so whole-object read-modify-write clients succeed.",
+      "notes": "Partial apply: announce_port (must be 1-65535), queueing_enabled/max_active_downloads/max_active_uploads, and dl_limit/up_limit/alt_dl_limit/alt_up_limit (0 or -1 unlimited) are applied when present. Unknown or unsupported fields are ignored, so whole-object read-modify-write clients succeed.",
       "response": {
         "content": "text"
       }
