@@ -28,7 +28,7 @@ PR checks are path-scoped; the merge queue runs the full suite. Enqueue with
 - **Do not reference the upstream qBittorrent project by name in code.** The
   WebUI API v2 compatibility layer must not spell the brand name in Rust
   identifiers, struct/field names, log messages, or response strings. Use the
-  neutral `qbit` abbreviation (already the established prefix, e.g. `qbit_compat`,
+  neutral `qbit` abbreviation (already the established prefix, e.g. `qbit`,
   `QbitTorrentInfo`) or phrasings like "WebUI API v2 compat". Protocol-level
   constants the layer must emit for wire compatibility (state strings such as
   `stoppedDL`, the advertised `webapiVersion`, endpoint paths) are not brand
