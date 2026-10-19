@@ -14,7 +14,7 @@ clap = { version = "4", features = ["derive", "env"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-bollard = { version = "0.21", default-features = false }
+bollard = { version = "0.21", default-features = false, features = ["pipe"] }
 anyhow = "1"
 dashmap = "6"
 percent-encoding = "2"
