@@ -97,6 +97,37 @@ impl QbitSessions {
     fn remove_session(&self, sid: &str) {
         self.sessions.write().remove(sid);
     }
+
+    /// Drop every session idle longer than the TTL. Runs periodically so SIDs
+    /// from clients that re-login without logging out cannot pile up.
+    fn purge_expired(&self) -> usize {
+        let mut sessions = self.sessions.write();
+        let before = sessions.len();
+        sessions.retain(|_, last_used| last_used.elapsed() < self.idle_ttl);
+        before - sessions.len()
+    }
+}
+
+/// Spawn a task that purges expired compat sessions every `idle_ttl / 4`. The
+/// task holds a weak reference and exits once the compat state is dropped.
+fn spawn_session_purge(state: &Arc<QbitState>) {
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    let period = (state.sessions.idle_ttl / 4).max(Duration::from_secs(1));
+    let weak = Arc::downgrade(state);
+    runtime.spawn(async move {
+        let mut interval = tokio::time::interval(period);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            let Some(state) = weak.upgrade() else { break };
+            let purged = state.sessions.purge_expired();
+            if purged > 0 {
+                debug!(purged, "qbit compat: purged expired sessions");
+            }
+        }
+    });
 }
 
 /// On-disk shape of the tag store the compat layer kept before tags moved
@@ -461,8 +492,8 @@ struct QbitPreferences {
     max_connec_per_torrent: i32,
     max_uploads: i32,
     max_uploads_per_torrent: i32,
-    dl_limit: i32,
-    up_limit: i32,
+    dl_limit: i64,
+    up_limit: i64,
     dht: bool,
     pex: bool,
     lsd: bool,
@@ -475,6 +506,9 @@ struct QbitPreferences {
     web_ui_port: u16,
     listen_port: u16,
     announce_port: u16,
+    alt_dl_limit: i64,
+    alt_up_limit: i64,
+    scheduler_enabled: bool,
     // Seeding limits are reported disabled: rtbit does not enforce them
     // globally (per-torrent limits go through torrents/setShareLimits). The
     // values are qBittorrent's defaults, which *arr apps read back as-is.
@@ -503,6 +537,25 @@ struct SetPreferences {
     max_active_downloads: Option<i64>,
     #[serde(default)]
     max_active_uploads: Option<i64>,
+    #[serde(default)]
+    dl_limit: Option<i64>,
+    #[serde(default)]
+    up_limit: Option<i64>,
+    #[serde(default)]
+    alt_dl_limit: Option<i64>,
+    #[serde(default)]
+    alt_up_limit: Option<i64>,
+}
+
+/// A preferences byte-rate limit as rtbit stores it: 0 or negative means
+/// unlimited.
+fn pref_limit(limit: i64) -> Option<u64> {
+    u64::try_from(limit).ok().filter(|&n| n != 0)
+}
+
+/// An rtbit byte-rate limit as preferences report it: 0 means unlimited.
+fn pref_limit_to_qbit(limit: Option<u64>) -> i64 {
+    limit.map_or(0, |n| i64::try_from(n).unwrap_or(i64::MAX))
 }
 
 /// The queue limit qBittorrent reports for an rtbit limit: -1 for unlimited.
@@ -674,6 +727,8 @@ async fn h_app_build_info() -> impl IntoResponse {
 async fn h_app_preferences(State(state): State<Arc<QbitState>>) -> axum::Json<QbitPreferences> {
     let save_path = state.api_state.api.api_output_folder();
     let session = state.api_state.api.session();
+    let (download, upload) = session.normal_rate_limits();
+    let alt = session.alt_speed_status().config;
 
     axum::Json(QbitPreferences {
         save_path,
@@ -683,8 +738,8 @@ async fn h_app_preferences(State(state): State<Arc<QbitState>>) -> axum::Json<Qb
         max_connec_per_torrent: -1,
         max_uploads: -1,
         max_uploads_per_torrent: -1,
-        dl_limit: 0,
-        up_limit: 0,
+        dl_limit: pref_limit_to_qbit(download.map(|v| u64::from(v.get()))),
+        up_limit: pref_limit_to_qbit(upload.map(|v| u64::from(v.get()))),
         dht: true,
         pex: true,
         lsd: true,
@@ -698,6 +753,9 @@ async fn h_app_preferences(State(state): State<Arc<QbitState>>) -> axum::Json<Qb
         web_ui_port: state.api_state.opts.web_ui_port.unwrap_or(3030),
         listen_port: state.api_state.api.api_listen_port(),
         announce_port: state.api_state.api.api_announce_port(),
+        alt_dl_limit: pref_limit_to_qbit(alt.download_rate),
+        alt_up_limit: pref_limit_to_qbit(alt.upload_rate),
+        scheduler_enabled: false,
         max_ratio_enabled: false,
         max_ratio: 2.0,
         max_ratio_act: 0,
@@ -706,9 +764,11 @@ async fn h_app_preferences(State(state): State<Arc<QbitState>>) -> axum::Json<Qb
     })
 }
 
-/// `app/setPreferences`. `announce_port` and the queue settings
-/// (`queueing_enabled`, `max_active_downloads`, `max_active_uploads`) are
-/// applied; other keys are ignored. `announce_port`, when present, must be a
+/// `app/setPreferences`. `announce_port`, the queue settings
+/// (`queueing_enabled`, `max_active_downloads`, `max_active_uploads`) and the
+/// normal and alternative speed limits (`dl_limit`, `up_limit`,
+/// `alt_dl_limit`, `alt_up_limit`, bytes/s, 0 or -1 unlimited) are applied;
+/// other keys are ignored. `announce_port`, when present, must be a
 /// valid port. Absent keys leave their setting alone, so
 /// read-modify-write clients that post their whole preferences object work.
 async fn h_app_set_preferences(
@@ -742,6 +802,25 @@ async fn h_app_set_preferences(
         && let Err(error) = session.set_queue_limits(downloads, seeds).await
     {
         warn!(%error, "qbit compat: error saving queue limits");
+    }
+    if preferences.dl_limit.is_some() || preferences.up_limit.is_some() {
+        let (download, upload) = session.normal_rate_limits();
+        let bps = |limit: i64| pref_limit(limit).and_then(limit_to_bps);
+        session.set_normal_rate_limits(
+            preferences.dl_limit.map_or(download, bps),
+            preferences.up_limit.map_or(upload, bps),
+        );
+    }
+    if preferences.alt_dl_limit.is_some() || preferences.alt_up_limit.is_some() {
+        let current = session.alt_speed_status().config;
+        session.set_alt_speed_config(AltSpeedConfig {
+            download_rate: preferences
+                .alt_dl_limit
+                .map_or(current.download_rate, pref_limit),
+            upload_rate: preferences
+                .alt_up_limit
+                .map_or(current.upload_rate, pref_limit),
+        });
     }
     (StatusCode::OK, String::new()).into_response()
 }
@@ -3444,6 +3523,7 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
         sync: SyncSnapshots::default(),
         clientdata: ClientDataStore::open(clientdata_path()),
     });
+    spawn_session_purge(&qbit_state);
 
     // Auth endpoints (no auth required to reach these)
     let auth_router = Router::new()
@@ -3779,6 +3859,54 @@ mod tests {
         assert_eq!(sessions.sessions.read().len(), 1);
         assert!(!sessions.sessions.read().contains_key(&stale));
         assert!(sessions.validate_session(&fresh));
+    }
+
+    #[test]
+    fn purge_expired_drops_only_idle_sessions() {
+        let sessions = QbitSessions::with_idle_ttl(Duration::from_millis(300));
+        let stale = sessions.create_session();
+        std::thread::sleep(Duration::from_millis(400));
+        sessions
+            .sessions
+            .write()
+            .insert("fresh".into(), std::time::Instant::now());
+        assert_eq!(sessions.purge_expired(), 1);
+        assert!(!sessions.sessions.read().contains_key(&stale));
+        assert!(sessions.validate_session("fresh"));
+        assert_eq!(sessions.purge_expired(), 0);
+    }
+
+    #[tokio::test]
+    async fn set_preferences_partially_applies_speed_limits() {
+        let (state, session, _output) = qbit_state().await;
+        // Unknown keys are ignored; known keys apply.
+        let json = r#"{"dl_limit":1048576,"alt_up_limit":2048,"bogus_key":[1,2],"locale":"de"}"#;
+        let body = format!("json={}", urlencoding::encode(json));
+        let response =
+            h_app_set_preferences(axum::extract::State(state.clone()), Bytes::from(body))
+                .await
+                .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let prefs = serde_json::to_value(
+            h_app_preferences(axum::extract::State(state.clone()))
+                .await
+                .0,
+        )
+        .unwrap();
+        assert_eq!(prefs["dl_limit"], 1_048_576);
+        assert_eq!(prefs["up_limit"], 0);
+        assert_eq!(prefs["alt_up_limit"], 2048);
+        assert_eq!(prefs["alt_dl_limit"], 0);
+        assert_eq!(session.alt_speed_status().config.upload_rate, Some(2048));
+
+        // -1 clears a limit; untouched keys keep their values.
+        let body = format!("json={}", urlencoding::encode(r#"{"dl_limit":-1}"#));
+        h_app_set_preferences(axum::extract::State(state.clone()), Bytes::from(body)).await;
+        let prefs =
+            serde_json::to_value(h_app_preferences(axum::extract::State(state)).await.0).unwrap();
+        assert_eq!(prefs["dl_limit"], 0);
+        assert_eq!(prefs["alt_up_limit"], 2048);
     }
 
     #[test]
