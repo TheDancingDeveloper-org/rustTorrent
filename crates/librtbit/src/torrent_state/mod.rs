@@ -266,6 +266,10 @@ pub struct ManagedTorrentShared {
     /// Category assigned to this torrent.
     pub category: RwLock<Option<String>>,
 
+    /// Tags assigned to this torrent. Each is also registered in the session's
+    /// tag registry.
+    pub tags: RwLock<std::collections::BTreeSet<String>>,
+
     /// Per-torrent speed limits, mutable at runtime. Seeded from the add-time
     /// options; read when (re)constructing the live limiter so a limit set
     /// while paused (or before a pause/unpause) survives. `None` bps = no limit.

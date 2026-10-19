@@ -2,7 +2,10 @@ pub mod json;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 
-use std::{collections::HashMap, collections::HashSet, path::PathBuf};
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    path::PathBuf,
+};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -47,6 +50,9 @@ pub struct SerializedTorrent {
     is_paused: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     category: Option<String>,
+    /// Tags on the torrent. Absent in older state, which reads as no tags.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    tags: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     added_on: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -105,6 +111,7 @@ impl SerializedTorrent {
 
     pub fn into_add_torrent(self) -> anyhow::Result<(AddTorrent<'static>, AddTorrentOptions)> {
         let category = self.category.clone();
+        let tags = self.tags.iter().cloned().collect();
         let part_files = self.part_files;
         let trackers = self.trackers.into_iter().collect::<Vec<_>>();
         let add_torrent = if !self.torrent_bytes.is_empty() {
@@ -140,6 +147,7 @@ impl SerializedTorrent {
             only_files: self.only_files,
             overwrite: true,
             category,
+            tags,
             added_on: self.added_on,
             completion_on: self.completion_on,
             trackers: Some(trackers),
@@ -203,6 +211,14 @@ pub trait SessionPersistenceStore: core::fmt::Debug + Send + Sync + BitVFactory 
         &self,
         _categories: &HashMap<String, TorrentCategory>,
     ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn load_tags(&self) -> anyhow::Result<BTreeSet<String>> {
+        Ok(BTreeSet::new())
+    }
+
+    async fn store_tags(&self, _tags: &BTreeSet<String>) -> anyhow::Result<()> {
         Ok(())
     }
 

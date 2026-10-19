@@ -62,10 +62,13 @@ of H4, and tag persistence):
 - **Cookies and origin**: the SID cookie is `SameSite=Strict`. POST requests
   that carry an `Origin` header must name the same authority as `Host`, or they
   get 403. Requests without `Origin` (native clients, curl) are unaffected.
-- **Tags**: tags are written to `qbit-tags.json` in the session data directory
-  (the default JSON persistence folder) after every change, so they survive
-  restarts. An unreadable file is logged and treated as empty. It is replaced on
-  the next tag change.
+- **Tags**: tags are a native session concept. Each torrent's tag set is
+  persisted with the torrent, and the registry of known tags is kept in
+  `tags.json` beside `categories.json`. `torrents/add` accepts `tags`, and
+  `torrents/info?tag=` with an empty value selects untagged torrents. A
+  `qbit-tags.json` left by an earlier version is imported once at startup and
+  renamed to `qbit-tags.json.migrated`; tags for torrents no longer in the
+  session are dropped. The postgres store does not persist tags yet.
 - **Queue and force-start**: `torrents/setForceStart` is routed to resume.
   `torrents/topPrio`, `bottomPrio`, `increasePrio` and `decreasePrio` succeed as
   no-ops, since there is no download queue and `queueing_enabled` is `false`.

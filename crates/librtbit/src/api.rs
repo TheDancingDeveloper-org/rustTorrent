@@ -24,6 +24,7 @@ use crate::{
         AddTorrent, AddTorrentOptions, AddTorrentResponse, ListOnlyResponse, Session, TorrentId,
     },
     session_stats::snapshot::SessionStatsSnapshot,
+    tag::normalize_tags,
     torrent_state::{
         FileStream, ManagedTorrentHandle,
         peer::stats::snapshot::{PeerStatsFilter, PeerStatsSnapshot},
@@ -674,6 +675,105 @@ impl Api {
         let handle = self.mgr_handle(idx)?;
         self.session.try_update_persistence_metadata(&handle).await;
         Ok(Default::default())
+    }
+
+    pub fn api_list_tags(&self) -> Vec<String> {
+        self.session.tags().list()
+    }
+
+    /// Register tags without assigning them to any torrent.
+    pub async fn api_create_tags(&self, tags: &[String]) -> Result<EmptyJsonResponse> {
+        if self.session.tags().create(&normalize_tags(tags)) {
+            self.persist_tags().await?;
+        }
+        Ok(Default::default())
+    }
+
+    /// Unregister tags and strip them from every torrent carrying them.
+    pub async fn api_delete_tags(&self, tags: &[String]) -> Result<EmptyJsonResponse> {
+        let tags = normalize_tags(tags);
+        self.session.tags().delete(&tags);
+        let affected: Vec<ManagedTorrentHandle> = self.session.with_torrents(|iter| {
+            iter.filter(|(_, handle)| {
+                let mut own = handle.shared().tags.write();
+                let before = own.len();
+                own.retain(|tag| !tags.contains(tag));
+                own.len() != before
+            })
+            .map(|(_, handle)| handle.clone())
+            .collect()
+        });
+        for handle in affected {
+            self.session.try_update_persistence_metadata(&handle).await;
+        }
+        self.persist_tags().await?;
+        Ok(Default::default())
+    }
+
+    /// Add tags to a torrent, registering any that are new.
+    pub async fn api_add_torrent_tags(
+        &self,
+        idx: TorrentIdOrHash,
+        tags: &[String],
+    ) -> Result<EmptyJsonResponse> {
+        let tags = normalize_tags(tags);
+        self.update_torrent_tags(idx, |own| own.extend(tags)).await
+    }
+
+    /// Remove tags from a torrent. An empty list removes every tag, matching
+    /// the WebUI API v2 semantics.
+    pub async fn api_remove_torrent_tags(
+        &self,
+        idx: TorrentIdOrHash,
+        tags: &[String],
+    ) -> Result<EmptyJsonResponse> {
+        let tags = normalize_tags(tags);
+        self.update_torrent_tags(idx, |own| {
+            if tags.is_empty() {
+                own.clear();
+            } else {
+                own.retain(|tag| !tags.contains(tag));
+            }
+        })
+        .await
+    }
+
+    /// Replace a torrent's tag set, registering any tags that are new.
+    pub async fn api_set_torrent_tags(
+        &self,
+        idx: TorrentIdOrHash,
+        tags: &[String],
+    ) -> Result<EmptyJsonResponse> {
+        let tags = normalize_tags(tags);
+        self.update_torrent_tags(idx, |own| *own = tags).await
+    }
+
+    async fn update_torrent_tags(
+        &self,
+        idx: TorrentIdOrHash,
+        f: impl FnOnce(&mut std::collections::BTreeSet<String>),
+    ) -> Result<EmptyJsonResponse> {
+        let registered_before = self.session.tags().snapshot().len();
+        let changed = self
+            .session
+            .update_torrent_tags(idx, f)
+            .context("error setting torrent tags")?;
+        if changed {
+            let handle = self.mgr_handle(idx)?;
+            self.session.try_update_persistence_metadata(&handle).await;
+        }
+        if self.session.tags().snapshot().len() != registered_before {
+            self.persist_tags().await?;
+        }
+        Ok(Default::default())
+    }
+
+    async fn persist_tags(&self) -> Result<()> {
+        self.session
+            .persist_tags()
+            .await
+            .context("error persisting tags")?;
+        Ok(())
     }
 }
 
