@@ -24,7 +24,7 @@ use bytes::Bytes;
 use http::{HeaderMap, Method, StatusCode, header::RETRY_AFTER, header::SET_COOKIE};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use tracing::warn;
+use tracing::{debug, info, warn};
 
 use crate::{
     AddTorrent, AddTorrentOptions, CreateTorrentOptions, SessionPersistenceConfig,
@@ -98,160 +98,57 @@ impl QbitSessions {
     }
 }
 
-/// On-disk shape of the compat tag store.
-#[derive(Default, Serialize, Deserialize)]
+/// On-disk shape of the tag store the compat layer kept before tags moved
+/// into the session (`qbit-tags.json`).
+#[derive(Default, Deserialize)]
 #[serde(default)]
-struct PersistedTags {
+struct LegacyTagStore {
     all: BTreeSet<String>,
     per_torrent: HashMap<String, BTreeSet<String>>,
 }
 
-/// Tag store for the compat layer. rtbit has no native tag concept, so tags
-/// live here: a global set plus a per-torrent, info-hash-keyed set. When built
-/// with a path they are loaded from that JSON file and written back after each
-/// change, so they survive restarts. Without a path they stay in memory.
-#[derive(Default)]
-struct QbitTags {
-    all: RwLock<BTreeSet<String>>,
-    per_torrent: RwLock<HashMap<String, BTreeSet<String>>>,
-    path: Option<PathBuf>,
-}
-
-impl QbitTags {
-    /// Load the store from `path`, or start empty if the file does not exist yet.
-    /// A file that cannot be parsed is logged and ignored rather than failing startup.
-    fn persistent(path: PathBuf) -> Self {
-        let loaded = match std::fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice::<PersistedTags>(&bytes).unwrap_or_else(|error| {
-                warn!(?path, %error, "qbit compat: ignoring unreadable tag store");
-                PersistedTags::default()
-            }),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => PersistedTags::default(),
-            Err(error) => {
-                warn!(?path, %error, "qbit compat: cannot read tag store");
-                PersistedTags::default()
-            }
-        };
-        Self {
-            all: RwLock::new(loaded.all),
-            per_torrent: RwLock::new(loaded.per_torrent),
-            path: Some(path),
-        }
-    }
-
-    /// Write the current state to disk, via a temp file so a crash mid-write
-    /// cannot leave a truncated store behind. Failures are logged, not returned:
-    /// the in-memory state stays authoritative for the running process.
-    fn persist(&self) {
-        let Some(path) = &self.path else {
-            return;
-        };
-        let snapshot = PersistedTags {
-            all: self.all.read().clone(),
-            per_torrent: self.per_torrent.read().clone(),
-        };
-        let result = serde_json::to_vec(&snapshot)
-            .map_err(std::io::Error::other)
-            .and_then(|bytes| {
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                let tmp = path.with_extension("json.tmp");
-                std::fs::write(&tmp, bytes)?;
-                std::fs::rename(&tmp, path)
-            });
-        if let Err(error) = result {
-            warn!(?path, %error, "qbit compat: failed to persist tags");
-        }
-    }
-
-    fn all_tags(&self) -> Vec<String> {
-        self.all.read().iter().cloned().collect()
-    }
-
-    fn create(&self, tags: &[String]) {
-        {
-            let mut all = self.all.write();
-            all.extend(tags.iter().cloned());
-        }
-        self.persist();
-    }
-
-    fn delete(&self, tags: &[String]) {
-        {
-            let mut all = self.all.write();
-            let mut per = self.per_torrent.write();
-            for tag in tags {
-                all.remove(tag);
-            }
-            for set in per.values_mut() {
-                for tag in tags {
-                    set.remove(tag);
-                }
-            }
-        }
-        self.persist();
-    }
-
-    fn add_to(&self, hashes: &[String], tags: &[String]) {
-        if tags.is_empty() {
+/// Import a legacy compat tag store into the session's tags, then rename it to
+/// `*.migrated` so the import runs once. Tags for torrents that are no longer
+/// in the session are dropped. A file that cannot be read or parsed is logged
+/// and left in place.
+async fn migrate_legacy_tag_store(api: &Api, path: &Path) {
+    let bytes = match tokio::fs::read(path).await {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            warn!(?path, %error, "qbit compat: cannot read legacy tag store");
             return;
         }
-        self.create(tags);
-        {
-            let mut per = self.per_torrent.write();
-            for hash in hashes {
-                per.entry(hash.clone())
-                    .or_default()
-                    .extend(tags.iter().cloned());
-            }
+    };
+    let legacy: LegacyTagStore = match serde_json::from_slice(&bytes) {
+        Ok(legacy) => legacy,
+        Err(error) => {
+            warn!(?path, %error, "qbit compat: ignoring unreadable legacy tag store");
+            return;
         }
-        self.persist();
+    };
+    let all: Vec<String> = legacy.all.into_iter().collect();
+    if let Err(error) = api.api_create_tags(&all).await {
+        warn!(%error, "qbit compat: error importing legacy tags");
+        return;
     }
-
-    fn remove_from(&self, hashes: &[String], tags: &[String]) {
-        {
-            let mut per = self.per_torrent.write();
-            for hash in hashes {
-                if let Some(set) = per.get_mut(hash) {
-                    // An empty tag list clears every tag, matching qBittorrent.
-                    if tags.is_empty() {
-                        set.clear();
-                    } else {
-                        for tag in tags {
-                            set.remove(tag);
-                        }
-                    }
-                }
-            }
+    for (hash, tags) in legacy.per_torrent {
+        let Ok(idx) = TorrentIdOrHash::parse(&hash) else {
+            continue;
+        };
+        if api.mgr_handle(idx).is_err() {
+            debug!(%hash, "qbit compat: legacy tags for unknown torrent dropped");
+            continue;
         }
-        self.persist();
-    }
-
-    fn set(&self, hashes: &[String], tags: &[String]) {
-        self.create(tags);
-        {
-            let mut per = self.per_torrent.write();
-            for hash in hashes {
-                per.insert(hash.clone(), tags.iter().cloned().collect());
-            }
+        let tags: Vec<String> = tags.into_iter().collect();
+        if let Err(error) = api.api_add_torrent_tags(idx, &tags).await {
+            warn!(%hash, %error, "qbit compat: error importing legacy torrent tags");
         }
-        self.persist();
     }
-
-    fn tags_for(&self, hash: &str) -> String {
-        self.per_torrent
-            .read()
-            .get(hash)
-            .map(|set| set.iter().cloned().collect::<Vec<_>>().join(", "))
-            .unwrap_or_default()
-    }
-
-    fn has_tag(&self, hash: &str, tag: &str) -> bool {
-        self.per_torrent
-            .read()
-            .get(hash)
-            .is_some_and(|set| set.contains(tag))
+    let migrated = path.with_extension("json.migrated");
+    match tokio::fs::rename(path, &migrated).await {
+        Ok(()) => info!(?path, "qbit compat: imported legacy tag store"),
+        Err(error) => warn!(?path, %error, "qbit compat: cannot rename legacy tag store"),
     }
 }
 
@@ -387,7 +284,6 @@ struct QbitCategory {
 pub(crate) struct QbitState {
     api_state: ApiState,
     sessions: QbitSessions,
-    tags: QbitTags,
     creator: QbitTorrentCreator,
     share_limits: QbitShareLimits,
     sync: SyncSnapshots,
@@ -1170,7 +1066,14 @@ fn build_torrent_info(
         size: stats.total_bytes,
         state: qbit_state.to_string(),
         super_seeding: false,
-        tags: String::new(),
+        tags: handle
+            .shared()
+            .tags
+            .read()
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", "),
         time_active,
         total_size: stats.total_bytes,
         tracker,
@@ -1215,7 +1118,6 @@ async fn h_torrents_info(
         iter.filter_map(|(_id, handle)| {
             let stats = handle.stats();
             let mut info = build_torrent_info(handle, &stats, now);
-            info.tags = state.tags.tags_for(&info.hash);
             apply_share_limits(&mut info, &state.share_limits);
 
             // Filter by hash if specified.
@@ -1233,10 +1135,10 @@ async fn h_torrents_info(
                 return None;
             }
 
-            // A non-empty tag query filters to torrents carrying that tag.
+            // An empty tag query selects untagged torrents; otherwise the
+            // torrent must carry that tag.
             if let Some(ref tag) = query.tag
-                && !tag.is_empty()
-                && !state.tags.has_tag(&info.hash, tag)
+                && !matches_tag(tag, &handle.shared().tags.read())
             {
                 return None;
             }
@@ -1284,6 +1186,14 @@ async fn h_torrents_info(
 
     let torrents = apply_offset_limit(torrents, query.offset.unwrap_or(0), query.limit);
     axum::Json(torrents)
+}
+
+fn matches_tag(requested: &str, tags: &BTreeSet<String>) -> bool {
+    if requested.is_empty() {
+        tags.is_empty()
+    } else {
+        tags.contains(requested)
+    }
 }
 
 fn matches_category(requested: &str, category: &str) -> bool {
@@ -1686,6 +1596,7 @@ async fn h_torrents_add(
     let mut torrent_bytes: Vec<Bytes> = Vec::new();
     let mut savepath: Option<String> = None;
     let mut category: Option<String> = None;
+    let mut tags: Vec<String> = Vec::new();
     let mut paused = false;
 
     while let Ok(Some(field)) = multipart.next_field().await {
@@ -1718,6 +1629,11 @@ async fn h_torrents_add(
                     category = Some(text);
                 }
             }
+            "tags" => {
+                if let Ok(text) = field.text().await {
+                    tags = parse_tags(&text);
+                }
+            }
             "savepath" => {
                 if let Ok(text) = field.text().await
                     && !text.is_empty()
@@ -1748,6 +1664,7 @@ async fn h_torrents_add(
             overwrite: true,
             output_folder_root: savepath.clone(),
             category: category.clone(),
+            tags: tags.clone(),
             ..Default::default()
         };
         if let Err(e) = api
@@ -1765,6 +1682,7 @@ async fn h_torrents_add(
             overwrite: true,
             output_folder_root: savepath.clone(),
             category: category.clone(),
+            tags: tags.clone(),
             ..Default::default()
         };
         if let Err(e) = api
@@ -2394,6 +2312,19 @@ struct SetShareLimitsForm {
     seeding_time_limit: i64,
 }
 
+/// Resolve hash(es) to canonical (lowercase hex) info-hash strings, used as the
+/// key space for the share-limit store. Skips torrents that cannot be resolved.
+fn resolve_info_hashes(api: &Api, hashes_str: &str) -> Vec<String> {
+    resolve_hashes(api, hashes_str)
+        .into_iter()
+        .filter_map(|idx| {
+            api.mgr_handle(idx)
+                .ok()
+                .map(|handle| handle.shared().info_hash.as_string())
+        })
+        .collect()
+}
+
 /// `torrents/setShareLimits` — store per-torrent ratio / seeding-time limits so
 /// they round-trip and appear in `torrents/info`. rtbit does not auto-enforce
 /// them (clients like Sonarr/Radarr apply their own removal policy).
@@ -2413,21 +2344,8 @@ async fn h_torrents_set_share_limits(
 }
 
 // ---------------------------------------------------------------------------
-// Tag endpoints (backed by the in-memory QbitTags store)
+// Tag endpoints (backed by the session's tags)
 // ---------------------------------------------------------------------------
-
-/// Resolve hash(es) to canonical (lowercase hex) info-hash strings, used as the
-/// key space for the tag store. Skips torrents that cannot be resolved.
-fn resolve_info_hashes(api: &Api, hashes_str: &str) -> Vec<String> {
-    resolve_hashes(api, hashes_str)
-        .into_iter()
-        .filter_map(|idx| {
-            api.mgr_handle(idx)
-                .ok()
-                .map(|handle| handle.shared().info_hash.as_string())
-        })
-        .collect()
-}
 
 #[derive(Deserialize, Default)]
 struct TagsForm {
@@ -2438,40 +2356,74 @@ struct TagsForm {
 }
 
 async fn h_torrents_tags(State(state): State<Arc<QbitState>>) -> impl IntoResponse {
-    axum::Json(state.tags.all_tags())
+    axum::Json(state.api_state.api.api_list_tags())
 }
 
 async fn h_torrents_create_tags(State(state): State<Arc<QbitState>>, body: Bytes) -> &'static str {
     let form: TagsForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
-    state.tags.create(&parse_tags(&form.tags));
+    if let Err(error) = state
+        .api_state
+        .api
+        .api_create_tags(&parse_tags(&form.tags))
+        .await
+    {
+        warn!(%error, "qbit compat: error creating tags");
+    }
     "Ok."
 }
 
 async fn h_torrents_delete_tags(State(state): State<Arc<QbitState>>, body: Bytes) -> &'static str {
     let form: TagsForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
-    state.tags.delete(&parse_tags(&form.tags));
+    if let Err(error) = state
+        .api_state
+        .api
+        .api_delete_tags(&parse_tags(&form.tags))
+        .await
+    {
+        warn!(%error, "qbit compat: error deleting tags");
+    }
+    "Ok."
+}
+
+#[derive(Clone, Copy)]
+enum TagEdit {
+    Add,
+    Remove,
+    Set,
+}
+
+/// Apply a per-torrent tag edit to every torrent named in the form.
+async fn edit_torrent_tags(state: &QbitState, body: &[u8], edit: TagEdit) -> &'static str {
+    let form: TagsForm = serde_urlencoded::from_bytes(body).unwrap_or_default();
+    let api = &state.api_state.api;
+    let tags = parse_tags(&form.tags);
+    // addTags with nothing to add is a no-op rather than an error.
+    if matches!(edit, TagEdit::Add) && tags.is_empty() {
+        return "Ok.";
+    }
+    for idx in resolve_hashes(api, &form.hashes) {
+        let result = match edit {
+            TagEdit::Add => api.api_add_torrent_tags(idx, &tags).await,
+            TagEdit::Remove => api.api_remove_torrent_tags(idx, &tags).await,
+            TagEdit::Set => api.api_set_torrent_tags(idx, &tags).await,
+        };
+        if let Err(error) = result {
+            warn!(%error, "qbit compat: error editing torrent tags");
+        }
+    }
     "Ok."
 }
 
 async fn h_torrents_add_tags(State(state): State<Arc<QbitState>>, body: Bytes) -> &'static str {
-    let form: TagsForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
-    let hashes = resolve_info_hashes(&state.api_state.api, &form.hashes);
-    state.tags.add_to(&hashes, &parse_tags(&form.tags));
-    "Ok."
+    edit_torrent_tags(&state, &body, TagEdit::Add).await
 }
 
 async fn h_torrents_remove_tags(State(state): State<Arc<QbitState>>, body: Bytes) -> &'static str {
-    let form: TagsForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
-    let hashes = resolve_info_hashes(&state.api_state.api, &form.hashes);
-    state.tags.remove_from(&hashes, &parse_tags(&form.tags));
-    "Ok."
+    edit_torrent_tags(&state, &body, TagEdit::Remove).await
 }
 
 async fn h_torrents_set_tags(State(state): State<Arc<QbitState>>, body: Bytes) -> &'static str {
-    let form: TagsForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
-    let hashes = resolve_info_hashes(&state.api_state.api, &form.hashes);
-    state.tags.set(&hashes, &parse_tags(&form.tags));
-    "Ok."
+    edit_torrent_tags(&state, &body, TagEdit::Set).await
 }
 
 #[derive(Deserialize, Default)]
@@ -2640,7 +2592,6 @@ async fn h_sync_maindata(
         iter.map(|(_id, handle)| {
             let stats = handle.stats();
             let mut info = build_torrent_info(handle, &stats, now);
-            info.tags = state.tags.tags_for(&info.hash);
             apply_share_limits(&mut info, &state.share_limits);
             (info.hash.clone(), info)
         })
@@ -2688,7 +2639,7 @@ async fn h_sync_maindata(
     let snapshot = to_json_map(&QbitMainData {
         torrents,
         categories,
-        tags: state.tags.all_tags(),
+        tags: api.api_list_tags(),
         server_state,
     });
     axum::Json(state.sync.respond("maindata", query.rid, snapshot))
@@ -3012,29 +2963,32 @@ async fn reject_cross_origin_posts(request: Request, next: Next) -> Response {
 // Router construction
 // ---------------------------------------------------------------------------
 
-/// Tag store backed by `qbit-tags.json` in the session data directory, next to
-/// the session persistence files. Falls back to memory if that directory cannot
-/// be resolved.
-fn qbit_tag_store() -> QbitTags {
+/// Import the pre-backend `qbit-tags.json` store, if one is left in the
+/// session data directory, in the background.
+fn spawn_legacy_tag_migration(api: Api) {
     // Tests build many routers; keep them off the user's real data directory.
     if cfg!(test) {
-        return QbitTags::default();
+        return;
     }
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
     match SessionPersistenceConfig::default_json_persistence_folder() {
-        Ok(dir) => QbitTags::persistent(dir.join("qbit-tags.json")),
-        Err(error) => {
-            warn!(%error, "qbit compat: no data directory for tags, keeping them in memory");
-            QbitTags::default()
+        Ok(dir) => {
+            runtime.spawn(async move {
+                migrate_legacy_tag_store(&api, &dir.join("qbit-tags.json")).await;
+            });
         }
+        Err(error) => debug!(%error, "qbit compat: no data directory, skipping tag migration"),
     }
 }
 
 /// Build the qBittorrent v2 API router. Should be nested at `/api/v2`.
 pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
+    spawn_legacy_tag_migration(api_state.api.clone());
     let qbit_state = Arc::new(QbitState {
         api_state: api_state.clone(),
         sessions: QbitSessions::new(),
-        tags: qbit_tag_store(),
         creator: QbitTorrentCreator::default(),
         share_limits: QbitShareLimits::default(),
         sync: SyncSnapshots::default(),
@@ -3207,10 +3161,11 @@ mod tests {
     };
 
     use super::{
-        CreatorStatus, QbitSessions, QbitShareLimits, QbitState, QbitTags, QbitTorrentCreator,
-        SyncSnapshots, h_app_preferences, h_app_set_preferences, h_app_version,
-        h_torrentcreator_add_task, h_torrents_recheck, matches_category, origin_allowed,
-        qbit_file_name,
+        CreatorStatus, QbitSessions, QbitShareLimits, QbitState, QbitTorrentCreator, SyncSnapshots,
+        h_app_preferences, h_app_set_preferences, h_app_version, h_torrentcreator_add_task,
+        h_torrents_add_tags, h_torrents_create_tags, h_torrents_delete_tags, h_torrents_info,
+        h_torrents_recheck, h_torrents_remove_tags, h_torrents_set_tags, matches_category,
+        origin_allowed, qbit_file_name,
     };
 
     async fn qbit_state() -> (Arc<QbitState>, Arc<Session>, tempfile::TempDir) {
@@ -3249,7 +3204,6 @@ mod tests {
             Arc::new(QbitState {
                 api_state,
                 sessions: QbitSessions::new(),
-                tags: QbitTags::default(),
                 creator: QbitTorrentCreator::default(),
                 share_limits: QbitShareLimits::default(),
                 sync: SyncSnapshots::default(),
@@ -3436,32 +3390,6 @@ mod tests {
             let response = router.clone().oneshot(request).await.unwrap();
             assert_eq!(response.status(), StatusCode::OK, "{action}");
         }
-    }
-
-    #[test]
-    fn tags_survive_a_restart_when_persisted() {
-        let dir = tempfile::TempDir::with_prefix("qbit_tags").unwrap();
-        let path = dir.path().join("nested").join("qbit-tags.json");
-        let hash = "a".repeat(40);
-        {
-            let tags = QbitTags::persistent(path.clone());
-            tags.create(&["movies".to_string()]);
-            tags.add_to(std::slice::from_ref(&hash), &["hd".to_string()]);
-        }
-        let reloaded = QbitTags::persistent(path);
-        assert_eq!(
-            reloaded.all_tags(),
-            vec!["hd".to_string(), "movies".to_string()]
-        );
-        assert_eq!(reloaded.tags_for(&hash), "hd");
-    }
-
-    #[test]
-    fn unreadable_tag_store_starts_empty() {
-        let dir = tempfile::TempDir::with_prefix("qbit_tags_bad").unwrap();
-        let path = dir.path().join("qbit-tags.json");
-        std::fs::write(&path, b"{ not json").unwrap();
-        assert!(QbitTags::persistent(path).all_tags().is_empty());
     }
 
     #[tokio::test]
@@ -3774,45 +3702,159 @@ mod tests {
         assert!(super::parse_tags("  , ,").is_empty());
     }
 
-    #[test]
-    fn tag_store_add_remove_delete_and_set() {
-        let tags = QbitTags::default();
-        let a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
-        let b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string();
+    /// Add a paused torrent over a single file of `byte` repeated, so each
+    /// call with a different byte yields a distinct info hash.
+    async fn add_paused_torrent(
+        session: &Arc<Session>,
+        output: &tempfile::TempDir,
+        byte: u8,
+    ) -> crate::torrent_state::ManagedTorrentHandle {
+        let dir = output.path().join(format!("src{byte}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("payload.bin"), vec![byte; 32 * 1024]).unwrap();
+        let torrent = create_torrent(
+            &dir,
+            CreateTorrentOptions {
+                piece_length: Some(16_384),
+                ..Default::default()
+            },
+            &BlockingSpawner::new(1),
+        )
+        .await
+        .unwrap()
+        .as_bytes()
+        .unwrap()
+        .to_vec();
+        let handle = session
+            .add_torrent(
+                AddTorrent::from_bytes(torrent),
+                Some(AddTorrentOptions {
+                    paused: true,
+                    overwrite: true,
+                    output_folder: Some(output.path().to_string_lossy().into_owned()),
+                    ..Default::default()
+                }),
+            )
+            .await
+            .unwrap()
+            .into_handle()
+            .unwrap();
+        handle.wait_until_initialized().await.unwrap();
+        handle
+    }
 
-        // createTags adds to the global set without touching any torrent.
-        tags.create(&["tv".to_string(), "hd".to_string()]);
-        assert_eq!(tags.all_tags(), vec!["hd".to_string(), "tv".to_string()]);
-        assert_eq!(tags.tags_for(&a), "");
+    fn torrent_tags(handle: &crate::torrent_state::ManagedTorrentHandle) -> Vec<String> {
+        handle.shared().tags.read().iter().cloned().collect()
+    }
 
-        // addTags associates tags with torrents (and registers new ones).
-        tags.add_to(
-            &[a.clone(), b.clone()],
-            &["tv".to_string(), "new".to_string()],
-        );
-        assert!(tags.has_tag(&a, "tv"));
-        assert!(tags.has_tag(&b, "new"));
-        assert!(tags.all_tags().contains(&"new".to_string()));
+    #[tokio::test]
+    async fn tag_endpoints_drive_backend_tags() {
+        let (state, session, output) = qbit_state().await;
+        let a = add_paused_torrent(&session, &output, 0x11).await;
+        let b = add_paused_torrent(&session, &output, 0x22).await;
+        let (ha, hb) = (a.info_hash().as_string(), b.info_hash().as_string());
+        let st = || axum::extract::State(state.clone());
+        let form = |s: String| Bytes::from(s);
+
+        // createTags registers tags without touching any torrent.
+        h_torrents_create_tags(st(), form("tags=tv, hd".into())).await;
+        assert_eq!(session.tags().list(), vec!["hd", "tv"]);
+        assert!(torrent_tags(&a).is_empty());
+
+        // addTags assigns tags (registering new ones) to every listed torrent.
+        h_torrents_add_tags(st(), form(format!("hashes={ha}|{hb}&tags=tv,new"))).await;
+        assert_eq!(torrent_tags(&a), vec!["new", "tv"]);
+        assert_eq!(torrent_tags(&b), vec!["new", "tv"]);
+        assert!(session.tags().exists("new"));
 
         // removeTags with a specific tag only drops it from the given torrent.
-        tags.remove_from(&[a.clone()], &["tv".to_string()]);
-        assert!(!tags.has_tag(&a, "tv"));
-        assert!(tags.has_tag(&a, "new"));
-        assert!(tags.has_tag(&b, "tv"));
+        h_torrents_remove_tags(st(), form(format!("hashes={ha}&tags=tv"))).await;
+        assert_eq!(torrent_tags(&a), vec!["new"]);
+        assert_eq!(torrent_tags(&b), vec!["new", "tv"]);
 
-        // setTags replaces the whole tag set of a torrent.
-        tags.set(&[b.clone()], &["only".to_string()]);
-        assert_eq!(tags.tags_for(&b), "only");
+        // setTags replaces the whole tag set.
+        h_torrents_set_tags(st(), form(format!("hashes={hb}&tags=only"))).await;
+        assert_eq!(torrent_tags(&b), vec!["only"]);
 
-        // deleteTags removes a tag globally and from every torrent.
-        tags.delete(&["new".to_string()]);
-        assert!(!tags.has_tag(&a, "new"));
-        assert!(!tags.all_tags().contains(&"new".to_string()));
+        // deleteTags unregisters a tag and strips it from every torrent.
+        h_torrents_delete_tags(st(), form("tags=new".into())).await;
+        assert!(torrent_tags(&a).is_empty());
+        assert!(!session.tags().exists("new"));
 
-        // removeTags with an empty list clears all tags on the torrent.
-        tags.add_to(&[a.clone()], &["x".to_string(), "y".to_string()]);
-        tags.remove_from(&[a.clone()], &[]);
-        assert_eq!(tags.tags_for(&a), "");
+        // removeTags with an empty list clears every tag on the torrent.
+        h_torrents_add_tags(st(), form(format!("hashes={ha}&tags=x,y"))).await;
+        h_torrents_remove_tags(st(), form(format!("hashes={ha}&tags="))).await;
+        assert!(torrent_tags(&a).is_empty());
+
+        // torrents/info exposes the tags and filters by them; an empty tag
+        // selects untagged torrents.
+        let info = |tag: &str| {
+            let state = state.clone();
+            let tag = tag.to_owned();
+            async move {
+                let query = super::TorrentsInfoQuery {
+                    tag: Some(tag),
+                    ..Default::default()
+                };
+                let response =
+                    h_torrents_info(axum::extract::State(state), axum::extract::Query(query))
+                        .await
+                        .into_response();
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                serde_json::from_slice::<Vec<serde_json::Value>>(&body).unwrap()
+            }
+        };
+        let only = info("only").await;
+        assert_eq!(only.len(), 1);
+        assert_eq!(only[0]["hash"], hb);
+        assert_eq!(only[0]["tags"], "only");
+        let untagged = info("").await;
+        assert_eq!(untagged.len(), 1);
+        assert_eq!(untagged[0]["hash"], ha);
+        assert!(info("missing").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn legacy_tag_store_is_imported_once() {
+        let (state, session, output) = qbit_state().await;
+        let a = add_paused_torrent(&session, &output, 0x33).await;
+        let path = output.path().join("qbit-tags.json");
+        let legacy = serde_json::json!({
+            "all": ["movies"],
+            "per_torrent": {
+                a.info_hash().as_string(): ["hd"],
+                "f".repeat(40): ["gone"],
+            },
+        });
+        std::fs::write(&path, legacy.to_string()).unwrap();
+
+        super::migrate_legacy_tag_store(&state.api_state.api, &path).await;
+
+        assert_eq!(torrent_tags(&a), vec!["hd"]);
+        assert_eq!(session.tags().list(), vec!["hd", "movies"]);
+        assert!(!path.exists());
+        assert!(path.with_extension("json.migrated").exists());
+    }
+
+    #[tokio::test]
+    async fn unreadable_legacy_tag_store_is_left_in_place() {
+        let (state, session, output) = qbit_state().await;
+        let path = output.path().join("qbit-tags.json");
+        std::fs::write(&path, b"{ not json").unwrap();
+        super::migrate_legacy_tag_store(&state.api_state.api, &path).await;
+        assert!(path.exists());
+        assert!(session.tags().list().is_empty());
+    }
+
+    #[test]
+    fn matches_tag_treats_empty_as_untagged() {
+        let tags: std::collections::BTreeSet<String> = ["tv".to_owned()].into();
+        assert!(super::matches_tag("tv", &tags));
+        assert!(!super::matches_tag("hd", &tags));
+        assert!(!super::matches_tag("", &tags));
+        assert!(super::matches_tag("", &Default::default()));
     }
 
     #[test]

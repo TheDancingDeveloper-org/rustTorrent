@@ -73,6 +73,7 @@ mod session;
 mod session_persistence;
 pub mod session_stats;
 pub mod spawn_utils;
+pub mod tag;
 
 pub mod storage;
 mod stream_connect;

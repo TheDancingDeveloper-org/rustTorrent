@@ -18,6 +18,12 @@ upgrade notes in each release describe what to back up and check.
 
 ### Added
 
+- Native torrent tags: a session tag registry plus a per-torrent tag set,
+  persisted by the JSON session store (`tags.json` and per-torrent state). The
+  WebUI API v2 compat tag endpoints (`torrents/tags`, `createTags`,
+  `deleteTags`, `addTags`, `removeTags`, `setTags`), the `tags` field and `tag`
+  filter of `torrents/info`, and `torrents/add`'s `tags` field now use them. A
+  legacy `qbit-tags.json` is imported once at startup.
 - WebUI API v2 compat conformance tests: every routed endpoint in
   `qbit_parity_spec.json` declares a response contract that is validated
   against a live torrent, plus an add/stop/start/recheck/setCategory/delete

@@ -69,6 +69,7 @@ impl TorrentsTableRecord {
                     .map(|v| v.into_iter().map(|v| v as usize).collect()),
                 is_paused: self.is_paused,
                 category: None,
+                tags: Default::default(),
                 added_on: None,
                 completion_on: None,
                 queued: self.queued,

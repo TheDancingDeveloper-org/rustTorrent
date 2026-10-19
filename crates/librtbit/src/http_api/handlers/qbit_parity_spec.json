@@ -593,7 +593,7 @@
       "endpoint": "torrents/addTags",
       "method": "POST",
       "status": "partial",
-      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags.",
+      "notes": "Backed by session tags: per-torrent sets persisted with the torrent, registry in tags.json. A legacy qbit-tags.json is imported once at startup.",
       "response": {
         "content": "text"
       }
@@ -655,7 +655,7 @@
       "endpoint": "torrents/createTags",
       "method": "POST",
       "status": "partial",
-      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags.",
+      "notes": "Backed by session tags: per-torrent sets persisted with the torrent, registry in tags.json. A legacy qbit-tags.json is imported once at startup.",
       "response": {
         "content": "text"
       }
@@ -681,7 +681,7 @@
       "endpoint": "torrents/deleteTags",
       "method": "POST",
       "status": "partial",
-      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags.",
+      "notes": "Backed by session tags: per-torrent sets persisted with the torrent, registry in tags.json. A legacy qbit-tags.json is imported once at startup.",
       "response": {
         "content": "text"
       }
@@ -784,7 +784,7 @@
       "endpoint": "torrents/info",
       "method": "GET",
       "status": "partial",
-      "notes": "Core fields real; state uses 2.11 stoppedDL/stoppedUP; filter accepts 2.11 stopped/running and legacy paused/resumed. Several fields stubbed (tags, limits, magnet_uri, priority).",
+      "notes": "Core fields real; state uses 2.11 stoppedDL/stoppedUP; filter accepts 2.11 stopped/running and legacy paused/resumed. tags are real and the tag filter treats an empty value as untagged. Several fields stubbed (limits, magnet_uri, priority).",
       "response": {
         "content": "json",
         "schema": [
@@ -977,7 +977,7 @@
       "endpoint": "torrents/removeTags",
       "method": "POST",
       "status": "partial",
-      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags.",
+      "notes": "Backed by session tags: per-torrent sets persisted with the torrent, registry in tags.json. A legacy qbit-tags.json is imported once at startup.",
       "response": {
         "content": "text"
       }
@@ -1122,7 +1122,7 @@
       "endpoint": "torrents/setTags",
       "method": "POST",
       "status": "partial",
-      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags.",
+      "notes": "Backed by session tags: per-torrent sets persisted with the torrent, registry in tags.json. A legacy qbit-tags.json is imported once at startup.",
       "response": {
         "content": "text"
       }
@@ -1158,7 +1158,7 @@
       "endpoint": "torrents/tags",
       "method": "GET",
       "status": "partial",
-      "notes": "Tag store persisted to qbit-tags.json in the session data directory; rtbit has no native tags.",
+      "notes": "Backed by session tags: per-torrent sets persisted with the torrent, registry in tags.json. A legacy qbit-tags.json is imported once at startup.",
       "response": {
         "content": "json",
         "schema": [

@@ -154,6 +154,11 @@ pub struct AddTorrentOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
 
+    /// Tags to assign to this torrent. They are registered in the session's
+    /// tag registry when the torrent is added.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+
     /// Original Unix timestamp when restoring a persisted torrent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub added_on: Option<u64>,

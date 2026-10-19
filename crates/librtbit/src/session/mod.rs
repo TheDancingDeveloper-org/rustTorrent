@@ -52,6 +52,7 @@ use crate::{
         BoxStorageFactory, StorageFactoryExt, TorrentStorage, filesystem::FilesystemStorageFactory,
     },
     stream_connect::{SocksProxyConfig, StreamConnector, StreamConnectorArgs},
+    tag::TagManager,
     torrent_state::{
         ManagedTorrentHandle, ManagedTorrentLocked, ManagedTorrentOptions, ManagedTorrentState,
         TorrentMetadata, initializing::TorrentStateInitializing,
@@ -135,6 +136,7 @@ pub struct Session {
 
     // Categories
     category_manager: CategoryManager,
+    tag_manager: TagManager,
 
     // Limits and throttling
     pub(crate) concurrent_initialize_semaphore: Arc<tokio::sync::Semaphore>,
@@ -419,6 +421,18 @@ impl Session {
                 CategoryManager::new()
             };
 
+            let tag_manager = if let Some(p) = persistence.as_ref() {
+                match p.load_tags().await {
+                    Ok(tags) => TagManager::from_tags(tags),
+                    Err(e) => {
+                        warn!("error loading tags from persistence: {e:#}");
+                        TagManager::new()
+                    }
+                }
+            } else {
+                TagManager::new()
+            };
+
             let mut resolved_output_folder = default_output_folder;
             let mut resolved_completed_folder = opts.completed_folder.clone();
             if let Some(p) = persistence.as_ref() {
@@ -499,6 +513,7 @@ impl Session {
                 lsd,
                 fastresume_validation_denom: opts.fastresume_validation_denom,
                 category_manager,
+                tag_manager,
                 completed_folder: RwLock::new(resolved_completed_folder),
                 on_complete: RwLock::new(OnCompleteHook::default()),
                 max_active_downloads: AtomicUsize::new(0),
@@ -832,6 +847,8 @@ impl Session {
             name,
             web_seed_urls,
         } = add_res;
+        self.tag_manager
+            .create(&crate::tag::normalize_tags(&opts.tags));
 
         let private = metadata.as_ref().is_some_and(|m| m.info.info().private);
 
@@ -1014,6 +1031,7 @@ impl Session {
                 magnet_name: name,
                 web_seed_urls,
                 category: RwLock::new(opts.category.clone()),
+                tags: RwLock::new(crate::tag::normalize_tags(&opts.tags)),
                 ratelimit_override: RwLock::new(opts.ratelimits),
                 name_override: RwLock::new(None),
                 output_folder_override: RwLock::new(output_folder),
@@ -1615,6 +1633,32 @@ impl Session {
     ) -> anyhow::Result<()> {
         let handle = self.get(id).context("torrent not found")?;
         *handle.shared().category.write() = category;
+        Ok(())
+    }
+
+    pub fn tags(&self) -> &TagManager {
+        &self.tag_manager
+    }
+
+    /// Apply `f` to the tag set of the torrent `id`, registering any tags it
+    /// gains. Returns true if the torrent's tag set changed.
+    pub fn update_torrent_tags(
+        &self,
+        id: TorrentIdOrHash,
+        f: impl FnOnce(&mut std::collections::BTreeSet<String>),
+    ) -> anyhow::Result<bool> {
+        let handle = self.get(id).context("torrent not found")?;
+        let mut tags = handle.shared().tags.write();
+        let before = tags.clone();
+        f(&mut tags);
+        self.tag_manager.create(tags.iter());
+        Ok(*tags != before)
+    }
+
+    pub async fn persist_tags(&self) -> anyhow::Result<()> {
+        if let Some(p) = self.persistence.as_ref() {
+            p.store_tags(&self.tag_manager.snapshot()).await?;
+        }
         Ok(())
     }
 

@@ -1,4 +1,8 @@
-use std::{any::TypeId, collections::HashMap, path::PathBuf};
+use std::{
+    any::TypeId,
+    collections::{BTreeSet, HashMap},
+    path::PathBuf,
+};
 
 use crate::{
     api::TorrentIdOrHash,
@@ -125,6 +129,10 @@ impl JsonSessionPersistenceStore {
         self.output_folder.join(format!("{info_hash:?}.bitv"))
     }
 
+    fn tags_filename(&self) -> PathBuf {
+        self.output_folder.join("tags.json")
+    }
+
     fn categories_filename(&self) -> PathBuf {
         self.output_folder.join("categories.json")
     }
@@ -169,6 +177,7 @@ impl JsonSessionPersistenceStore {
             output_folder: torrent.shared().options.output_folder.clone(),
             output_folder_root: torrent.shared().options.output_folder_root.clone(),
             category: torrent.shared().category.read().clone(),
+            tags: torrent.shared().tags.read().clone(),
             added_on: Some(torrent.shared().added_on),
             completion_on: match torrent
                 .shared()
@@ -427,6 +436,29 @@ impl SessionPersistenceStore for JsonSessionPersistenceStore {
         trace!(filename=?filename, "wrote categories");
         Ok(())
     }
+
+    async fn load_tags(&self) -> anyhow::Result<BTreeSet<String>> {
+        let filename = self.tags_filename();
+        match tokio::fs::read(&filename).await {
+            Ok(buf) => serde_json::from_slice(&buf).context("error deserializing tags"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeSet::new()),
+            Err(e) => Err(e).context(format!("error reading tags file {filename:?}")),
+        }
+    }
+
+    async fn store_tags(&self, tags: &BTreeSet<String>) -> anyhow::Result<()> {
+        let filename = self.tags_filename();
+        let tmp_filename = filename.with_extension("json.tmp");
+        let buf = serde_json::to_vec_pretty(tags).context("error serializing tags")?;
+        tokio::fs::write(&tmp_filename, &buf)
+            .await
+            .with_context(|| format!("error writing {tmp_filename:?}"))?;
+        tokio::fs::rename(&tmp_filename, &filename)
+            .await
+            .context("error renaming tags file")?;
+        trace!(filename=?filename, "wrote tags");
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -451,5 +483,45 @@ mod tests {
             .unwrap();
 
         assert_eq!(reopened.load_session_settings().await.unwrap(), settings);
+    }
+
+    #[tokio::test]
+    async fn json_store_persists_tag_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let spawner = BlockingSpawner::new(1);
+        let store = JsonSessionPersistenceStore::new(dir.path().to_path_buf(), spawner.clone())
+            .await
+            .unwrap();
+        assert!(store.load_tags().await.unwrap().is_empty());
+
+        let tags: BTreeSet<String> = ["hd".to_owned(), "tv".to_owned()].into();
+        store.store_tags(&tags).await.unwrap();
+        let reopened = JsonSessionPersistenceStore::new(dir.path().to_path_buf(), spawner)
+            .await
+            .unwrap();
+
+        assert_eq!(reopened.load_tags().await.unwrap(), tags);
+    }
+
+    #[test]
+    fn serialized_torrent_tags_round_trip_and_default_empty() {
+        let legacy = serde_json::json!({
+            "info_hash": "0000000000000000000000000000000000000000",
+            "trackers": [],
+            "output_folder": "/tmp",
+            "only_files": null,
+            "is_paused": false,
+        });
+        let st: SerializedTorrent = serde_json::from_value(legacy.clone()).unwrap();
+        let (_, opts) = st.into_add_torrent().unwrap();
+        assert!(opts.tags.is_empty());
+
+        let mut tagged = legacy;
+        tagged["tags"] = serde_json::json!(["tv", "hd"]);
+        let st: SerializedTorrent = serde_json::from_value(tagged).unwrap();
+        let reserialized = serde_json::to_value(&st).unwrap();
+        assert_eq!(reserialized["tags"], serde_json::json!(["hd", "tv"]));
+        let (_, opts) = st.into_add_torrent().unwrap();
+        assert_eq!(opts.tags, vec!["hd", "tv"]);
     }
 }
