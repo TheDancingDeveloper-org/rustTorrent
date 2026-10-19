@@ -11,6 +11,8 @@ already run.
 **Live demo:** [rusttorrent.dev/demo](https://rusttorrent.dev/demo/) ·
 **Discord:** [discord.gg/pu6chSqpnJ](https://discord.gg/pu6chSqpnJ)
 
+![The rustTorrent web UI from the live demo: the torrent list with progress, state and ratio, and status, category and tracker filters in the sidebar](docs/images/web-ui.png)
+
 ## Features
 
 - **Web UI** — responsive React + TypeScript interface with a compact table view, detail
