@@ -1442,3 +1442,177 @@ async fn torrent_limits_through_compat_router() {
     );
     assert_eq!(handle.rate_limits().download_bps, None);
 }
+
+/// The bridge endpoints that read or adjust one torrent through existing
+/// backend calls (`count`, `defaultSavePath`, `properties` metadata, `export`,
+/// `pieceHashes`, `pieceStates`, `filePrio`, `addPeers`, `rename`) plus the
+/// `clientdata` key/value store.
+#[tokio::test]
+async fn bridge_endpoints_through_compat_router() {
+    let spec = parse_spec();
+    let info_contract = response_contract(&spec, "torrents/info");
+    let (router, _session, output) = make_router().await;
+    // Give the outer dictionary the descriptive fields `properties` reports.
+    // The info dictionary (and so the info hash) is unchanged.
+    let created = make_payload_torrent(output.path()).await;
+    assert_eq!(created[0], b'd');
+    let mut torrent =
+        b"d7:comment9:a comment10:created by9:swarmtest13:creation datei1700000000e".to_vec();
+    torrent.extend_from_slice(&created[1..]);
+    let save_path = output.path().to_string_lossy().into_owned();
+
+    let boundary = "qbitBridgeBoundary";
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("/torrents/add")
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(axum::body::Body::from(multipart_add_body(
+            boundary,
+            &torrent,
+            &[("savepath", &save_path), ("stopped", "true")],
+        )))
+        .unwrap();
+    assert_eq!(send(&router, request).await.status, StatusCode::OK);
+    assert_eq!(get(&router, "/torrents/count").await.json(), 1);
+    assert!(!get(&router, "/app/defaultSavePath").await.text().is_empty());
+
+    let hash = get(&router, "/torrents/info").await.json()[0]["hash"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The payload is already on disk, so the initial check finds it complete.
+    wait_for_info(&router, info_contract, &hash, "fully checked", |t| {
+        t["progress"].as_f64() == Some(1.0)
+    })
+    .await;
+
+    let props = get(&router, &format!("/torrents/properties?hash={hash}"))
+        .await
+        .json();
+    assert_eq!(props["comment"], "a comment");
+    assert_eq!(props["created_by"], "swarmtest");
+    assert_eq!(props["creation_date"], 1_700_000_000);
+    let pieces = usize::try_from(props["pieces_num"].as_u64().unwrap()).unwrap();
+    assert_eq!(pieces, 4, "60 000 bytes in 16 KiB pieces");
+
+    let exported = get(&router, &format!("/torrents/export?hash={hash}")).await;
+    assert_eq!(exported.status, StatusCode::OK);
+    assert_eq!(
+        exported.content_type.as_deref(),
+        Some("application/x-bittorrent")
+    );
+    assert_eq!(exported.body, torrent);
+
+    let hashes = get(&router, &format!("/torrents/pieceHashes?hash={hash}"))
+        .await
+        .json();
+    let hashes = hashes.as_array().unwrap();
+    assert_eq!(hashes.len(), pieces);
+    assert!(hashes.iter().all(|h| {
+        let h = h.as_str().unwrap();
+        h.len() == 40 && h.bytes().all(|b| b.is_ascii_hexdigit())
+    }));
+    let states = get(&router, &format!("/torrents/pieceStates?hash={hash}"))
+        .await
+        .json();
+    assert_eq!(states, Value::from(vec![2; pieces]));
+
+    // filePrio: 0 skips a file, any other level includes it again.
+    let file_priorities = || async {
+        get(&router, &format!("/torrents/files?hash={hash}"))
+            .await
+            .json()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["priority"].as_u64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(file_priorities().await, vec![1, 1]);
+    let set_prio = |id: &'static str, priority: &'static str| {
+        let router = &router;
+        let hash = &hash;
+        async move {
+            post_form(
+                router,
+                "/torrents/filePrio",
+                &[("hash", hash), ("id", id), ("priority", priority)],
+            )
+            .await
+            .status
+        }
+    };
+    assert_eq!(set_prio("1", "0").await, StatusCode::OK);
+    assert_eq!(file_priorities().await, vec![1, 0]);
+    assert_eq!(set_prio("1", "7").await, StatusCode::OK);
+    assert_eq!(file_priorities().await, vec![1, 1]);
+    assert_eq!(set_prio("5", "0").await, StatusCode::CONFLICT);
+
+    let added = post_form(
+        &router,
+        "/torrents/addPeers",
+        &[("hashes", &hash), ("peers", "127.0.0.1:6881|[::1]:6881")],
+    )
+    .await;
+    assert_eq!((added.status, added.text()), (StatusCode::OK, "Ok."));
+
+    let renamed = post_form(
+        &router,
+        "/torrents/rename",
+        &[("hash", &hash), ("name", "renamed")],
+    )
+    .await;
+    assert_eq!(renamed.status, StatusCode::OK);
+    assert_eq!(
+        get(&router, &format!("/torrents/info?hashes={hash}"))
+            .await
+            .json()[0]["name"],
+        "renamed"
+    );
+
+    // clientdata: set, read back (all or by key), and remove with null.
+    assert_eq!(
+        get(&router, "/clientdata/load").await.json(),
+        serde_json::json!({})
+    );
+    let store = |data: &'static str| {
+        let router = &router;
+        async move { post_form(router, "/clientdata/store", &[("data", data)]).await }
+    };
+    assert_eq!(
+        store(r#"{"theme":"dark","layout":{"cols":[1,2]}}"#)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        get(&router, "/clientdata/load").await.json(),
+        serde_json::json!({"theme": "dark", "layout": {"cols": [1, 2]}})
+    );
+    assert_eq!(
+        get(
+            &router,
+            "/clientdata/load?keys=%5B%22theme%22%2C%22nope%22%5D"
+        )
+        .await
+        .json(),
+        serde_json::json!({"theme": "dark"})
+    );
+    assert_eq!(store(r#"{"theme":null}"#).await.status, StatusCode::OK);
+    assert_eq!(
+        get(&router, "/clientdata/load").await.json(),
+        serde_json::json!({"layout": {"cols": [1, 2]}})
+    );
+    assert_eq!(store("[1]").await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        post_form(&router, "/clientdata/store", &[]).await.status,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        get(&router, "/clientdata/load?keys=notjson").await.status,
+        StatusCode::BAD_REQUEST
+    );
+}
