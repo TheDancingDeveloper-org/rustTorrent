@@ -34,7 +34,7 @@ export const LoginPage: React.FC = () => {
   };
 
   const inputClass =
-    "w-full px-3 py-2 bg-surface border border-divider rounded text-primary placeholder:text-tertiary focus:outline-none focus:border-primary";
+    "w-full px-3 py-2 bg-surface border border-divider rounded text-text placeholder:text-tertiary focus-ring focus:border-primary";
 
   return (
     <div className="bg-surface h-dvh flex items-center justify-center">
@@ -49,7 +49,7 @@ export const LoginPage: React.FC = () => {
           {expiredNotice && !error && (
             <div
               role="status"
-              className="bg-warning/10 border border-warning text-primary rounded px-3 py-2 text-sm"
+              className="bg-warning/10 border border-warning text-text rounded px-3 py-2 text-sm"
             >
               Your session expired. Sign in again to continue.
             </div>
@@ -95,7 +95,7 @@ export const LoginPage: React.FC = () => {
           <button
             type="submit"
             disabled={loading || !username || !password}
-            className="w-full py-2 bg-primary-bg text-white rounded font-medium hover:bg-primary-bg-hover disabled:opacity-50 transition-colors cursor-pointer disabled:cursor-not-allowed"
+            className="w-full py-2 bg-primary-bg text-white rounded font-medium hover:bg-primary-bg-hover disabled:opacity-50 transition-colors cursor-pointer disabled:cursor-not-allowed focus-ring"
           >
             {loading ? "Signing in..." : "Sign In"}
           </button>

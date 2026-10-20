@@ -28,7 +28,7 @@ export const RSSTab: React.FC<RSSTabProps> = ({
   }, []);
 
   const inputCls =
-    "w-32 px-2 py-1.5 text-sm bg-surface border border-divider rounded focus:outline-none focus:border-primary";
+    "w-full max-w-32 px-2 py-1.5 text-sm bg-surface border border-divider rounded focus-ring focus:border-primary";
   const labelCls = "text-sm text-secondary";
   const rowCls = "flex items-center justify-between py-2";
   const sectionCls = "border-b border-divider pb-3 mb-3";
@@ -37,9 +37,9 @@ export const RSSTab: React.FC<RSSTabProps> = ({
     <div className="space-y-1">
       {/* Stats section */}
       <div className={sectionCls}>
-        <h4 className="text-xs font-semibold uppercase text-tertiary mb-2">
+        <h3 className="text-xs font-semibold uppercase text-tertiary mb-2">
           RSS Status
-        </h4>
+        </h3>
         <div className="grid grid-cols-3 gap-3">
           <div className="text-center">
             <div className="text-lg font-semibold">{feedCount ?? "-"}</div>
@@ -58,9 +58,9 @@ export const RSSTab: React.FC<RSSTabProps> = ({
 
       {/* Settings */}
       <div>
-        <h4 className="text-xs font-semibold uppercase text-tertiary mb-2">
+        <h3 className="text-xs font-semibold uppercase text-tertiary mb-2">
           Settings
-        </h4>
+        </h3>
         <div className={rowCls} data-setting-id="feed-history-limit">
           <label className={labelCls}>
             {settingLabel("feed-history-limit")}

@@ -48,7 +48,7 @@ export const SetupPage: React.FC = () => {
   };
 
   const inputClass =
-    "w-full px-3 py-2 bg-surface border border-divider rounded text-primary placeholder:text-tertiary focus:outline-none focus:border-primary";
+    "w-full px-3 py-2 bg-surface border border-divider rounded text-text placeholder:text-tertiary focus-ring focus:border-primary";
 
   return (
     <div className="bg-surface h-dvh flex items-center justify-center">
@@ -140,7 +140,7 @@ export const SetupPage: React.FC = () => {
             disabled={
               loading || !setupToken || !username || !password || !confirmPassword
             }
-            className="w-full py-2 bg-primary-bg text-white rounded font-medium hover:bg-primary-bg-hover disabled:opacity-50 transition-colors cursor-pointer disabled:cursor-not-allowed"
+            className="w-full py-2 bg-primary-bg text-white rounded font-medium hover:bg-primary-bg-hover disabled:opacity-50 transition-colors cursor-pointer disabled:cursor-not-allowed focus-ring"
           >
             {loading ? "Creating account..." : "Create Account"}
           </button>
