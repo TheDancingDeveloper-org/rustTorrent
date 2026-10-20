@@ -53,6 +53,8 @@ jobs:
               .github/*|ci/*|Dockerfile*|.dockerignore|rust-toolchain.toml)
                 rust=true webui=true website=true ;;
               crates/librtbit/webui/*) webui=true ;;
+              # The desktop splash is tested by the web UI e2e suite
+              desktop/src/*) webui=true ;;
               website/*) website=true ;;
               crates/*|fuzz/*|tests/*|benchv2/*|Cargo.toml|Cargo.lock) rust=true ;;
             esac

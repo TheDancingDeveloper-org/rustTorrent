@@ -25,9 +25,9 @@ See [TESTING.md](TESTING.md#webui-api-v2-compatibility-client-replay-and-differe
 |---|---|
 | `.github/`, `ci/`, `Dockerfile*`, `.dockerignore`, `rust-toolchain.toml` | everything, as in the queue |
 | `crates/` (outside the web UI), `fuzz/`, `tests/`, `benchv2/`, `Cargo.*` | `rust` |
-| `crates/librtbit/webui/` | `webui`, `gui-e2e` |
+| `crates/librtbit/webui/`, `desktop/src/` (the splash, tested by `e2e/desktop-splash.spec.ts`) | `webui`, `gui-e2e` |
 | `website/` | `website` |
-| anything else (docs, design, desktop) | nothing; the skipped jobs report success |
+| anything else (docs, design, the rest of desktop) | nothing; the skipped jobs report success |
 
 `ci.yml` no longer uses `paths-ignore`. A required check that never starts
 leaves a PR or queue entry waiting forever; a skipped job reports success.
