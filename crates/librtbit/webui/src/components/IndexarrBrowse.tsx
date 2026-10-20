@@ -333,7 +333,7 @@ export const IndexarrBrowse = () => {
                   value={localSearch}
                   onChange={handleSearchChange}
                   placeholder="Search the torrent index..."
-                  className="w-full pl-9 pr-8 py-2 text-sm bg-surface border border-divider rounded-lg focus:outline-none focus:border-primary placeholder:text-tertiary"
+                  className="w-full pl-9 pr-8 py-2 text-sm bg-surface border border-divider rounded-lg focus-ring focus:border-primary placeholder:text-tertiary"
                 />
                 {localSearch && (
                   <button

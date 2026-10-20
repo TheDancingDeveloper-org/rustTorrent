@@ -11,6 +11,7 @@ import { APIContext } from "../../context";
 import { formatBytes } from "../../helper/formatBytes";
 import { SortIcon } from "../SortIcon";
 import { customSetInterval } from "../../helper/customSetInterval";
+import { nextSort } from "../../helper/sortToggle";
 
 interface PeersTabProps {
   torrent: TorrentListItem | null;
@@ -155,16 +156,17 @@ export const PeersTab: React.FC<PeersTabProps> = ({ torrent }) => {
     prevSnapshotRef.current = { snapshot: peerSnapshot, timestamp: now };
   }, [peerSnapshot]);
 
-  const handleSort = useCallback((column: PeerSortColumn) => {
-    setSortColumn((prevColumn) => {
-      if (prevColumn === column) {
-        setSortDirection((d) => (d === "asc" ? "desc" : "asc"));
-        return column;
-      }
-      setSortDirection("desc");
-      return column;
-    });
-  }, []);
+  const handleSort = useCallback(
+    (column: PeerSortColumn) => {
+      const next = nextSort(
+        { column: sortColumn, direction: sortDirection },
+        column,
+      );
+      setSortColumn(next.column);
+      setSortDirection(next.direction);
+    },
+    [sortColumn, sortDirection],
+  );
 
   const sortedPeers = useMemo(() => {
     return [...peersWithSpeed].sort((a, b) => {

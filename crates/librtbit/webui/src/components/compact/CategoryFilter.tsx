@@ -100,7 +100,9 @@ export const CategoryFilter: React.FC = () => {
         </h2>
         <button
           onClick={() => setShowNewInput(true)}
-          className="text-tertiary hover:text-primary cursor-pointer"
+          type="button"
+          className="text-tertiary hover:text-primary cursor-pointer focus-ring rounded"
+          aria-label="New category"
           title="New category"
         >
           <BsPlus className="w-4 h-4" />
@@ -124,7 +126,7 @@ export const CategoryFilter: React.FC = () => {
               }}
               onBlur={handleCreateCategory}
               placeholder="Category name..."
-              className="w-full px-2 py-1 text-sm bg-surface border border-divider rounded focus:outline-none focus:border-primary placeholder:text-tertiary"
+              className="w-full px-2 py-1 text-sm bg-surface border border-divider rounded focus-ring focus:border-primary placeholder:text-tertiary"
             />
           </div>
         )}

@@ -327,7 +327,7 @@ export const LogStream: React.FC<LogStreamProps> = ({
           value={filter}
           onChange={(e) => handleFilterChange(e.target.value)}
           placeholder="Filter (regex)..."
-          className="w-full px-3 py-1.5 text-sm bg-surface border border-divider rounded focus:outline-none focus:border-primary"
+          className="w-full px-3 py-1.5 text-sm bg-surface border border-divider rounded focus-ring focus:border-primary"
         />
       </div>
 

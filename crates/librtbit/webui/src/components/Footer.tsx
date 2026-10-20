@@ -69,8 +69,11 @@ export const Footer: React.FC = () => {
     <div className="bg-surface-raised border-t border-divider text-sm text-secondary flex items-center flex-wrap gap-x-1 lg:gap-x-3 px-1">
       {altSupported && (
         <button
+          type="button"
           onClick={toggleAlt}
-          className={`p-1 rounded cursor-pointer transition-colors ${
+          aria-label="Alternative speed limits"
+          aria-pressed={altEnabled}
+          className={`p-1 rounded cursor-pointer transition-colors focus-ring ${
             altEnabled
               ? "text-primary bg-primary/15"
               : "text-tertiary hover:text-secondary hover:bg-surface-sunken"

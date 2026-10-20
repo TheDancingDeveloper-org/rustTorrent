@@ -14,8 +14,10 @@ const AlertDanger: React.FC<{
         <h2 className="text-lg font-semibold text-error">{title}</h2>
         {onClose && (
           <button
+            type="button"
             onClick={onClose}
-            className="text-error hover:text-error/80 transition-colors cursor-pointer"
+            aria-label="Dismiss"
+            className="text-error hover:text-error/80 transition-colors cursor-pointer focus-ring rounded"
           >
             <BsX />
           </button>
