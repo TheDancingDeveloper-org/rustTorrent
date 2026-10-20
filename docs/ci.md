@@ -29,6 +29,10 @@ See [TESTING.md](TESTING.md#webui-api-v2-compatibility-client-replay-and-differe
 | `website/` | `website` |
 | anything else (docs, design, desktop) | nothing; the skipped jobs report success |
 
+The `scripts` job is not path-scoped: it runs `scripts/check-repo-hygiene.sh`,
+`scripts/test-publish.sh` and `packaging/scripts/test-render.sh` on every run,
+because they take seconds and guard files outside every scoped path.
+
 `ci.yml` no longer uses `paths-ignore`. A required check that never starts
 leaves a PR or queue entry waiting forever; a skipped job reports success.
 

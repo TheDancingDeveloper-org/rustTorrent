@@ -59,6 +59,17 @@ jobs:
           done <<<"$files"
           printf 'rust=%s\nwebui=%s\nwebsite=%s\n' "$rust" "$webui" "$website" | tee -a "$GITHUB_OUTPUT"
 
+  # Shell checks for the release scripts and repository layout. They take
+  # seconds and touch no network, so they run on every event.
+  scripts:
+    needs: changes
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: bash scripts/check-repo-hygiene.sh
+      - run: bash scripts/test-publish.sh
+      - run: bash packaging/scripts/test-render.sh
+
   rust:
     needs: changes
     if: needs.changes.outputs.rust == 'true'

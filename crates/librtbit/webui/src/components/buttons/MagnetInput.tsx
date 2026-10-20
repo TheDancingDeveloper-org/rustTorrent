@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CgLink } from "react-icons/cg";
 import { UploadButton } from "./UploadButton";
 import { Modal } from "../modal/Modal";
@@ -7,10 +7,21 @@ import { ModalBody } from "../modal/ModalBody";
 import { ModalFooter } from "../modal/ModalFooter";
 import { FormInput } from "../forms/FormInput";
 
-export const MagnetInput = ({ className }: { className?: string }) => {
+export const MagnetInput = ({
+  className,
+  openRequest = 0,
+}: {
+  className?: string;
+  // Bumped by the M shortcut to open the dialog from outside
+  openRequest?: number;
+}) => {
   const [magnet, setMagnet] = useState<string | null>(null);
   const [inputValue, setInputValue] = useState("");
   const [modalIsOpen, setModalIsOpen] = useState(false);
+
+  useEffect(() => {
+    if (openRequest > 0) setModalIsOpen(true);
+  }, [openRequest]);
 
   const submit = () => {
     setMagnet(inputValue);

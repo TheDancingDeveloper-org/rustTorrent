@@ -272,6 +272,31 @@ async fn cross_origin_login_post_is_rejected_by_the_router() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
+#[tokio::test]
+async fn login_sets_a_strict_http_only_session_cookie() {
+    let (state, _session, _output) = qbit_state().await;
+    let router = super::make_qbit_router(state.api_state.clone());
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("/auth/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("host", "127.0.0.1:3030")
+        .body(axum::body::Body::from("username=a&password=b"))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let cookie = response.headers()[http::header::SET_COOKIE]
+        .to_str()
+        .unwrap();
+    assert!(cookie.starts_with("SID="), "cookie: {cookie}");
+    for attribute in ["HttpOnly", "SameSite=Strict", "Path=/"] {
+        assert!(
+            cookie.split("; ").any(|a| a == attribute),
+            "missing {attribute} in {cookie}"
+        );
+    }
+}
+
 #[test]
 fn map_state_reports_queued_and_forced() {
     use super::map_state;

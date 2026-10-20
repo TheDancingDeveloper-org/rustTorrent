@@ -105,6 +105,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const [localSearch, setLocalSearch] = useState(searchQuery);
   const [isDark, setIsDark] = useState(DarkMode.isDark());
   const [configOpen, setConfigOpen] = useState(false);
+  const [magnetRequest, setMagnetRequest] = useState(0);
   const authState = useAuthStore((s) => s.state);
   const refreshToken = useAuthStore((s) => s.refreshToken);
   const clearTokens = useAuthStore((s) => s.clearTokens);
@@ -233,6 +234,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     }
   };
 
+  // Hide built-in configure button when custom menuButtons are provided
+  const showBuiltInConfigButton = !menuButtons || menuButtons.length === 0;
+
   // Keyboard shortcuts (global)
   const keyboardActions = {
     onDelete: openDeleteModal,
@@ -244,11 +248,18 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     onOpenFilePicker: () => {
       document.querySelector<HTMLInputElement>('input[type="file"]')?.click();
     },
-    onFocusMagnet: () => {
-      document
-        .querySelector<HTMLInputElement>('input[placeholder^="magnet:"]')
-        ?.focus();
+    // The magnet field lives in a dialog; M opens it and the field autofocuses
+    onFocusMagnet: () => setMagnetRequest((n) => n + 1),
+    onToggleSidebar: () => {
+      const { toggleSidebar, sidebarOpen, setSidebarOpen } =
+        useUIStore.getState();
+      if (isLargeScreen) toggleSidebar();
+      else setSidebarOpen(!sidebarOpen);
     },
+    onOpenSettings: () => {
+      if (showBuiltInConfigButton) setConfigOpen(true);
+    },
+    onOpenLogs: onLogsClick,
     onToggleHelp: () => {
       const { shortcutHelpOpen, setShortcutHelpOpen } = useUIStore.getState();
       setShortcutHelpOpen(!shortcutHelpOpen);
@@ -286,9 +297,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     runBulkAction((id) => API.pause(id), STATE_PAUSED, "pausing");
   const resumeSelected = () =>
     runBulkAction((id) => API.start(id), STATE_LIVE, "starting");
-
-  // Hide built-in configure button when custom menuButtons are provided
-  const showBuiltInConfigButton = !menuButtons || menuButtons.length === 0;
 
   const showTorrentActions = currentPage === "torrents";
 
@@ -407,7 +415,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Torrent action group */}
         {showTorrentActions && (
           <div className="flex items-center gap-0 sm:gap-0.5 bg-surface/30 rounded-lg p-0 sm:p-0.5">
-            <MagnetInput className="grow-0 justify-center !px-2 sm:!px-2.5 !py-1 !text-sm !rounded-lg" />
+            <MagnetInput
+              openRequest={magnetRequest}
+              className="grow-0 justify-center !px-2 sm:!px-2.5 !py-1 !text-sm !rounded-lg"
+            />
             <FileInput
               className="grow-0 justify-center !px-2 sm:!px-2.5 !py-1 !text-sm !rounded-lg"
               onMultiFileSelect={onMultiFileSelect}

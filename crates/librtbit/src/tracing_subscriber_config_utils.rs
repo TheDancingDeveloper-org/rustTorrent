@@ -310,4 +310,62 @@ mod tests {
         assert_eq!(names.len(), 1);
         assert!(names[0].starts_with("rtbit.log."), "got {names:?}");
     }
+
+    /// Collects formatted log output in memory.
+    #[derive(Clone, Default)]
+    struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+        type Writer = Captured;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    fn log_one_event(format: super::LogFormat) -> String {
+        use tracing_subscriber::prelude::*;
+
+        let captured = Captured::default();
+        let subscriber =
+            tracing_subscriber::registry().with(super::fmt_layer(format, captured.clone(), false));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(torrent_id = 7, "added torrent");
+        });
+        let bytes = captured.0.lock().unwrap().clone();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn json_format_writes_one_json_object_per_event() {
+        let output = log_one_event(super::LogFormat::Json);
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines.len(), 1, "output: {output:?}");
+        let event: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(event["level"], "INFO");
+        assert_eq!(event["fields"]["message"], "added torrent");
+        assert_eq!(event["fields"]["torrent_id"], 7);
+        assert!(event["timestamp"].is_string());
+    }
+
+    #[test]
+    fn text_format_is_plain_text_without_ansi() {
+        let output = log_one_event(super::LogFormat::Text);
+        assert!(output.contains("INFO"), "output: {output:?}");
+        assert!(
+            output.contains("added torrent torrent_id=7"),
+            "output: {output:?}"
+        );
+        assert!(serde_json::from_str::<serde_json::Value>(output.trim()).is_err());
+        assert!(!output.contains('\x1b'), "ANSI escapes with ansi=false");
+    }
 }

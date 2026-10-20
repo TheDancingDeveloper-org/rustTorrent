@@ -129,8 +129,10 @@ export const Sidebar: React.FC<{ variant?: "default" | "drawer" }> = ({
         </div>
         <button
           onClick={toggleSidebar}
-          className="p-2 text-tertiary hover:text-secondary cursor-pointer border-t border-divider flex items-center justify-center"
+          type="button"
+          className="p-2 text-tertiary hover:text-secondary cursor-pointer border-t border-divider flex items-center justify-center focus-ring"
           title="Expand sidebar"
+          aria-label="Expand sidebar"
         >
           <BsChevronRight className="w-3.5 h-3.5" />
         </button>
@@ -187,6 +189,7 @@ export const Sidebar: React.FC<{ variant?: "default" | "drawer" }> = ({
           onClick={toggleSidebar}
           className="p-2 text-tertiary hover:text-secondary cursor-pointer border-t border-divider flex items-center justify-center gap-1 text-xs focus-ring"
           title="Collapse sidebar"
+          aria-label="Collapse sidebar"
         >
           <BsChevronLeft className="w-3 h-3" />
           <span>Collapse</span>

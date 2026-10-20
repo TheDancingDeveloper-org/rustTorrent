@@ -21,6 +21,8 @@ use crate::rss::db::RssDatabase;
 use crate::ApiError;
 
 pub mod auth;
+#[cfg(test)]
+mod auth_middleware_tests;
 mod handlers;
 mod timeout;
 #[cfg(feature = "webui")]
@@ -132,6 +134,20 @@ async fn admit(role: auth::Role, mut request: axum::extract::Request, next: Next
     next.run(request).await
 }
 
+/// The extra CORS origin pattern. RTBIT_CORS_ALLOW_REGEXP is the canonical name; the bare
+/// CORS_ALLOW_REGEXP is still read so existing deployments keep working. An invalid pattern is
+/// ignored with a warning rather than failing startup.
+fn cors_allow_regex(rtbit: Option<String>, legacy: Option<String>) -> Option<regex::bytes::Regex> {
+    let value = rtbit.or(legacy)?;
+    match regex::bytes::Regex::new(&value) {
+        Ok(re) => Some(re),
+        Err(err) => {
+            warn!("ignoring invalid CORS allow regexp: {err}");
+            None
+        }
+    }
+}
+
 /// Auth endpoints that need no session. Logout is one: it only revokes the refresh token it is
 /// sent, which the caller can only hold if it was issued to them, and it must work for a
 /// read-only caller (whose POSTs are otherwise refused) and after the access token has expired.
@@ -220,18 +236,10 @@ impl HttpApi {
                 b"tauri://localhost",
             ];
 
-            // RTBIT_CORS_ALLOW_REGEXP is the canonical name; the bare CORS_ALLOW_REGEXP
-            // is still read so existing deployments keep working.
-            let allow_regex = std::env::var("RTBIT_CORS_ALLOW_REGEXP")
-                .or_else(|_| std::env::var("CORS_ALLOW_REGEXP"))
-                .ok()
-                .and_then(|value| match regex::bytes::Regex::new(&value) {
-                    Ok(re) => Some(re),
-                    Err(err) => {
-                        warn!("ignoring invalid CORS allow regexp: {err}");
-                        None
-                    }
-                });
+            let allow_regex = cors_allow_regex(
+                std::env::var("RTBIT_CORS_ALLOW_REGEXP").ok(),
+                std::env::var("CORS_ALLOW_REGEXP").ok(),
+            );
 
             tower_http::cors::CorsLayer::default()
                 .allow_origin(AllowOrigin::predicate(move |v, _| {
@@ -457,7 +465,29 @@ impl HttpApi {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_pre_setup_path, is_public_auth_path};
+    use super::{cors_allow_regex, is_pre_setup_path, is_public_auth_path};
+
+    #[test]
+    fn cors_regex_prefers_the_rtbit_name_and_ignores_invalid_patterns() {
+        let re = |rtbit: Option<&str>, legacy: Option<&str>| {
+            cors_allow_regex(rtbit.map(str::to_owned), legacy.map(str::to_owned))
+        };
+        assert!(re(None, None).is_none());
+
+        let legacy = re(None, Some("^https://legacy\\.test$")).unwrap();
+        assert!(legacy.is_match(b"https://legacy.test"));
+
+        let both = re(
+            Some("^https://new\\.test$"),
+            Some("^https://legacy\\.test$"),
+        )
+        .unwrap();
+        assert!(both.is_match(b"https://new.test"));
+        assert!(!both.is_match(b"https://legacy.test"));
+
+        // An invalid canonical value disables the extra pattern; it doesn't fall back.
+        assert!(re(Some("(unclosed"), Some("^https://legacy\\.test$")).is_none());
+    }
 
     #[test]
     fn logout_needs_no_session_but_other_auth_writes_do() {
