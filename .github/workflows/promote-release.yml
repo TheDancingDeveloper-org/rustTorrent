@@ -134,3 +134,15 @@ jobs:
     with:
       tag: ${{ needs.resolve.outputs.stable_tag }}
     secrets: inherit
+
+  codeql:
+    # The stable tag is created with the workflow token, which fires no push
+    # event, so codeql.yml is called explicitly once the tag exists. See
+    # docs/ci.md.
+    needs: [resolve, tag-stable]
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/codeql.yml
+    with:
+      ref: refs/tags/${{ needs.resolve.outputs.stable_tag }}
