@@ -43,14 +43,17 @@ function buildMagnet(
 
 function contentTypeBadge(ct: string | null) {
   if (!ct) return null;
+  // Categorical hues with no status meaning, so raw palette steps are used:
+  // the 800 step on light surfaces and the 300 step on dark both clear 4.5:1
+  // (guarded by helper/featurePageTokens.test.mjs).
   const colors: Record<string, string> = {
-    movie: "bg-blue-500/20 text-blue-400",
-    tv_show: "bg-purple-500/20 text-purple-400",
-    music: "bg-green-500/20 text-green-400",
-    ebook: "bg-yellow-500/20 text-yellow-400",
-    game: "bg-red-500/20 text-red-400",
-    software: "bg-cyan-500/20 text-cyan-400",
-    xxx: "bg-pink-500/20 text-pink-400",
+    movie: "bg-blue-500/15 text-blue-800 dark:text-blue-300",
+    tv_show: "bg-purple-500/15 text-purple-800 dark:text-purple-300",
+    music: "bg-green-500/15 text-green-800 dark:text-green-300",
+    ebook: "bg-yellow-500/15 text-amber-800 dark:text-yellow-300",
+    game: "bg-red-500/15 text-red-800 dark:text-red-300",
+    software: "bg-cyan-500/15 text-cyan-800 dark:text-cyan-300",
+    xxx: "bg-pink-500/15 text-pink-800 dark:text-pink-300",
   };
   const color = colors[ct] || "bg-surface text-secondary";
   const label = ct.replace("_", " ");
@@ -563,7 +566,7 @@ const SearchRow = ({
         {result.size ? formatBytes(result.size) : "-"}
       </td>
       <td className={`${numCell} hidden lg:table-cell`}>
-        <span className="text-green-500 inline-flex items-center gap-0.5">
+        <span className="text-success inline-flex items-center gap-0.5">
           <FaSeedling className="w-3 h-3" />
           {result.seed_count}
         </span>
@@ -628,7 +631,7 @@ const RecentRow = ({
         {item.size ? formatBytes(item.size) : "-"}
       </td>
       <td className={`${numCell} hidden lg:table-cell`}>
-        <span className="text-green-500 inline-flex items-center gap-0.5">
+        <span className="text-success inline-flex items-center gap-0.5">
           <FaSeedling className="w-3 h-3" />
           {item.seed_count}
         </span>

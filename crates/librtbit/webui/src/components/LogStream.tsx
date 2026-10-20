@@ -51,15 +51,16 @@ const LOG_LEVELS = ["TRACE", "DEBUG", "INFO", "WARN", "ERROR"] as const;
 const levelButtonActiveClass = (level: string): string => {
   switch (level) {
     case "TRACE":
-      return "bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300";
+      return "bg-surface-sunken text-text";
     case "DEBUG":
-      return "bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400";
+      return "bg-accent-download/15 text-accent-download";
     case "INFO":
-      return "bg-green-100 dark:bg-green-900/50 text-green-600 dark:text-green-400";
+      return "bg-success-bg/15 text-success";
     case "WARN":
-      return "bg-amber-100 dark:bg-amber-900/50 text-amber-600 dark:text-amber-400";
+      // Body text: the light warning token is below 3:1 on a pale tint
+      return "bg-warning-bg/20 text-text";
     case "ERROR":
-      return "bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400";
+      return "bg-error-bg/15 text-error";
     default:
       return "bg-surface-sunken text-tertiary";
   }

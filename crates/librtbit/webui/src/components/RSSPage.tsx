@@ -17,6 +17,59 @@ import { Spinner } from "./Spinner";
 import { formatBytes } from "../helper/formatBytes";
 
 // ---------------------------------------------------------------------------
+// Shared styles
+// ---------------------------------------------------------------------------
+
+const fieldCls =
+  "bg-surface border border-divider rounded focus-ring focus:border-primary";
+const inputCls = `w-full px-2 py-1.5 text-sm ${fieldCls}`;
+const selectSmCls = `text-xs px-2 py-1 ${fieldCls}`;
+const labelCls = "block text-xs font-medium text-secondary mb-1";
+const errorCls = "text-xs text-error bg-error-bg/10 px-2 py-1 rounded";
+
+const enabledBadgeCls = (enabled: boolean) =>
+  `text-xs px-1.5 py-0.5 rounded ${
+    enabled ? "bg-success-bg/15 text-success" : "bg-surface-sunken text-secondary"
+  }`;
+
+// ---------------------------------------------------------------------------
+// Narrow layout: below `sm` the tables become stacked rows
+// (title, then a meta line, then status and actions).
+// ---------------------------------------------------------------------------
+
+const StackedList: React.FC<{
+  label: string;
+  empty: string;
+  children: React.ReactNode[];
+}> = ({ label, empty, children }) => (
+  <ul aria-label={label} className="sm:hidden divide-y divide-divider">
+    {children.length > 0 ? (
+      children
+    ) : (
+      <li className="px-4 py-8 text-center text-secondary text-sm">{empty}</li>
+    )}
+  </ul>
+);
+
+const StackedRow: React.FC<{
+  title: string;
+  meta: (string | null | undefined)[];
+  status: React.ReactNode;
+  actions: React.ReactNode;
+}> = ({ title, meta, status, actions }) => (
+  <li className="px-3 py-2 space-y-1">
+    <div className="text-sm font-medium break-words">{title}</div>
+    <div className="text-xs text-secondary truncate">
+      {meta.filter(Boolean).join(" · ")}
+    </div>
+    <div className="flex items-center justify-between gap-2">
+      {status}
+      <div className="flex gap-1">{actions}</div>
+    </div>
+  </li>
+);
+
+// ---------------------------------------------------------------------------
 // Feed Modal
 // ---------------------------------------------------------------------------
 
@@ -90,21 +143,17 @@ const FeedModal: React.FC<{
     }
   };
 
-  const inputCls =
-    "w-full px-2 py-1.5 text-sm bg-surface border border-divider rounded focus:outline-none focus:border-primary";
-  const labelCls = "block text-xs font-medium text-secondary mb-1";
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="bg-surface-raised rounded-lg shadow-xl w-full max-w-md mx-4">
         <div className="px-4 py-3 border-b border-divider">
-          <h3 className="text-base font-semibold">
+          <h2 className="text-base font-semibold">
             {feed ? "Edit Feed" : "Add Feed"}
-          </h3>
+          </h2>
         </div>
         <div className="px-4 py-3 space-y-3">
           {error && (
-            <div className="text-xs text-red-500 bg-red-50 dark:bg-red-900/20 px-2 py-1 rounded">
+            <div className={errorCls} role="alert">
               {error}
             </div>
           )}
@@ -276,21 +325,17 @@ const RuleModal: React.FC<{
     }
   };
 
-  const inputCls =
-    "w-full px-2 py-1.5 text-sm bg-surface border border-divider rounded focus:outline-none focus:border-primary";
-  const labelCls = "block text-xs font-medium text-secondary mb-1";
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="bg-surface-raised rounded-lg shadow-xl w-full max-w-md mx-4">
         <div className="px-4 py-3 border-b border-divider">
-          <h3 className="text-base font-semibold">
+          <h2 className="text-base font-semibold">
             {rule ? "Edit Rule" : "Add Rule"}
-          </h3>
+          </h2>
         </div>
         <div className="px-4 py-3 space-y-3">
           {error && (
-            <div className="text-xs text-red-500 bg-red-50 dark:bg-red-900/20 px-2 py-1 rounded">
+            <div className={errorCls} role="alert">
               {error}
             </div>
           )}
@@ -485,17 +530,106 @@ export const RSSPage: React.FC = () => {
   };
 
   const tabCls = (t: RssTab) =>
-    `px-3 py-1.5 text-sm font-medium border-b-2 cursor-pointer transition-colors ${
+    `px-3 py-1.5 text-sm font-medium border-b-2 cursor-pointer transition-colors focus-ring ${
       tab === t
         ? "border-primary text-primary"
         : "border-transparent text-secondary hover:text-text hover:border-divider"
     }`;
 
   const btnSmCls =
-    "p-1 text-secondary hover:text-primary rounded cursor-pointer transition-colors";
+    "p-1 text-secondary hover:text-primary rounded cursor-pointer transition-colors focus-ring touch-target";
   const thCls =
     "px-2 py-1.5 text-left text-xs font-medium text-secondary uppercase tracking-wider";
   const tdCls = "px-2 py-1.5 text-sm whitespace-nowrap";
+
+  const emptyCls = "px-4 py-8 text-center text-secondary text-sm";
+  const itemsEmpty = "No RSS items found. Add a feed to get started.";
+  const feedsEmpty = 'No RSS feeds configured. Click "Add Feed" to add one.';
+  const rulesEmpty = 'No download rules. Click "Add Rule" to create one.';
+
+  const itemSize = (item: RssItem) =>
+    item.size_bytes > 0 ? formatBytes(item.size_bytes) : "-";
+
+  const itemStatus = (item: RssItem) =>
+    item.downloaded ? (
+      <span className="flex items-center gap-1 text-success text-xs">
+        <BsCheckCircleFill className="w-3 h-3" /> Done
+      </span>
+    ) : (
+      <span className="text-xs text-secondary">Pending</span>
+    );
+
+  const itemActions = (item: RssItem) =>
+    !item.downloaded &&
+    item.url && (
+      <button
+        onClick={() => handleDownload(item)}
+        disabled={downloadingId === item.id}
+        className={btnSmCls}
+        title="Download"
+        aria-label={`Download ${item.title}`}
+      >
+        {downloadingId === item.id ? (
+          <Spinner />
+        ) : (
+          <BsDownload className="w-3.5 h-3.5" />
+        )}
+      </button>
+    );
+
+  const enabledBadge = (enabled: boolean) => (
+    <span className={enabledBadgeCls(enabled)}>
+      {enabled ? "Active" : "Disabled"}
+    </span>
+  );
+
+  const feedActions = (feed: RssFeedConfig) => (
+    <>
+      <button
+        onClick={() => {
+          setEditingFeed(feed);
+          setFeedModalOpen(true);
+        }}
+        className={btnSmCls}
+        title="Edit"
+        aria-label={`Edit feed ${feed.name}`}
+      >
+        <BsPencil className="w-3.5 h-3.5" />
+      </button>
+      <button
+        onClick={() => handleDeleteFeed(feed.name)}
+        className={`${btnSmCls} hover:text-error`}
+        title="Delete"
+        aria-label={`Delete feed ${feed.name}`}
+      >
+        <BsTrash className="w-3.5 h-3.5" />
+      </button>
+    </>
+  );
+
+  const ruleActions = (rule: RssRule) => (
+    <>
+      <button
+        onClick={() => {
+          setEditingRule(rule);
+          setRuleModalOpen(true);
+        }}
+        className={btnSmCls}
+        title="Edit"
+        aria-label={`Edit rule ${rule.name}`}
+      >
+        <BsPencil className="w-3.5 h-3.5" />
+      </button>
+      <button
+        onClick={() => handleDeleteRule(rule.id)}
+        className={`${btnSmCls} hover:text-error`}
+        title="Delete"
+        aria-label={`Delete rule ${rule.name}`}
+      >
+        <BsTrash className="w-3.5 h-3.5" />
+      </button>
+    </>
+  );
 
   if (loading && items.length === 0) {
     return (
@@ -523,7 +657,8 @@ export const RSSPage: React.FC = () => {
         <div className="flex items-center gap-2">
           {tab === "items" && (
             <select
-              className="text-xs bg-surface border border-divider rounded px-2 py-1 focus:outline-none focus:border-primary"
+              className={selectSmCls}
+              aria-label="Filter by feed"
               value={selectedFeedFilter ?? ""}
               onChange={(e) => setSelectedFeedFilter(e.target.value || null)}
             >
@@ -541,7 +676,7 @@ export const RSSPage: React.FC = () => {
                 setEditingFeed(null);
                 setFeedModalOpen(true);
               }}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-white bg-primary rounded hover:bg-primary/90 cursor-pointer"
+              className="flex items-center gap-1 px-2 py-1 text-xs text-white bg-primary-bg rounded hover:bg-primary-bg-hover cursor-pointer focus-ring"
             >
               <BsPlus className="w-4 h-4" /> Add Feed
             </button>
@@ -552,7 +687,7 @@ export const RSSPage: React.FC = () => {
                 setEditingRule(null);
                 setRuleModalOpen(true);
               }}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-white bg-primary rounded hover:bg-primary/90 cursor-pointer"
+              className="flex items-center gap-1 px-2 py-1 text-xs text-white bg-primary-bg rounded hover:bg-primary-bg-hover cursor-pointer focus-ring"
             >
               <BsPlus className="w-4 h-4" /> Add Rule
             </button>
@@ -563,245 +698,212 @@ export const RSSPage: React.FC = () => {
       {/* Content */}
       <div className="flex-1 min-h-0 overflow-auto">
         {tab === "items" && (
-          <table className="w-full">
-            <thead className="sticky top-0 bg-surface-raised z-10">
-              <tr className="border-b border-divider">
-                <th className={thCls}>Title</th>
-                <th className={`${thCls} hidden lg:table-cell`}>Feed</th>
-                <th className={`${thCls} hidden lg:table-cell`}>Published</th>
-                <th className={`${thCls} hidden md:table-cell`}>Size</th>
-                <th className={thCls}>Status</th>
-                <th className={thCls} style={{ width: 40 }}></th>
-              </tr>
-            </thead>
-            <tbody>
+          <>
+            <table className="w-full hidden sm:table">
+              <thead className="sticky top-0 bg-surface-raised z-10">
+                <tr className="border-b border-divider">
+                  <th className={thCls}>Title</th>
+                  <th className={`${thCls} hidden lg:table-cell`}>Feed</th>
+                  <th className={`${thCls} hidden lg:table-cell`}>Published</th>
+                  <th className={`${thCls} hidden md:table-cell`}>Size</th>
+                  <th className={thCls}>Status</th>
+                  <th className={thCls} style={{ width: 40 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr
+                    key={item.id}
+                    className="border-b border-divider hover:bg-surface/50"
+                  >
+                    <td
+                      className={`${tdCls} max-w-xs truncate`}
+                      title={item.title}
+                    >
+                      {item.title}
+                    </td>
+                    <td
+                      className={`${tdCls} hidden lg:table-cell text-secondary`}
+                    >
+                      {item.feed_name}
+                    </td>
+                    <td
+                      className={`${tdCls} hidden lg:table-cell text-secondary`}
+                    >
+                      {formatDate(item.published_at)}
+                    </td>
+                    <td
+                      className={`${tdCls} hidden md:table-cell text-secondary`}
+                    >
+                      {itemSize(item)}
+                    </td>
+                    <td className={tdCls}>{itemStatus(item)}</td>
+                    <td className={tdCls}>{itemActions(item)}</td>
+                  </tr>
+                ))}
+                {items.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className={emptyCls}>
+                      {itemsEmpty}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+            <StackedList label="RSS items" empty={itemsEmpty}>
               {items.map((item) => (
-                <tr
+                <StackedRow
                   key={item.id}
-                  className="border-b border-divider hover:bg-surface/50"
-                >
-                  <td
-                    className={`${tdCls} max-w-xs truncate`}
-                    title={item.title}
-                  >
-                    {item.title}
-                  </td>
-                  <td
-                    className={`${tdCls} hidden lg:table-cell text-secondary`}
-                  >
-                    {item.feed_name}
-                  </td>
-                  <td
-                    className={`${tdCls} hidden lg:table-cell text-secondary`}
-                  >
-                    {formatDate(item.published_at)}
-                  </td>
-                  <td
-                    className={`${tdCls} hidden md:table-cell text-secondary`}
-                  >
-                    {item.size_bytes > 0 ? formatBytes(item.size_bytes) : "-"}
-                  </td>
-                  <td className={tdCls}>
-                    {item.downloaded ? (
-                      <span className="flex items-center gap-1 text-green-600 dark:text-green-400 text-xs">
-                        <BsCheckCircleFill className="w-3 h-3" /> Done
-                      </span>
-                    ) : (
-                      <span className="text-xs text-secondary">Pending</span>
-                    )}
-                  </td>
-                  <td className={tdCls}>
-                    {!item.downloaded && item.url && (
-                      <button
-                        onClick={() => handleDownload(item)}
-                        disabled={downloadingId === item.id}
-                        className={btnSmCls}
-                        title="Download"
-                      >
-                        {downloadingId === item.id ? (
-                          <Spinner />
-                        ) : (
-                          <BsDownload className="w-3.5 h-3.5" />
-                        )}
-                      </button>
-                    )}
-                  </td>
-                </tr>
+                  title={item.title}
+                  meta={[
+                    item.feed_name,
+                    formatDate(item.published_at),
+                    itemSize(item),
+                  ]}
+                  status={itemStatus(item)}
+                  actions={itemActions(item)}
+                />
               ))}
-              {items.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={6}
-                    className="px-4 py-8 text-center text-secondary text-sm"
-                  >
-                    No RSS items found. Add a feed to get started.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+            </StackedList>
+          </>
         )}
 
         {tab === "feeds" && (
-          <table className="w-full">
-            <thead className="sticky top-0 bg-surface-raised z-10">
-              <tr className="border-b border-divider">
-                <th className={thCls}>Name</th>
-                <th className={`${thCls} hidden lg:table-cell`}>URL</th>
-                <th className={`${thCls} hidden md:table-cell`}>Interval</th>
-                <th className={`${thCls} hidden md:table-cell`}>Category</th>
-                <th className={thCls}>Status</th>
-                <th className={thCls} style={{ width: 80 }}></th>
-              </tr>
-            </thead>
-            <tbody>
+          <>
+            <table className="w-full hidden sm:table">
+              <thead className="sticky top-0 bg-surface-raised z-10">
+                <tr className="border-b border-divider">
+                  <th className={thCls}>Name</th>
+                  <th className={`${thCls} hidden lg:table-cell`}>URL</th>
+                  <th className={`${thCls} hidden md:table-cell`}>Interval</th>
+                  <th className={`${thCls} hidden md:table-cell`}>Category</th>
+                  <th className={thCls}>Status</th>
+                  <th className={thCls} style={{ width: 80 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {feeds.map((feed) => (
+                  <tr
+                    key={feed.name}
+                    className="border-b border-divider hover:bg-surface/50"
+                  >
+                    <td className={`${tdCls} font-medium`}>{feed.name}</td>
+                    <td
+                      className={`${tdCls} hidden lg:table-cell text-secondary max-w-xs truncate`}
+                      title={feed.url}
+                    >
+                      {feed.url}
+                    </td>
+                    <td
+                      className={`${tdCls} hidden md:table-cell text-secondary`}
+                    >
+                      {formatDuration(feed.poll_interval_secs)}
+                    </td>
+                    <td
+                      className={`${tdCls} hidden md:table-cell text-secondary`}
+                    >
+                      {feed.category || "-"}
+                    </td>
+                    <td className={tdCls}>{enabledBadge(feed.enabled)}</td>
+                    <td className={`${tdCls} flex gap-1`}>
+                      {feedActions(feed)}
+                    </td>
+                  </tr>
+                ))}
+                {feeds.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className={emptyCls}>
+                      {feedsEmpty}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+            <StackedList label="RSS feeds" empty={feedsEmpty}>
               {feeds.map((feed) => (
-                <tr
+                <StackedRow
                   key={feed.name}
-                  className="border-b border-divider hover:bg-surface/50"
-                >
-                  <td className={`${tdCls} font-medium`}>{feed.name}</td>
-                  <td
-                    className={`${tdCls} hidden lg:table-cell text-secondary max-w-xs truncate`}
-                    title={feed.url}
-                  >
-                    {feed.url}
-                  </td>
-                  <td
-                    className={`${tdCls} hidden md:table-cell text-secondary`}
-                  >
-                    {formatDuration(feed.poll_interval_secs)}
-                  </td>
-                  <td
-                    className={`${tdCls} hidden md:table-cell text-secondary`}
-                  >
-                    {feed.category || "-"}
-                  </td>
-                  <td className={tdCls}>
-                    <span
-                      className={`text-xs px-1.5 py-0.5 rounded ${
-                        feed.enabled
-                          ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                          : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"
-                      }`}
-                    >
-                      {feed.enabled ? "Active" : "Disabled"}
-                    </span>
-                  </td>
-                  <td className={`${tdCls} flex gap-1`}>
-                    <button
-                      onClick={() => {
-                        setEditingFeed(feed);
-                        setFeedModalOpen(true);
-                      }}
-                      className={btnSmCls}
-                      title="Edit"
-                    >
-                      <BsPencil className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleDeleteFeed(feed.name)}
-                      className={`${btnSmCls} hover:text-red-500`}
-                      title="Delete"
-                    >
-                      <BsTrash className="w-3.5 h-3.5" />
-                    </button>
-                  </td>
-                </tr>
+                  title={feed.name}
+                  meta={[
+                    feed.url,
+                    formatDuration(feed.poll_interval_secs),
+                    feed.category,
+                  ]}
+                  status={enabledBadge(feed.enabled)}
+                  actions={feedActions(feed)}
+                />
               ))}
-              {feeds.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={6}
-                    className="px-4 py-8 text-center text-secondary text-sm"
-                  >
-                    No RSS feeds configured. Click "Add Feed" to add one.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+            </StackedList>
+          </>
         )}
 
         {tab === "rules" && (
-          <table className="w-full">
-            <thead className="sticky top-0 bg-surface-raised z-10">
-              <tr className="border-b border-divider">
-                <th className={thCls}>Name</th>
-                <th className={`${thCls} hidden lg:table-cell`}>Pattern</th>
-                <th className={`${thCls} hidden md:table-cell`}>Feeds</th>
-                <th className={`${thCls} hidden md:table-cell`}>Category</th>
-                <th className={thCls}>Status</th>
-                <th className={thCls} style={{ width: 80 }}></th>
-              </tr>
-            </thead>
-            <tbody>
+          <>
+            <table className="w-full hidden sm:table">
+              <thead className="sticky top-0 bg-surface-raised z-10">
+                <tr className="border-b border-divider">
+                  <th className={thCls}>Name</th>
+                  <th className={`${thCls} hidden lg:table-cell`}>Pattern</th>
+                  <th className={`${thCls} hidden md:table-cell`}>Feeds</th>
+                  <th className={`${thCls} hidden md:table-cell`}>Category</th>
+                  <th className={thCls}>Status</th>
+                  <th className={thCls} style={{ width: 80 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rules.map((rule) => (
+                  <tr
+                    key={rule.id}
+                    className="border-b border-divider hover:bg-surface/50"
+                  >
+                    <td className={`${tdCls} font-medium`}>{rule.name}</td>
+                    <td
+                      className={`${tdCls} hidden lg:table-cell text-secondary font-mono text-xs max-w-xs truncate`}
+                      title={rule.match_regex}
+                    >
+                      {rule.match_regex}
+                    </td>
+                    <td
+                      className={`${tdCls} hidden md:table-cell text-secondary`}
+                    >
+                      {rule.feed_names.join(", ")}
+                    </td>
+                    <td
+                      className={`${tdCls} hidden md:table-cell text-secondary`}
+                    >
+                      {rule.category || "-"}
+                    </td>
+                    <td className={tdCls}>{enabledBadge(rule.enabled)}</td>
+                    <td className={`${tdCls} flex gap-1`}>
+                      {ruleActions(rule)}
+                    </td>
+                  </tr>
+                ))}
+                {rules.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className={emptyCls}>
+                      {rulesEmpty}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+            <StackedList label="RSS rules" empty={rulesEmpty}>
               {rules.map((rule) => (
-                <tr
+                <StackedRow
                   key={rule.id}
-                  className="border-b border-divider hover:bg-surface/50"
-                >
-                  <td className={`${tdCls} font-medium`}>{rule.name}</td>
-                  <td
-                    className={`${tdCls} hidden lg:table-cell text-secondary font-mono text-xs max-w-xs truncate`}
-                    title={rule.match_regex}
-                  >
-                    {rule.match_regex}
-                  </td>
-                  <td
-                    className={`${tdCls} hidden md:table-cell text-secondary`}
-                  >
-                    {rule.feed_names.join(", ")}
-                  </td>
-                  <td
-                    className={`${tdCls} hidden md:table-cell text-secondary`}
-                  >
-                    {rule.category || "-"}
-                  </td>
-                  <td className={tdCls}>
-                    <span
-                      className={`text-xs px-1.5 py-0.5 rounded ${
-                        rule.enabled
-                          ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                          : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"
-                      }`}
-                    >
-                      {rule.enabled ? "Active" : "Disabled"}
-                    </span>
-                  </td>
-                  <td className={`${tdCls} flex gap-1`}>
-                    <button
-                      onClick={() => {
-                        setEditingRule(rule);
-                        setRuleModalOpen(true);
-                      }}
-                      className={btnSmCls}
-                      title="Edit"
-                    >
-                      <BsPencil className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleDeleteRule(rule.id)}
-                      className={`${btnSmCls} hover:text-red-500`}
-                      title="Delete"
-                    >
-                      <BsTrash className="w-3.5 h-3.5" />
-                    </button>
-                  </td>
-                </tr>
+                  title={rule.name}
+                  meta={[
+                    rule.match_regex,
+                    rule.feed_names.join(", "),
+                    rule.category,
+                  ]}
+                  status={enabledBadge(rule.enabled)}
+                  actions={ruleActions(rule)}
+                />
               ))}
-              {rules.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={6}
-                    className="px-4 py-8 text-center text-secondary text-sm"
-                  >
-                    No download rules. Click "Add Rule" to create one.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+            </StackedList>
+          </>
         )}
       </div>
 

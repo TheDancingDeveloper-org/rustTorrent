@@ -163,7 +163,7 @@ export const IndexarrSetup = () => {
                     title="Copy to clipboard"
                   >
                     {copied ? (
-                      <FaCheck className="w-3.5 h-3.5 text-green-500" />
+                      <FaCheck className="w-3.5 h-3.5 text-success" />
                     ) : (
                       <FaCopy className="w-3.5 h-3.5 text-secondary" />
                     )}

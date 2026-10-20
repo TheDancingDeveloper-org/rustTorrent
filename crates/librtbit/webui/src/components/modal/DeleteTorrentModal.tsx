@@ -72,14 +72,14 @@ export const DeleteTorrentModal: React.FC<{
   return (
     <Modal isOpen={show} onClose={onHide} title={title}>
       <ModalBody>
-        <p className="text-gray-700 dark:text-slate-300 mb-3">
+        <p className="text-text mb-3">
           {isBulk
             ? "Are you sure you want to delete the following torrents?"
             : "Are you sure you want to delete this torrent?"}
         </p>
 
         <div
-          className={`rounded-md bg-gray-50 dark:bg-slate-700/50 p-3 ${
+          className={`rounded-md bg-surface-sunken p-3 ${
             isBulk ? "max-h-48 overflow-y-auto" : ""
           }`}
         >
@@ -87,7 +87,7 @@ export const DeleteTorrentModal: React.FC<{
             {torrents.map((torrent) => (
               <li
                 key={torrent.id}
-                className="text-gray-800 dark:text-slate-200 truncate"
+                className="text-text truncate"
                 title={torrent.name ?? undefined}
               >
                 <span className="font-medium">
@@ -102,13 +102,13 @@ export const DeleteTorrentModal: React.FC<{
           <input
             type="checkbox"
             id="deleteFiles"
-            className="form-checkbox h-4 w-4 text-blue-500 rounded border-gray-300 dark:border-slate-600"
+            className="h-4 w-4 rounded border-divider accent-primary focus-ring"
             onChange={() => setDeleteFiles(!deleteFiles)}
             checked={deleteFiles}
           />
           <label
             htmlFor="deleteFiles"
-            className="ml-2 text-gray-700 dark:text-slate-300"
+            className="ml-2 text-text"
           >
             Also delete downloaded files
           </label>

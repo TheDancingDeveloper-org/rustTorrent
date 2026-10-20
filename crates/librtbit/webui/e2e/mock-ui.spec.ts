@@ -39,9 +39,13 @@ test("shows simulated RSS release history", async ({ page }) => {
   await expect(
     page.locator("tbody").getByText("Open Media Weekly").first(),
   ).toBeVisible();
-  await expect(page.getByText("Glass River", { exact: false })).toBeVisible();
-  await expect(page.getByText("Done").first()).toBeVisible();
-  await expect(page.getByText("Pending").first()).toBeVisible();
+  // Scoped to the table: the narrow-screen stacked list repeats the rows
+  const table = page.locator("tbody");
+  await expect(
+    table.getByText("Glass River", { exact: false }).first(),
+  ).toBeVisible();
+  await expect(table.getByText("Done").first()).toBeVisible();
+  await expect(table.getByText("Pending").first()).toBeVisible();
 });
 
 test("selects a torrent and exposes safe bulk actions", async ({ page }) => {
