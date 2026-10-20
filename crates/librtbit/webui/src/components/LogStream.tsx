@@ -57,8 +57,7 @@ const levelButtonActiveClass = (level: string): string => {
     case "INFO":
       return "bg-success-bg/15 text-success";
     case "WARN":
-      // Body text: the light warning token is below 3:1 on a pale tint
-      return "bg-warning-bg/20 text-text";
+      return "bg-warning-bg/20 text-warning";
     case "ERROR":
       return "bg-error-bg/15 text-error";
     default:
