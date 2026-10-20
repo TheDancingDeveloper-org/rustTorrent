@@ -122,7 +122,7 @@ export const MultiTorrentUploadModal = ({
                 id="multi_category"
                 value={selectedCategory}
                 onChange={(e) => setSelectedCategory(e.target.value)}
-                className="px-2 py-1.5 text-sm bg-surface border border-divider rounded focus:outline-none focus:border-primary"
+                className="px-2 py-1.5 text-sm bg-surface border border-divider rounded focus-ring focus:border-primary"
               >
                 <option value="">None</option>
                 {categoryNames.map((name) => (

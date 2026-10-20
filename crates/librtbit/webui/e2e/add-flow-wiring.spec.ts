@@ -148,3 +148,30 @@ test("the connection-lost banner shows, keeps the list, and hides on recovery", 
     page.getByRole("status").getByText("Connection to rustTorrent restored"),
   ).toBeVisible();
 });
+
+// Audit P1-12: with no engine from the start, the shell shows a dedicated
+// unreachable state with a Retry, not a raw HTTP error over an empty list.
+test("an unreachable engine shows the full-panel state, and Retry recovers", async ({
+  page,
+}) => {
+  let mode: Mode = "down";
+  await routeBackend(page, () => mode);
+  await page.goto("/");
+
+  const panel = page
+    .getByRole("heading", { name: "Can't reach the rustTorrent engine" })
+    .locator("xpath=..");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(API);
+  await expect(
+    panel.getByRole("status").filter({ hasText: "Retrying automatically" }),
+  ).toBeVisible();
+  await expect(page.getByText("No torrents yet")).toHaveCount(0);
+
+  mode = "ok";
+  await panel.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByText("No torrents yet")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Can't reach the rustTorrent engine" }),
+  ).toHaveCount(0);
+});

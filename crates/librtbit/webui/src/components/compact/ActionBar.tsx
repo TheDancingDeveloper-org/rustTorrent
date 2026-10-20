@@ -246,7 +246,7 @@ export const ActionBar: React.FC<ActionBarProps> = ({ hideFilters }) => {
                 type="button"
                 onClick={clearSearch}
                 aria-label="Clear search"
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-tertiary hover:text-secondary rounded cursor-pointer"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-tertiary hover:text-secondary rounded cursor-pointer focus-ring"
               >
                 <GoX className="w-3.5 h-3.5" />
               </button>

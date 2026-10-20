@@ -208,7 +208,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ torrent }) => {
               }}
               onBlur={() => setEditingCategory(false)}
               autoFocus
-              className="px-1 py-0.5 text-sm bg-surface border border-divider rounded focus:outline-none focus:border-primary"
+              className="px-1 py-0.5 text-sm bg-surface border border-divider rounded focus-ring focus:border-primary"
             >
               <option value="">None</option>
               {Object.keys(categories)

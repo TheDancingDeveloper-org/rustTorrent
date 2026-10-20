@@ -14,6 +14,7 @@ import {
 import { Button } from "../buttons/Button";
 import { ColumnMenu } from "./ColumnMenu";
 import { loadViewPref, oneOf, saveViewPref } from "../../helper/viewPrefs";
+import { nextSort } from "../../helper/sortToggle";
 import { TorrentContextMenu, ContextMenuState } from "../TorrentContextMenu";
 
 // Sort columns: all sortable column IDs
@@ -214,16 +215,17 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const pendingRowFocus = useRef(false);
 
-  const setSortColumn = useCallback((column: TableSortColumn) => {
-    setSortColumnState((prevColumn) => {
-      setSortDirectionState((prevDir) => {
-        const newDir: SortDirection =
-          prevColumn === column ? (prevDir === "asc" ? "desc" : "asc") : "desc";
-        return newDir;
-      });
-      return column;
-    });
-  }, []);
+  const setSortColumn = useCallback(
+    (column: TableSortColumn) => {
+      const next = nextSort(
+        { column: sortColumn, direction: sortDirection },
+        column,
+      );
+      setSortColumnState(next.column);
+      setSortDirectionState(next.direction);
+    },
+    [sortColumn, sortDirection],
+  );
 
   // Sort and filter torrents for virtualization
   const filteredTorrents = useMemo(() => {
@@ -668,7 +670,7 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
                         aria-orientation="vertical"
                         aria-label={`Resize ${col.label} column`}
                         tabIndex={0}
-                        className="group absolute right-0 top-0 bottom-0 w-3 translate-x-1/2 cursor-col-resize touch-none z-10 focus-ring"
+                        className="group absolute right-0 top-0 bottom-0 w-[12px] translate-x-1/2 cursor-col-resize touch-none z-10 focus-ring"
                         onPointerDown={(e) =>
                           handleResizeStart(col.id as ColumnId, e)
                         }

@@ -47,6 +47,21 @@ virtualization of 1,000 torrents, searching and status filters, selection and
 pause actions, configuration, and the responsive mobile card layout. Use
 `npm run test:e2e:headed` for an interactive browser.
 
+`e2e/audit-regressions.spec.ts` keeps the 2026-10-17 UI audit findings closed:
+accessible names, landmarks and headings, sort and resize semantics, menu
+placement, dialog names, touch targets and page overflow. Each test names the
+finding IDs it covers. The status of every finding is in
+`docs/ui-audit-verification-2026-10-20.md`.
+
+To re-take the audit screenshot set (same names, viewports and schemes as
+`design/audits/2026-10-17/`), run the capture spec. It is skipped unless
+`AUDIT_CAPTURE_DIR` is set:
+
+```sh
+AUDIT_CAPTURE_DIR=$PWD/../../../design/audits/$(date +%F) \
+  npx playwright test audit-capture
+```
+
 Woodpecker runs all three layers on pushes, pull requests, tags, and manual
 builds. Failed GUI runs retain a screenshot and Playwright trace in the job
 workspace for diagnosis.

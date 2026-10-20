@@ -321,7 +321,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               setSidebarOpen(true);
               setCurrentPage("torrents");
             }}
-            className="p-1.5 text-secondary hover:text-primary cursor-pointer"
+            className="p-1.5 text-secondary hover:text-primary cursor-pointer rounded focus-ring touch-target"
             title="Open sidebar"
             aria-label="Open sidebar"
           >
@@ -391,7 +391,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 type="button"
                 onClick={clearSearch}
                 aria-label="Clear search"
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-tertiary hover:text-secondary rounded cursor-pointer"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-tertiary hover:text-secondary rounded cursor-pointer focus-ring"
               >
                 <GoX className="w-3.5 h-3.5" />
               </button>
