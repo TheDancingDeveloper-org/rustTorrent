@@ -90,9 +90,9 @@ export const MultiTorrentUploadModal = ({
       case "uploading":
         return <Spinner className="w-4 h-4 inline-block" />;
       case "success":
-        return <BsCheckCircleFill className="text-green-500 inline-block" />;
+        return <BsCheckCircleFill className="text-success inline-block" />;
       case "error":
-        return <BsXCircleFill className="text-red-500 inline-block" />;
+        return <BsXCircleFill className="text-error inline-block" />;
       default:
         return <span className="text-secondary">--</span>;
     }
@@ -152,7 +152,7 @@ export const MultiTorrentUploadModal = ({
               </span>
               <span className="truncate min-w-0 flex-1">{entry.file.name}</span>
               {entry.error && (
-                <span className="text-red-500 text-xs truncate max-w-[200px]">
+                <span className="text-error text-xs truncate max-w-[200px]">
                   {entry.error}
                 </span>
               )}
