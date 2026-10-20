@@ -54,6 +54,28 @@ test.describe("global shortcuts", () => {
     await expect(dialog.locator('input[placeholder^="magnet:"]')).toBeFocused();
   });
 
+  test("M does not reopen the magnet dialog after leaving and returning", async ({
+    page,
+  }) => {
+    // The toolbar outlives the torrents page, so its press counter is still
+    // above zero when the page remounts. Only a new press may open the dialog.
+    await page.keyboard.press("m");
+    const dialog = page.getByRole("dialog", { name: "Add torrent" });
+    await expect(dialog).toBeVisible();
+    await page.getByRole("button", { name: "Close modal" }).click();
+    await expect(dialog).toHaveCount(0);
+
+    await page.getByRole("button", { name: "RSS" }).click();
+    await page.getByRole("button", { name: "Torrents" }).click();
+    await expect(rows(page).first()).toBeVisible();
+    await expect(dialog).toHaveCount(0);
+
+    // The shortcut itself still works after the round trip
+    await page.locator("body").click({ position: { x: 700, y: 5 } });
+    await page.keyboard.press("m");
+    await expect(dialog).toBeVisible();
+  });
+
   test("Ctrl+, opens settings and Ctrl+L opens the logs", async ({ page }) => {
     await page.keyboard.press("ControlOrMeta+,");
     await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();

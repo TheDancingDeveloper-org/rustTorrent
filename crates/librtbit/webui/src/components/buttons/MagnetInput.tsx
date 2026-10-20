@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CgLink } from "react-icons/cg";
 import { UploadButton } from "./UploadButton";
 import { Modal } from "../modal/Modal";
@@ -19,8 +19,15 @@ export const MagnetInput = ({
   const [inputValue, setInputValue] = useState("");
   const [modalIsOpen, setModalIsOpen] = useState(false);
 
+  // Remounting (leaving the torrents page and coming back) must not replay an
+  // earlier shortcut press: only a request newer than the one already handled
+  // opens the dialog. Seeded with the mount-time value so a stale counter is
+  // consumed silently.
+  const handledOpenRequest = useRef(openRequest);
   useEffect(() => {
-    if (openRequest > 0) setModalIsOpen(true);
+    if (openRequest === handledOpenRequest.current) return;
+    handledOpenRequest.current = openRequest;
+    setModalIsOpen(true);
   }, [openRequest]);
 
   const submit = () => {
