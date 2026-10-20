@@ -19,7 +19,10 @@ No public tracker or internet peer is required.
 
 Authentication tests cover token issuance and rotation, refresh revocation,
 credential validation, on-disk reload, malformed credential files, and private
-credential-file permissions. qBittorrent compatibility tests cover its special
+credential-file permissions. `http_api/auth_middleware_tests.rs` runs a real
+in-process server to check how the router applies them: the pre-setup lock,
+read-only API keys and Basic users refused on writes, and unknown bearer
+tokens refused. qBittorrent compatibility tests cover its special
 category filter values in addition to numeric boundary behavior.
 
 ## Web UI unit and build checks
@@ -31,6 +34,19 @@ npm test
 npm run lint
 npm run build
 ```
+
+## Release and packaging script checks
+
+```sh
+bash scripts/check-repo-hygiene.sh
+bash scripts/test-publish.sh
+bash packaging/scripts/test-render.sh
+```
+
+`test-render.sh` feeds the AUR, Homebrew, Flatpak and winget renderers a fake
+checksum file. It checks that every placeholder is filled with the right
+checksum and that each renderer fails when its artifact is missing. CI's
+`scripts` job runs all three on every run.
 
 ## Browser GUI tests
 
