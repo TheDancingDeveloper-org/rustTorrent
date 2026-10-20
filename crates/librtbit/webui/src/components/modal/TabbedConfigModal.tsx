@@ -1,11 +1,17 @@
-import React, { useEffect, useRef, useState, type ReactNode } from "react";
+import React, {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Modal } from "./Modal";
 import { ModalBody } from "./ModalBody";
 import { ModalFooter } from "./ModalFooter";
 import { Button } from "../buttons/Button";
 import { ErrorComponent } from "../ErrorComponent";
 import { ErrorWithLabel } from "../../rtbit-web";
-import { TabButton, TabList } from "../Tabs";
+import { TabButton, TabList, TabPanel } from "../Tabs";
 import { RestartRequiredBadge } from "../config/SettingNotes";
 import type { SettingDefinition } from "../config/settingsRegistry";
 import { matchSettings } from "../../helper/settingsSearch";
@@ -51,6 +57,8 @@ export const TabbedConfigModal: React.FC<TabbedConfigModalProps> = ({
   // Set by a search result; the field is focused once its tab is showing
   const [focusSettingId, setFocusSettingId] = useState<string | null>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
+  const tabIdPrefix = useId();
+  const hasTabs = tabs.length > 1;
 
   const searching = query.trim() !== "";
   const matches = matchSettings(settings, tabs, query);
@@ -88,14 +96,14 @@ export const TabbedConfigModal: React.FC<TabbedConfigModalProps> = ({
     >
       <ModalBody>
         <ErrorComponent error={error ?? null} />
-        {tabs.length > 1 && (
+        {hasTabs && (
           <input
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search settings"
             aria-label="Search settings"
-            className="w-full mb-3 px-2 py-1.5 rounded-md border border-divider bg-surface text-text"
+            className="w-full mb-3 px-2 py-1.5 rounded-md border border-divider bg-surface text-text focus-ring"
           />
         )}
         {searching && (
@@ -122,8 +130,8 @@ export const TabbedConfigModal: React.FC<TabbedConfigModalProps> = ({
             )}
           </ul>
         )}
-        {tabs.length > 1 && (
-          <TabList className="mb-4">
+        {hasTabs && (
+          <TabList className="mb-4" label={title} idPrefix={tabIdPrefix}>
             {visibleTabs.map((tab) => (
               <TabButton
                 key={tab.id}
@@ -136,11 +144,20 @@ export const TabbedConfigModal: React.FC<TabbedConfigModalProps> = ({
           </TabList>
         )}
         <div ref={tabsRef}>
-          {tabs.map((tab) => (
-            <div key={tab.id} className={tab.id === activeTab ? "" : "hidden"}>
-              {tab.content}
-            </div>
-          ))}
+          {tabs.map((tab) =>
+            hasTabs ? (
+              <TabPanel
+                key={tab.id}
+                id={tab.id}
+                idPrefix={tabIdPrefix}
+                active={tab.id === activeTab}
+              >
+                {tab.content}
+              </TabPanel>
+            ) : (
+              <div key={tab.id}>{tab.content}</div>
+            ),
+          )}
         </div>
       </ModalBody>
       <ModalFooter>

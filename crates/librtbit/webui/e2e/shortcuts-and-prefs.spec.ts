@@ -32,7 +32,7 @@ test("settings search narrows the tabs and reports no matches", async ({
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const search = page.getByRole("searchbox", { name: "Search settings" });
   await search.fill("dht");
-  const tabs = page.getByRole("dialog").getByRole("button");
+  const tabs = page.getByRole("dialog").getByRole("tab");
   await expect(tabs.filter({ hasText: /^DHT$/ })).toBeVisible();
   await expect(tabs.filter({ hasText: /^Speed$/ })).toHaveCount(0);
 

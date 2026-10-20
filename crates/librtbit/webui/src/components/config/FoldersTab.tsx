@@ -90,7 +90,7 @@ const DirectoryBrowser: React.FC<{
           </div>
         )}
 
-        {error && <div className="p-3 text-sm text-red-500">{error}</div>}
+        {error && <div className="p-3 text-sm text-error" role="alert">{error}</div>}
 
         {!loading && !error && browseData && (
           <div className="divide-y divide-divider/50">
@@ -113,7 +113,7 @@ const DirectoryBrowser: React.FC<{
                 className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-left hover:bg-surface-raised cursor-pointer"
                 onClick={() => loadDirectory(entry.path)}
               >
-                <BsFolderFill className="w-4 h-4 text-yellow-500 flex-shrink-0" />
+                <BsFolderFill className="w-4 h-4 text-warning flex-shrink-0" />
                 <span className="truncate">{entry.name}</span>
               </button>
             ))}
@@ -146,7 +146,7 @@ const FolderInput: React.FC<{
       <div className="flex gap-2">
         <input
           type="text"
-          className="flex-1 block border border-divider rounded bg-transparent py-1.5 pl-2 focus:ring-0 focus:border-primary sm:leading-6"
+          className="flex-1 block border border-divider rounded bg-transparent py-1.5 pl-2 focus-ring focus:border-primary sm:leading-6"
           id={name}
           name={name}
           placeholder={placeholder}

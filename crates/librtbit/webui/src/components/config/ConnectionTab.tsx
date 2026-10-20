@@ -7,7 +7,7 @@ import {
 } from "../../api-types";
 
 const headerCell = "pb-1 px-2";
-const numericCell = "px-2 text-right text-primary tabular-nums";
+const numericCell = "px-2 text-right text-text tabular-nums";
 
 const ConnectionRow = ({
   protocol,
@@ -25,8 +25,8 @@ const ConnectionRow = ({
 
   return (
     <tr className="border-t border-divider">
-      <td className="px-2 py-1 text-primary">{protocol}</td>
-      <td className="px-2 py-1 text-primary">{family}</td>
+      <td className="px-2 py-1 text-text font-medium">{protocol}</td>
+      <td className="px-2 py-1 text-text">{family}</td>
       <td className={numericCell}>{stat.attempts.toLocaleString()}</td>
       <td className={numericCell}>{stat.successes.toLocaleString()}</td>
       <td className={numericCell}>{stat.errors.toLocaleString()}</td>
@@ -78,7 +78,7 @@ export const ConnectionTab: React.FC = () => {
         </label>
         <div className="mt-2">
           <select
-            className="block border border-divider rounded bg-transparent py-1.5 px-2 focus:ring-0 focus:border-primary sm:leading-6 text-primary"
+            className="block border border-divider rounded bg-transparent py-1.5 px-2 focus-ring focus:border-primary sm:leading-6 text-text"
             disabled
             value="enabled"
           >

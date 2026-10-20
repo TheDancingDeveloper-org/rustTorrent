@@ -243,7 +243,7 @@ export const RateLimitsTab: React.FC<RateLimitsTabProps> = ({
                     <input
                       type="time"
                       id="schedule_start"
-                      className="block border border-divider rounded bg-transparent py-1.5 pl-2 pr-2 focus:ring-0 focus:border-primary sm:leading-6"
+                      className="block border border-divider rounded bg-transparent py-1.5 pl-2 pr-2 focus-ring focus:border-primary sm:leading-6"
                       value={minutesToTimeStr(schedule.start_minutes)}
                       onChange={(e) => {
                         handleScheduleSave({
@@ -263,7 +263,7 @@ export const RateLimitsTab: React.FC<RateLimitsTabProps> = ({
                     <input
                       type="time"
                       id="schedule_end"
-                      className="block border border-divider rounded bg-transparent py-1.5 pl-2 pr-2 focus:ring-0 focus:border-primary sm:leading-6"
+                      className="block border border-divider rounded bg-transparent py-1.5 pl-2 pr-2 focus-ring focus:border-primary sm:leading-6"
                       value={minutesToTimeStr(schedule.end_minutes)}
                       onChange={(e) => {
                         handleScheduleSave({

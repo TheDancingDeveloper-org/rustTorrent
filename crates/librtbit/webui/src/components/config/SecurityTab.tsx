@@ -57,7 +57,7 @@ export const SecurityTab: React.FC = () => {
   };
 
   const inputClass =
-    "w-full px-3 py-2 bg-surface border border-divider rounded text-primary placeholder:text-tertiary focus:outline-none focus:border-primary text-sm";
+    "w-full px-3 py-2 bg-surface border border-divider rounded text-text placeholder:text-tertiary focus-ring focus:border-primary text-sm";
 
   if (authState === "no_auth") {
     return (
@@ -81,7 +81,7 @@ export const SecurityTab: React.FC = () => {
         </div>
       )}
       {success && (
-        <div className="bg-green-500/10 border border-green-500 text-green-600 dark:text-green-400 rounded px-3 py-2 text-sm">
+        <div className="bg-success-bg/10 border border-success-bg text-success rounded px-3 py-2 text-sm">
           {success}
         </div>
       )}

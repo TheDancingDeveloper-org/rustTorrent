@@ -7,7 +7,7 @@ import { RestartNotes } from "./SettingNotes";
 const InfoRow = ({ label, value }: { label: string; value: string }) => (
   <div className="flex items-center">
     <span className="w-40 text-secondary text-sm">{label}</span>
-    <span className="text-primary text-sm font-medium">{value}</span>
+    <span className="text-text text-sm font-medium tabular-nums">{value}</span>
   </div>
 );
 

@@ -6,7 +6,7 @@ import { formatSecondsToTime } from "../../helper/formatSecondsToTime";
 const InfoRow = ({ label, value }: { label: string; value: string }) => (
   <div className="flex items-center">
     <span className="w-40 text-secondary text-sm">{label}</span>
-    <span className="text-primary text-sm font-medium">{value}</span>
+    <span className="text-text text-sm font-medium tabular-nums">{value}</span>
   </div>
 );
 
@@ -42,7 +42,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({ version }) => {
       <div className="mt-4 pt-3 border-t border-divider">
         <div className="flex items-center gap-2">
           <span className="w-40 text-secondary text-sm">Web Seeds</span>
-          <span className="text-primary text-sm font-medium">Enabled</span>
+          <span className="text-text text-sm font-medium tabular-nums">Enabled</span>
         </div>
         <div className="text-secondary text-xs mt-1 ml-0">
           Web seed support is enabled by default. Use{" "}
