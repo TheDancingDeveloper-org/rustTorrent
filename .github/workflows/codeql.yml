@@ -1,0 +1,43 @@
+name: CodeQL
+
+# Code scanning runs only when a release is cut: a `v*` tag push (dev, beta and
+# prod builds all tag), a published or prereleased GitHub release, a manual
+# run, or a call from another workflow. It never runs on pull requests, the
+# merge queue or pushes to main. See docs/ci.md.
+on:
+  push:
+    tags: ['v*']
+  release:
+    types: [published, prereleased]
+  workflow_dispatch:
+  workflow_call:
+
+# Read-only by default. Only the analyze job adds security-events, to upload
+# the SARIF results.
+permissions:
+  contents: read
+
+concurrency:
+  # Per tag. A release analysis is never cancelled by a later one.
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: [self-hosted]
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [rust, javascript-typescript]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+      - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: /language:${{ matrix.language }}

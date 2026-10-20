@@ -54,6 +54,19 @@ that label was retired on 2026-10-21. No workflow targets GCP or spot labels.
 The runner-policy gate only requires a literal `self-hosted` and no dynamic
 `runs-on`, so the new labels need no allowlist change.
 
+## CodeQL runs on release builds only
+
+`codeql.yml` (advanced setup, `rust` and `javascript-typescript`) runs only
+when a release is cut: a `v*` tag push (dev, beta and prod builds all tag), a
+published or prereleased GitHub release, `workflow_dispatch`, or a
+`workflow_call`. It never runs on `pull_request`, `merge_group` or `push` to
+`main`, so ordinary development spends no runner time on it. GitHub's default
+CodeQL setup is turned off for this repository, so `codeql.yml` is the only
+code-scanning configuration.
+
+Results land in the Security tab under the `/language:<lang>` categories. The
+workflow is not a required check, because it does not run on pull requests.
+
 ## Landing
 
 Enqueue with `gh pr merge --auto --rebase` (or the workspace `land-pr`, which
