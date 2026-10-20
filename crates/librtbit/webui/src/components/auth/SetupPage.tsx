@@ -64,7 +64,7 @@ export const SetupPage: React.FC = () => {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {error && (
-            <div className="bg-error-bg/10 border border-error-bg text-error-bg rounded px-3 py-2 text-sm">
+            <div className="bg-error-bg/10 border border-error-bg text-error rounded px-3 py-2 text-sm">
               {error}
             </div>
           )}

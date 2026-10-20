@@ -42,16 +42,22 @@
   --color-accent-download: theme(colors.blue.600);
   --color-accent-upload: theme(colors.emerald.600);
 
-  /* Status: Success (softer green) */
-  --color-success: theme(colors.emerald.600);
+  /*
+   * Status text. The text tokens are darker than the -bg fills so small
+   * status text clears 4.5:1 on every surface and on its own tint
+   * (guarded by helper/statusContrast.test.mjs).
+   */
+
+  /* Status: Success */
+  --color-success: theme(colors.emerald.800);
   --color-success-bg: theme(colors.emerald.600);
 
   /* Status: Warning */
-  --color-warning: theme(colors.amber.500);
+  --color-warning: theme(colors.amber.800);
   --color-warning-bg: theme(colors.amber.500);
 
-  /* Status: Error (softer red) */
-  --color-error: theme(colors.red.500);
+  /* Status: Error */
+  --color-error: theme(colors.red.700);
   --color-error-bg: theme(colors.red.600);
 }
 
@@ -88,7 +94,7 @@
   --color-accent-download: theme(colors.blue.400);
   --color-accent-upload: theme(colors.emerald.400);
 
-  /* Status: Success (softer green) */
+  /* Status: Success */
   --color-success: theme(colors.emerald.400);
   --color-success-bg: theme(colors.emerald.600);
 
@@ -96,8 +102,8 @@
   --color-warning: theme(colors.amber.400);
   --color-warning-bg: theme(colors.amber.500);
 
-  /* Status: Error (softer red) */
-  --color-error: theme(colors.red.400);
+  /* Status: Error */
+  --color-error: theme(colors.red.300);
   --color-error-bg: theme(colors.red.600);
 }
 
