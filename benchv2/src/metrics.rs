@@ -1,5 +1,5 @@
 use bollard::Docker;
-use bollard::container::StatsOptions;
+use bollard::query_parameters::StatsOptions;
 use futures_util::StreamExt;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -40,8 +40,8 @@ impl MetricsCollector {
         )]);
         if let Ok(containers) = self
             .docker
-            .list_containers(Some(bollard::container::ListContainersOptions {
-                filters,
+            .list_containers(Some(bollard::query_parameters::ListContainersOptions {
+                filters: Some(filters),
                 ..Default::default()
             }))
             .await
@@ -97,43 +97,52 @@ impl MetricsCollector {
                             .as_secs_f64();
 
                         // CPU usage: calculate percentage from cumulative counters
-                        let cpu_total = stat.cpu_stats.cpu_usage.total_usage;
-                        let cpu_system = stat.cpu_stats.system_cpu_usage.unwrap_or(0);
-                        let num_cpus = stat.cpu_stats.online_cpus.unwrap_or(
-                            stat.cpu_stats.cpu_usage.percpu_usage
-                                .as_ref()
+                        let cpu = stat.cpu_stats.as_ref();
+                        let cpu_usage = cpu.and_then(|c| c.cpu_usage.as_ref());
+                        let cpu_total = cpu_usage.and_then(|u| u.total_usage).unwrap_or(0);
+                        let cpu_system = cpu.and_then(|c| c.system_cpu_usage).unwrap_or(0);
+                        let num_cpus = cpu.and_then(|c| c.online_cpus).map(u64::from).unwrap_or(
+                            cpu_usage
+                                .and_then(|u| u.percpu_usage.as_ref())
                                 .map(|v| v.len() as u64)
                                 .unwrap_or(1)
                         );
 
-                        // Memory
-                        let mem_bytes = stat.memory_stats.usage.unwrap_or(0)
-                            - stat.memory_stats.stats
-                                .as_ref()
-                                .and_then(|s| match s {
-                                    bollard::container::MemoryStatsStats::V1(v1) => Some(v1.total_inactive_file),
-                                    bollard::container::MemoryStatsStats::V2(v2) => Some(v2.inactive_file),
-                                })
-                                .unwrap_or(0);
+                        // Memory (cgroup v1 reports total_inactive_file, v2 inactive_file)
+                        let mem = stat.memory_stats.as_ref();
+                        let inactive_file = mem
+                            .and_then(|m| m.stats.as_ref())
+                            .and_then(|s| s.get("total_inactive_file").or_else(|| s.get("inactive_file")))
+                            .copied()
+                            .unwrap_or(0);
+                        let mem_bytes = mem
+                            .and_then(|m| m.usage)
+                            .unwrap_or(0)
+                            .saturating_sub(inactive_file);
 
                         // Network (sum all interfaces)
                         let mut net_rx: u64 = 0;
                         let mut net_tx: u64 = 0;
                         if let Some(networks) = &stat.networks {
                             for net in networks.values() {
-                                net_rx += net.rx_bytes;
-                                net_tx += net.tx_bytes;
+                                net_rx += net.rx_bytes.unwrap_or(0);
+                                net_tx += net.tx_bytes.unwrap_or(0);
                             }
                         }
 
                         // Block I/O
                         let mut disk_read: u64 = 0;
                         let mut disk_write: u64 = 0;
-                        if let Some(bio) = &stat.blkio_stats.io_service_bytes_recursive {
+                        if let Some(bio) = stat
+                            .blkio_stats
+                            .as_ref()
+                            .and_then(|b| b.io_service_bytes_recursive.as_ref())
+                        {
                             for entry in bio {
-                                match entry.op.to_lowercase().as_str() {
-                                    "read" => disk_read += entry.value,
-                                    "write" => disk_write += entry.value,
+                                let value = entry.value.unwrap_or(0);
+                                match entry.op.as_deref().unwrap_or("").to_lowercase().as_str() {
+                                    "read" => disk_read += value,
+                                    "write" => disk_write += value,
                                     _ => {}
                                 }
                             }

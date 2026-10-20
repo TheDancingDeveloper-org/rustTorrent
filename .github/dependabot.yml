@@ -8,7 +8,6 @@ updates:
   # ---- Rust: main workspace (covers all crates/* and desktop/src-tauri) ----
   - package-ecosystem: cargo
     directory: "/"
-    target-branch: "dev"
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
@@ -21,7 +20,6 @@ updates:
   # ---- Rust: benchv2 (excluded from the workspace) ----
   - package-ecosystem: cargo
     directory: "/benchv2"
-    target-branch: "dev"
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -34,7 +32,6 @@ updates:
   # ---- Rust: fuzz (excluded from the workspace) ----
   - package-ecosystem: cargo
     directory: "/fuzz"
-    target-branch: "dev"
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -47,7 +44,6 @@ updates:
   # ---- npm: web UI (crates/librtbit/webui) ----
   - package-ecosystem: npm
     directory: "/crates/librtbit/webui"
-    target-branch: "dev"
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
@@ -60,7 +56,6 @@ updates:
   # ---- npm: root workspace (includes the desktop package) ----
   - package-ecosystem: npm
     directory: "/"
-    target-branch: "dev"
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -73,7 +68,6 @@ updates:
   # ---- GitHub Actions workflows ----
   - package-ecosystem: github-actions
     directory: "/"
-    target-branch: "dev"
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

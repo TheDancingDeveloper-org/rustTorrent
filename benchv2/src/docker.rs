@@ -15,8 +15,8 @@ pub async fn get_service_ips(docker: &Docker, service: &str) -> Result<Vec<Strin
         vec![format!("com.docker.compose.service={service}")],
     )]);
     let containers = docker
-        .list_containers(Some(bollard::container::ListContainersOptions {
-            filters,
+        .list_containers(Some(bollard::query_parameters::ListContainersOptions {
+            filters: Some(filters),
             ..Default::default()
         }))
         .await?;
@@ -46,8 +46,8 @@ pub async fn get_container_id(docker: &Docker, service: &str) -> Option<String> 
         vec![format!("com.docker.compose.service={service}")],
     )]);
     let containers = docker
-        .list_containers(Some(bollard::container::ListContainersOptions {
-            filters,
+        .list_containers(Some(bollard::query_parameters::ListContainersOptions {
+            filters: Some(filters),
             ..Default::default()
         }))
         .await
