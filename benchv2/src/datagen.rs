@@ -24,14 +24,14 @@ fn piece_length(file_size: u64) -> u64 {
 pub async fn generate_test_file(path: &Path, size: u64) -> Result<()> {
     let path = path.to_path_buf();
     task::spawn_blocking(move || {
-        use rand::RngCore;
+        use rand::Rng;
         use std::io::Write;
 
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let mut f = std::io::BufWriter::with_capacity(4 * MB as usize, std::fs::File::create(&path)?);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let chunk_size = 4 * MB as usize;
         let mut buf = vec![0u8; chunk_size];
         let mut written: u64 = 0;

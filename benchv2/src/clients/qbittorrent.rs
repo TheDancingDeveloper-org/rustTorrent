@@ -48,21 +48,21 @@ impl QBittorrentClient {
         }
 
         // Parse temp password from container logs
-        use bollard::container::LogsOptions;
+        use bollard::query_parameters::LogsOptions;
         use futures_util::StreamExt;
         let containers = docker
-            .list_containers(Some(bollard::container::ListContainersOptions {
-                filters: std::collections::HashMap::from([(
+            .list_containers(Some(bollard::query_parameters::ListContainersOptions {
+                filters: Some(std::collections::HashMap::from([(
                     "label".to_string(),
                     vec!["com.docker.compose.service=qbittorrent".to_string()],
-                )]),
+                )])),
                 ..Default::default()
             }))
             .await?;
 
         for c in containers {
             let id = c.id.as_deref().unwrap_or("");
-            let mut log_stream = docker.logs::<String>(
+            let mut log_stream = docker.logs(
                 id,
                 Some(LogsOptions {
                     stdout: true,
