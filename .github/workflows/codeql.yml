@@ -1,16 +1,29 @@
 name: CodeQL
 
-# Code scanning runs only when a release is cut: a `v*` tag push (dev, beta and
-# prod builds all tag), a published or prereleased GitHub release, a manual
-# run, or a call from another workflow. It never runs on pull requests, the
-# merge queue or pushes to main. See docs/ci.md.
+# Code scanning runs only when a release build is cut, never on pull requests,
+# the merge queue or pushes to main. It is triggered three ways:
+#   - a `v*` tag push (a pre-release or a stable tag pushed by hand);
+#   - a call from container.yml for the :dev build (the commit SHA is passed);
+#   - a call from promote-release.yml for the stable tag, which is created with
+#     the workflow token and so fires no push event of its own.
+# `workflow_dispatch` is for a manual run. See docs/ci.md.
 on:
   push:
     tags: ['v*']
-  release:
-    types: [published, prereleased]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit SHA, tag or branch to scan (default is the triggering ref)
+        required: false
+        type: string
+        default: ''
   workflow_call:
+    inputs:
+      ref:
+        description: Commit SHA, tag or branch to scan (default is the caller's ref)
+        required: false
+        type: string
+        default: ''
 
 # Read-only by default. Only the analyze job adds security-events, to upload
 # the SARIF results.
@@ -18,8 +31,8 @@ permissions:
   contents: read
 
 concurrency:
-  # Per tag. A release analysis is never cancelled by a later one.
-  group: codeql-${{ github.ref }}
+  # Per scanned ref. A release analysis is never cancelled by a later one.
+  group: codeql-${{ inputs.ref || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -35,6 +48,8 @@ jobs:
         language: [rust, javascript-typescript]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           languages: ${{ matrix.language }}

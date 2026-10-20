@@ -56,16 +56,25 @@ The runner-policy gate only requires a literal `self-hosted` and no dynamic
 
 ## CodeQL runs on release builds only
 
-`codeql.yml` (advanced setup, `rust` and `javascript-typescript`) runs only
-when a release is cut: a `v*` tag push (dev, beta and prod builds all tag), a
-published or prereleased GitHub release, `workflow_dispatch`, or a
-`workflow_call`. It never runs on `pull_request`, `merge_group` or `push` to
-`main`, so ordinary development spends no runner time on it. GitHub's default
-CodeQL setup is turned off for this repository, so `codeql.yml` is the only
-code-scanning configuration.
+`codeql.yml` (advanced setup, `rust` and `javascript-typescript`) never runs on
+`pull_request`, `merge_group` or `push` to `main`. It runs for release builds
+only, from three callers:
 
-Results land in the Security tab under the `/language:<lang>` categories. The
-workflow is not a required check, because it does not run on pull requests.
+| Release build | How CodeQL is triggered |
+|---|---|
+| `v*` tag pushed by hand (pre-release or stable) | `push` tag trigger in `codeql.yml` |
+| `:dev` image (`container.yml`, `dev` branch) | `codeql-dev` job calls `codeql.yml` with the commit SHA |
+| Stable promotion (`promote-release.yml`) | `codeql` job calls `codeql.yml` with the stable tag |
+
+The stable tag is created with the workflow token, which fires no push event,
+so the promotion must call CodeQL explicitly. There is no `release:` trigger,
+which would double-run the tag builds. `workflow_dispatch` is available for a
+manual run, and the `ref` input chooses what to scan.
+
+GitHub's default CodeQL setup is turned off for this repository, so
+`codeql.yml` is the only code-scanning configuration. Results land in the
+Security tab under the `/language:<lang>` categories. The workflow is not a
+required check, because it does not run on pull requests.
 
 ## Landing
 
