@@ -8,7 +8,7 @@ and enforced, and where we currently stand.
 
 ## Current standing (upstream WebAPI 2.16.2, refreshed 2026-10-17)
 
-**74 of 95 in-scope endpoints routed (~78%)** — 30 full, 44 partial — plus 2
+**79 of 95 in-scope endpoints routed (~83%)** — 38 full, 41 partial — plus 2
 legacy aliases (`torrents/pause`, `torrents/resume`) that upstream removed in
 WebAPI 2.11. 35 of the 130 upstream endpoints are descoped (since 2026-08-30;
 `clientdata/*` was brought back in scope for WI-17)
@@ -257,6 +257,14 @@ spec against the real router (they run in the normal
   → stop → recheck → setCategory → delete, driven only through the compat
   router against a real session, asserting what a client observes via
   `torrents/info` after each step (and validating its shape every poll).
+- `arr_test_connection_and_grab_flow` — the Sonarr/Radarr sequence:
+  Test Connection (`app/webapiVersion`, `app/version`, `app/preferences`
+  seeding/queue/DHT fields, `torrents/categories`, `createCategory` /
+  `editCategory` including their 400/409 answers), then a grab
+  (`torrents/add` stopped into the category with `contentLayout`,
+  `torrents/info?category=`, `properties`, `files` piece ranges,
+  `setCategory` 409 on an unknown category, `setShareLimits`, `topPrio`,
+  `setForceStart`, `delete`).
 - `parity_summary` — prints the scoreboard
   (`cargo test -p swarmforge qbit_parity -- --nocapture`).
 

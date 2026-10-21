@@ -179,6 +179,13 @@ pub trait TorrentStorage: Send + Sync {
     /// This is used to make the underlying object useless when e.g. pausing the torrent.
     fn take(&self) -> anyhow::Result<Box<dyn TorrentStorage>>;
 
+    /// True when the backend never writes, truncates or creates payload files
+    /// (e.g. `RTBIT_STORAGE_READ_ONLY`). A torrent on such storage cannot
+    /// download, so it is kept stopped until its payload is complete.
+    fn is_read_only(&self) -> bool {
+        false
+    }
+
     /// Callback called every time a piece has completed and has been validated.
     /// Default implementation does nothing, but can be override in trait implementations.
     fn on_piece_completed(&self, _piece_index: ValidPieceIndex) -> anyhow::Result<()> {
@@ -213,6 +220,10 @@ impl<U: TorrentStorage + ?Sized> TorrentStorage for Box<U> {
 
     fn take(&self) -> anyhow::Result<Box<dyn TorrentStorage>> {
         (**self).take()
+    }
+
+    fn is_read_only(&self) -> bool {
+        (**self).is_read_only()
     }
 
     fn remove_directory_if_empty(&self, path: &Path) -> anyhow::Result<()> {

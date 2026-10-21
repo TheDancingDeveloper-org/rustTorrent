@@ -537,3 +537,236 @@ async fn reannounce_and_removal_drive_live_tracker_loop() -> anyhow::Result<()> 
     tracker.shutdown().await;
     Ok(())
 }
+
+/// Path, length, permissions-independent content hash of every entry under
+/// `root`, so a test can assert the tree was left byte-for-byte alone.
+fn snapshot_tree(root: &std::path::Path) -> Vec<(std::path::PathBuf, Option<u64>, Vec<u8>)> {
+    fn walk(
+        root: &std::path::Path,
+        dir: &std::path::Path,
+        out: &mut Vec<(std::path::PathBuf, Option<u64>, Vec<u8>)>,
+    ) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let rel = path.strip_prefix(root).unwrap().to_owned();
+            if path.is_dir() {
+                out.push((rel, None, Vec::new()));
+                walk(root, &path, out);
+            } else {
+                let bytes = std::fs::read(&path).unwrap();
+                out.push((rel, Some(bytes.len() as u64), bytes));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Mimic a `:ro` bind mount where the platform allows it: directories and
+/// files lose their write bits. (Root ignores the bits; the tree snapshot is
+/// the real guard.)
+#[cfg(unix)]
+fn set_tree_read_only(root: &std::path::Path, read_only: bool) {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |is_dir: bool| match (is_dir, read_only) {
+        (true, true) => 0o555,
+        (false, true) => 0o444,
+        (true, false) => 0o755,
+        (false, false) => 0o644,
+    };
+    let mut stack = vec![root.to_owned()];
+    let mut dirs = Vec::new();
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode(false)))
+                    .unwrap();
+            }
+        }
+        dirs.push(dir);
+    }
+    for dir in dirs {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode(true))).unwrap();
+    }
+}
+
+#[cfg(not(unix))]
+fn set_tree_read_only(_root: &std::path::Path, _read_only: bool) {}
+
+/// A three-file payload (complete, short, missing) for a torrent created from
+/// the full data, laid out under `<root>/payload`.
+async fn make_damaged_multi_file_payload(root: &std::path::Path) -> anyhow::Result<Vec<u8>> {
+    let payload = root.join("payload");
+    std::fs::create_dir(&payload)?;
+    std::fs::write(payload.join("complete.bin"), vec![0x11; 48 * 1024])?;
+    std::fs::write(payload.join("short.bin"), vec![0x22; 40 * 1024])?;
+    std::fs::write(payload.join("missing.bin"), vec![0x33; 32 * 1024])?;
+    let torrent = create_multi_file_torrent(&payload).await?;
+    // Damage the payload after the torrent was made from the full data.
+    std::fs::write(payload.join("short.bin"), vec![0x22; 10 * 1024])?;
+    std::fs::remove_file(payload.join("missing.bin"))?;
+    Ok(torrent)
+}
+
+/// Gap 2: with read-only storage (`RTBIT_STORAGE_READ_ONLY=true`) over a
+/// read-only tree, a full recheck of a damaged payload never truncates,
+/// preallocates or creates a file or directory.
+#[tokio::test(flavor = "multi_thread")]
+async fn read_only_full_recheck_never_truncates_preallocates_or_creates_files() -> anyhow::Result<()>
+{
+    let root = TempDir::with_prefix("rtbit_read_only_recheck_tree")?;
+    let torrent = make_damaged_multi_file_payload(root.path()).await?;
+    let payload = root.path().join("payload");
+    let before = snapshot_tree(root.path());
+    set_tree_read_only(root.path(), true);
+
+    let session_dir = TempDir::with_prefix("rtbit_read_only_recheck_session")?;
+    let session = create_read_only_session(session_dir.path()).await?;
+    let handle = session
+        .add_torrent(
+            AddTorrent::from_bytes(torrent),
+            Some(AddTorrentOptions {
+                paused: true,
+                overwrite: true,
+                output_folder: Some(payload.to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+        )
+        .await?
+        .into_handle()
+        .context("expected a torrent handle")?;
+    timeout(Duration::from_secs(10), handle.wait_until_initialized())
+        .await
+        .context("timed out waiting for initial validation")??;
+    let first = handle.stats();
+
+    session.force_recheck(&handle).await?;
+    timeout(Duration::from_secs(10), handle.wait_until_initialized())
+        .await
+        .context("timed out waiting for full recheck")??;
+    let stats = handle.stats();
+
+    set_tree_read_only(root.path(), false);
+    assert_eq!(
+        snapshot_tree(root.path()),
+        before,
+        "recheck changed the tree"
+    );
+    assert!(!payload.join("missing.bin").exists());
+    assert_eq!(
+        std::fs::metadata(payload.join("short.bin"))?.len(),
+        10 * 1024
+    );
+    assert!(!stats.finished);
+    // Only the complete file's pieces verify, and the recheck agrees with the
+    // add-time check.
+    assert_eq!(stats.progress_bytes, first.progress_bytes);
+    assert!(stats.progress_bytes > 0 && stats.progress_bytes < stats.total_bytes);
+    Ok(())
+}
+
+/// Gap 3: a torrent whose payload is missing or short on read-only storage is
+/// kept stopped and flagged, even when added running or resumed, and never
+/// goes live to download.
+#[tokio::test(flavor = "multi_thread")]
+async fn read_only_incomplete_payload_stays_stopped_and_flagged() -> anyhow::Result<()> {
+    let root = TempDir::with_prefix("rtbit_read_only_incomplete_tree")?;
+    let torrent = make_damaged_multi_file_payload(root.path()).await?;
+    let payload = root.path().join("payload");
+    let before = snapshot_tree(root.path());
+
+    let session_dir = TempDir::with_prefix("rtbit_read_only_incomplete_session")?;
+    let session = create_read_only_session(session_dir.path()).await?;
+    let handle = session
+        .add_torrent(
+            AddTorrent::from_bytes(torrent),
+            Some(AddTorrentOptions {
+                // Added running: the read-only guard, not the caller, keeps it stopped.
+                paused: false,
+                overwrite: true,
+                output_folder: Some(payload.to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+        )
+        .await?
+        .into_handle()
+        .context("expected a torrent handle")?;
+    timeout(Duration::from_secs(10), handle.wait_until_initialized())
+        .await
+        .context("timed out waiting for initial validation")??;
+
+    let assert_stopped_and_flagged = |what: &str| {
+        let stats = handle.stats();
+        assert!(
+            matches!(stats.state, crate::torrent_state::TorrentStatsState::Paused),
+            "{what}: expected paused, got {:?}",
+            stats.state
+        );
+        assert!(handle.is_paused(), "{what}: not marked paused");
+        assert!(!stats.finished, "{what}");
+        assert_eq!(
+            stats.error.as_deref(),
+            Some(crate::torrent_state::READ_ONLY_INCOMPLETE_PAYLOAD),
+            "{what}: not flagged"
+        );
+        assert!(stats.live.is_none(), "{what}: went live");
+    };
+    assert_stopped_and_flagged("after add");
+
+    // A resume does not take it live either.
+    session.unpause(&handle).await?;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_stopped_and_flagged("after resume");
+
+    // Nor does a recheck of a torrent the user wanted running.
+    session.force_recheck(&handle).await?;
+    timeout(Duration::from_secs(10), handle.wait_until_initialized())
+        .await
+        .context("timed out waiting for recheck")??;
+    assert_stopped_and_flagged("after recheck");
+
+    assert_eq!(snapshot_tree(root.path()), before);
+    Ok(())
+}
+
+/// A complete payload on read-only storage is not flagged and can seed.
+#[tokio::test(flavor = "multi_thread")]
+async fn read_only_complete_payload_is_not_flagged_and_seeds() -> anyhow::Result<()> {
+    let payload_dir = TempDir::with_prefix("rtbit_read_only_complete")?;
+    std::fs::write(
+        payload_dir.path().join("payload.bin"),
+        vec![0x44; 64 * 1024],
+    )?;
+    let torrent = create_single_file_torrent(payload_dir.path()).await?;
+
+    let session_dir = TempDir::with_prefix("rtbit_read_only_complete_session")?;
+    let session = create_read_only_session(session_dir.path()).await?;
+    let handle = session
+        .add_torrent(
+            AddTorrent::from_bytes(torrent),
+            Some(AddTorrentOptions {
+                overwrite: true,
+                output_folder: Some(payload_dir.path().to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+        )
+        .await?
+        .into_handle()
+        .context("expected a torrent handle")?;
+    timeout(Duration::from_secs(10), handle.wait_until_initialized())
+        .await
+        .context("timed out waiting for validation")??;
+    let stats = handle.stats();
+    assert!(matches!(
+        stats.state,
+        crate::torrent_state::TorrentStatsState::Live
+    ));
+    assert!(stats.finished);
+    assert!(stats.error.is_none());
+    Ok(())
+}

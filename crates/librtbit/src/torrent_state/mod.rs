@@ -97,6 +97,11 @@ impl ManagedTorrentState {
     }
 }
 
+/// The [`TorrentStats::error`] flag on a stopped torrent whose payload is
+/// missing or short on read-only storage.
+pub const READ_ONLY_INCOMPLETE_PAYLOAD: &str =
+    "payload is missing or incomplete on read-only storage";
+
 pub(crate) struct ManagedTorrentLocked {
     // The torrent might not be in "paused" state technically,
     // but the intention might be for it to stay paused.
@@ -712,8 +717,16 @@ impl ManagedTorrent {
                     );
                     Ok(())
                 }
-                ManagedTorrentState::Paused(_) => {
+                ManagedTorrentState::Paused(paused) => {
                     if start_paused {
+                        return Ok(());
+                    }
+                    // Read-only storage cannot write the missing pieces, so a
+                    // torrent whose payload is missing or short stays stopped
+                    // (and is flagged in its stats) rather than downloading.
+                    if paused.files.is_read_only() && !paused.chunk_tracker.is_finished() {
+                        g.paused = true;
+                        debug!("payload incomplete on read-only storage; keeping torrent stopped");
                         return Ok(());
                     }
                     let paused = g.state.take().assert_paused();
@@ -964,6 +977,9 @@ impl ManagedTorrent {
                     resp.progress_bytes = hns.progress();
                     resp.finished = hns.finished();
                     resp.file_progress = p.chunk_tracker.per_file_have_bytes().to_owned();
+                    if p.files.is_read_only() && !resp.finished {
+                        resp.error = Some(READ_ONLY_INCOMPLETE_PAYLOAD.to_owned());
+                    }
                 }
                 ManagedTorrentState::Live(l) => {
                     resp.state = S::Live;

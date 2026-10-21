@@ -34,8 +34,7 @@
       "diff": { "values": ["0.hash"] } },
     { "name": "torrents_set_category (unknown category)", "method": "POST", "path": "/torrents/setCategory",
       "form": { "hashes": "cffa828a1727e7fdc662fd07329aedc10105a74a", "category": "does-not-exist" },
-      "expect": { "status": 409 }, "diff": { "body": "ignore" },
-      "known_gap": { "status": 200, "note": "setCategory accepts a category that does not exist instead of answering 409 Incorrect category name" } },
+      "expect": { "status": 409 }, "diff": { "body": "ignore" } },
     { "name": "sync_maindata full", "method": "GET", "path": "/sync/maindata",
       "query": { "rid": "0" },
       "expect": { "status": 200, "json": [

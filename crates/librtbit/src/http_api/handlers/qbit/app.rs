@@ -71,6 +71,8 @@ pub(super) async fn h_app_preferences(
         max_ratio_act: 0,
         max_seeding_time_enabled: false,
         max_seeding_time: 1440,
+        max_inactive_seeding_time_enabled: false,
+        max_inactive_seeding_time: 1440,
     })
 }
 

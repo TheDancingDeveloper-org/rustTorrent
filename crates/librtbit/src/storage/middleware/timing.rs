@@ -106,6 +106,10 @@ impl<U: TorrentStorage> TorrentStorage for TimingStorage<U> {
         self.underlying.ensure_file_length(file_id, length)
     }
 
+    fn is_read_only(&self) -> bool {
+        self.underlying.is_read_only()
+    }
+
     fn take(&self) -> anyhow::Result<Box<dyn TorrentStorage>> {
         Ok(Box::new(TimingStorage {
             underlying: self.underlying.take()?,

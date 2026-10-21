@@ -66,7 +66,7 @@
       "endpoint": "app/preferences",
       "method": "GET",
       "status": "partial",
-      "notes": "Subset of preference fields. dl_limit/up_limit and alt_dl_limit/alt_up_limit report the live normal and alternative session limits (bytes/s, 0 unlimited); scheduler_enabled is false. queueing_enabled, max_active_downloads and max_active_uploads reflect the session queue limits; max_active_torrents is -1 (no combined limit). Seeding-limit fields are reported disabled with qBittorrent default values; rtbit does not enforce them globally.",
+      "notes": "Subset of preference fields. dl_limit/up_limit and alt_dl_limit/alt_up_limit report the live normal and alternative session limits (bytes/s, 0 unlimited); scheduler_enabled is false. queueing_enabled, max_active_downloads and max_active_uploads reflect the session queue limits; max_active_torrents is -1 (no combined limit). Global seeding-limit fields (max_ratio_enabled, max_seeding_time_enabled, max_inactive_seeding_time_enabled and their values) are reported disabled with upstream default values; rtbit enforces seeding limits per torrent only (torrents/setShareLimits). dht/pex/lsd are reported true.",
       "response": {
         "content": "json",
         "schema": {
@@ -604,7 +604,7 @@
       "endpoint": "torrents/add",
       "method": "POST",
       "status": "partial",
-      "notes": "Supports urls/torrents/savepath/category and stopped (2.11+; legacy paused also accepted); other form fields ignored.",
+      "notes": "Supports urls/torrents/savepath/category/tags/dlLimit/upLimit, stopped (2.11+; legacy paused also accepted) and contentLayout (Original/Subfolder/NoSubfolder; legacy root_folder accepted). Subfolder for a single-file torrent added by URL or magnet falls back to Original, as its name is not known before metadata arrives. Other form fields (autoTMM, skip_checking, sequentialDownload, firstLastPiecePrio, rename, cookie, ratioLimit, seedingTimeLimit) are ignored.",
       "response": {
         "content": "text"
       }
@@ -780,8 +780,7 @@
     {
       "endpoint": "torrents/files",
       "method": "GET",
-      "status": "partial",
-      "notes": "piece_range is stubbed as [0, 0].",
+      "status": "full",
       "response": {
         "content": "json",
         "schema": [
@@ -813,7 +812,7 @@
       "endpoint": "torrents/info",
       "method": "GET",
       "status": "partial",
-      "notes": "Core fields real; state uses 2.11 stoppedDL/stoppedUP; filter accepts 2.11 stopped/running and legacy paused/resumed. tags are real and the tag filter treats an empty value as untagged. priority is the 1-based queue position of unfinished torrents while queueing is on (0 otherwise); queued and force-started torrents report queuedDL/queuedUP and forcedDL/forcedUP. dl_limit/up_limit report the per-torrent limits (-1 unlimited). Several fields stubbed (magnet_uri).",
+      "notes": "Core fields real; state uses 2.11 stoppedDL/stoppedUP; filter accepts 2.11 stopped/running and legacy paused/resumed. tags are real and the tag filter treats an empty value as untagged. priority is the 1-based queue position of unfinished torrents while queueing is on (0 otherwise); queued and force-started torrents report queuedDL/queuedUP and forcedDL/forcedUP. dl_limit/up_limit report the per-torrent limits (-1 unlimited). magnet_uri is built from the info hash, name and trackers. A stopped torrent whose payload is missing or short on read-only storage reports missingFiles (and matches the errored filter).",
       "response": {
         "content": "json",
         "schema": [
@@ -1073,8 +1072,7 @@
     {
       "endpoint": "torrents/setCategory",
       "method": "POST",
-      "status": "partial",
-      "notes": "Does not return 409 for unknown categories like qBittorrent does.",
+      "status": "full",
       "response": {
         "content": "text"
       }
@@ -1101,7 +1099,7 @@
     {
       "endpoint": "torrents/setForceStart",
       "method": "POST",
-      "status": "partial",
+      "status": "full",
       "notes": "value=true starts the torrents outside the queue limits (forcedDL/forcedUP); value=false hands them back to the queue. A stop clears force-start.",
       "response": {
         "content": "text"
@@ -1214,7 +1212,7 @@
     {
       "endpoint": "torrents/topPrio",
       "method": "POST",
-      "status": "partial",
+      "status": "full",
       "notes": "Moves the torrents in the session queue (per-torrent queue position, persisted). The policy pass applies the new order to the active-download and active-seed limits.",
       "response": {
         "content": "text"
