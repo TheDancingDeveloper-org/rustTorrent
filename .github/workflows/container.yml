@@ -82,14 +82,15 @@ jobs:
           jq -e '.schemaVersion == 2' manifest.json >/dev/null
 
   codeql-dev:
-    # The :dev build is a release build, so it is scanned here once the image
-    # is published. Tag pushes are scanned by codeql.yml's own trigger, and
-    # main's :staging builds are not scanned. See docs/ci.md.
+    # After the dev branch retirement, main is where the :dev channel is
+    # published, so its container build is scanned here once the image is
+    # published. Tag pushes are scanned by codeql.yml's own trigger. See
+    # docs/ci.md.
     needs: publish
-    if: github.ref_type == 'branch' && github.ref_name == 'dev'
+    if: github.ref_type == 'branch' && github.ref_name == 'main'
     permissions:
       contents: read
       security-events: write
     uses: ./.github/workflows/codeql.yml
     with:
-      ref: ${{ github.sha }}
+      ref: ${{ github.ref }}

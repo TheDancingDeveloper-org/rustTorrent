@@ -3,7 +3,7 @@ name: CodeQL
 # Code scanning runs only when a release build is cut, never on pull requests,
 # the merge queue or pushes to main. It is triggered three ways:
 #   - a `v*` tag push (a pre-release or a stable tag pushed by hand);
-#   - a call from container.yml for the :dev build (the commit SHA is passed);
+#   - a call from container.yml for the :dev build (`github.ref` is passed);
 #   - a call from promote-release.yml for the stable tag, which is created with
 #     the workflow token and so fires no push event of its own.
 # `workflow_dispatch` is for a manual run. See docs/ci.md.
@@ -13,14 +13,14 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Commit SHA, tag or branch to scan (default is the triggering ref)
+        description: Branch or tag to scan (default is the triggering ref)
         required: false
         type: string
         default: ''
   workflow_call:
     inputs:
       ref:
-        description: Commit SHA, tag or branch to scan (default is the caller's ref)
+        description: Branch or tag to scan (default is the caller's ref)
         required: false
         type: string
         default: ''
@@ -50,9 +50,44 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.ref || github.ref }}
+      - name: Record the checked-out commit
+        id: head
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Resolve the ref to upload against
+        id: target
+        shell: bash
+        env:
+          RAW_REF: ${{ inputs.ref }}
+          DEFAULT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          ref="${RAW_REF:-}"
+          if [[ -z "$ref" ]]; then
+            ref="$DEFAULT_REF"
+          elif [[ "$ref" != refs/* ]]; then
+            case "$ref" in
+              heads/*|tags/*) ref="refs/$ref" ;;
+              *)
+                if git rev-parse --verify --quiet "refs/tags/$ref^{commit}" >/dev/null; then
+                  ref="refs/tags/$ref"
+                elif git rev-parse --verify --quiet "refs/remotes/origin/$ref^{commit}" >/dev/null; then
+                  ref="refs/heads/$ref"
+                elif git rev-parse --verify --quiet "refs/heads/$ref^{commit}" >/dev/null; then
+                  ref="refs/heads/$ref"
+                else
+                  echo "ref must be a branch or tag name, or a full refs/... ref: $ref" >&2
+                  exit 1
+                fi
+                ;;
+            esac
+          fi
+          printf 'ref=%s\n' "$ref" >> "$GITHUB_OUTPUT"
       - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           languages: ${{ matrix.language }}
       - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           category: /language:${{ matrix.language }}
+          ref: ${{ steps.target.outputs.ref }}
+          sha: ${{ steps.head.outputs.sha }}
