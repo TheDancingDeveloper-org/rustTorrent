@@ -46,8 +46,13 @@ cannot cancel the required `merge_group` run. Each queue entry has its own
 
 ### Runners
 
-Queue runs use the same `self-hosted` label as PR runs. No workflow targets
-GCP or spot labels.
+Queue runs use the same `self-hosted` label as PR runs. The `rust` job runs on
+the local tailnet runners, `[self-hosted, Linux, X64, tailnet]`, the same
+idle node-f runners the other jobs use. It used to target the GCP spot pool
+(`gcp-rust`), which scales from zero; jobs waited up to 68 minutes for it, so
+that label was retired on 2026-10-21. No workflow targets GCP or spot labels.
+The runner-policy gate only requires a literal `self-hosted` and no dynamic
+`runs-on`, so the new labels need no allowlist change.
 
 ## Landing
 

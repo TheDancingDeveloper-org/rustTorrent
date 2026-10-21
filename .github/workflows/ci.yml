@@ -75,7 +75,7 @@ jobs:
   rust:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: [self-hosted, gcp-rust]
+    runs-on: [self-hosted, Linux, X64, tailnet]
     env:
       CARGO_BUILD_JOBS: 1
     steps:
