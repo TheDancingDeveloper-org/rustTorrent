@@ -49,22 +49,22 @@ cannot cancel the required `merge_group` run. Each queue entry has its own
 Queue runs use the same `self-hosted` label as PR runs. No workflow targets
 GCP or spot labels.
 
-## CodeQL runs on release builds only
+## CodeQL runs on tagged releases and manual dispatch only
 
 `codeql.yml` (advanced setup, `rust` and `javascript-typescript`) has no
-`pull_request`, `merge_group` or branch `push` trigger. It runs for release
-builds only, from three callers:
+`pull_request`, `merge_group` or branch `push` trigger. It runs for tagged
+releases only, from two callers:
 
 | Release build | How CodeQL is triggered |
 |---|---|
 | `v*` tag pushed by hand (pre-release or stable) | `push` tag trigger in `codeql.yml` |
-| `:dev` image (`container.yml`, `main` branch) | `codeql-dev` job calls `codeql.yml` with `github.ref` |
 | Stable promotion (`promote-release.yml`) | `codeql` job calls `codeql.yml` with the stable tag |
 
 The stable tag is created with the workflow token, which fires no push event,
 so the promotion must call CodeQL explicitly. There is no `release:` trigger,
-which would double-run the tag builds. `workflow_dispatch` is available for a
-manual run, and the `ref` input chooses what to scan.
+which would double-run the tag builds. Dev builds and any other ad-hoc scans
+are manual `workflow_dispatch` runs only: `container.yml` does not call
+`codeql.yml`, and the `ref` input chooses what to scan.
 
 A called workflow inherits the caller's ref, so `analyze` would otherwise
 upload a stable-tag scan as `refs/heads/main`. `codeql.yml` therefore resolves

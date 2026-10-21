@@ -80,17 +80,3 @@ jobs:
             -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
             "https://ghcr.io/v2/thedancingdeveloper-org/rusttorrent/manifests/$tag" > manifest.json
           jq -e '.schemaVersion == 2' manifest.json >/dev/null
-
-  codeql-dev:
-    # After the dev branch retirement, main is where the :dev channel is
-    # published, so its container build is scanned here once the image is
-    # published. Tag pushes are scanned by codeql.yml's own trigger. See
-    # docs/ci.md.
-    needs: publish
-    if: github.ref_type == 'branch' && github.ref_name == 'main'
-    permissions:
-      contents: read
-      security-events: write
-    uses: ./.github/workflows/codeql.yml
-    with:
-      ref: ${{ github.ref }}
