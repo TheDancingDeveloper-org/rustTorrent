@@ -149,7 +149,7 @@ tracing-subscriber = { version = "0.3", default-features = false }
 url = { version = "2", default-features = false }
 urlencoding = "2"
 utoipa = "5"
-utoipa-axum = "0.2"
+utoipa-axum = "0.3"
 utoipa-swagger-ui = "9"
 uuid = "1"
 walkdir = "2"
