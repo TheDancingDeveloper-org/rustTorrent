@@ -150,7 +150,7 @@ url = { version = "2", default-features = false }
 urlencoding = "2"
 utoipa = "5"
 utoipa-axum = "0.2"
-utoipa-swagger-ui = "9"
+utoipa-swagger-ui = "10"
 uuid = "1"
 walkdir = "2"
 tauri-plugin-notification = "2"
