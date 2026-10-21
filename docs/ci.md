@@ -58,7 +58,8 @@ skip today; if a doctest gains assertions, add a `cargo test --doc` step rather
 than assume nextest covered it.
 
 The `scripts` job is not path-scoped: it runs `scripts/check-repo-hygiene.sh`,
-`scripts/test-publish.sh` and `packaging/scripts/test-render.sh` on every run,
+`scripts/test-publish.sh`, `packaging/scripts/test-render.sh` and
+`scripts/test_import_qbit.py` on every run,
 because they take seconds and guard files outside every scoped path.
 
 `ci.yml` no longer uses `paths-ignore`. A required check that never starts

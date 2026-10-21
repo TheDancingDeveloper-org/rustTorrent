@@ -98,6 +98,7 @@ jobs:
       - run: bash scripts/check-repo-hygiene.sh
       - run: bash scripts/test-publish.sh
       - run: bash packaging/scripts/test-render.sh
+      - run: python3 scripts/test_import_qbit.py
 
   rust:
     needs: changes
