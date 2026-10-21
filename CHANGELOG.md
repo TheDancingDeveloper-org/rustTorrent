@@ -9,15 +9,76 @@ upgrade notes in each release describe what to back up and check.
 
 ## [Unreleased]
 
-### Fixed
-
-- WebUI API v2 compat: `torrentcreator/status` now emits `taskID` (was
-  `taskId`), matching the upstream field name.
-- Tests no longer write compat tags into the user's real data directory
-  (`qbit-tags.json`), which leaked tags between runs.
+## [0.2.0-beta.2] - 2026-10-21
 
 ### Added
 
+- Session and API authentication: logins now survive a restart (sessions are
+  persisted next to the credentials, hashed at rest), and revocable API keys
+  (`Authorization: Bearer rtb_...`) can be created, listed and deleted through
+  `GET`/`POST /auth/api_keys` and `DELETE /auth/api_keys/{id}`. A read-only
+  account role is available for integrations that should not mutate the
+  session. Sessions are bound to the credential they were issued for, so
+  changing the admin password signs every existing session out, and logins are
+  capped at 30 days.
+- First-run setup is protected by a one-time setup token, printed in the daemon
+  log and written to an owner-only `setup-token` file while setup is pending.
+  Passwords are hashed with argon2, and an existing plaintext
+  `credentials.json` is migrated automatically.
+- An optional TOML configuration file (`--config` or `RTBIT_CONFIG`) for
+  non-secret settings, with `CLI > environment > file > default` precedence,
+  an error on unknown keys, and `rtbit config dump` to print the resolved
+  settings.
+- An on-complete hook: a shell command and/or a JSON webhook fired when a
+  torrent finishes, with `RTBIT_EVENT`, `RTBIT_TORRENT_ID`, `RTBIT_INFO_HASH`,
+  `RTBIT_TORRENT_NAME`, `RTBIT_OUTPUT_FOLDER` and `RTBIT_COMPLETED_AT` in the
+  environment. It is not fired for torrents that were already complete when
+  the session was restored.
+- Engine controls for the active-download and active-seed limits, a minimum
+  free-disk guard before starting a torrent, and `.part` file handling for
+  in-progress payloads.
+- Logging improvements: `--log-file-rotation never|hourly|daily`,
+  `--log-file-max-files N`, and `--log-format text|json`.
+- Operation improvements: an unauthenticated `/healthz` route, a Docker
+  `HEALTHCHECK`, hardened systemd units (`Restart=on-failure`,
+  `TimeoutStopSec=30`), and a per-user unit that runs `rtbit` by name.
+- A startup banner reporting the Web UI URL, authentication state, state and
+  download folders, and the listen address.
+- Indexarr integration flags: `--indexarr-enabled`, `--indexarr-url`,
+  `--indexarr-api-key` and their `RTBIT_INDEXARR_*` environment equivalents.
+- Desktop OS integration: opening `.torrent` files and magnet links with the
+  app, forwarding them to the running instance instead of starting a second
+  one (including Linux `%U` handling), a tray icon, autostart, an updater, and
+  a themed splash screen with a failure state and retry after a 20 s timeout.
+- Web UI accessibility and keyboard work: design tokens and primitives, a
+  redesigned app shell with a mobile navigation drawer and an "engine
+  unreachable" panel with retry, labelled toolbar and search controls, an
+  `aria-pressed` theme toggle, a torrent table with roving tabindex,
+  `Shift+F10`/context-menu support and `aria-sort` headers, keyboard column
+  resizing, 44 px rows on coarse pointers, and keyboard-operable torrent
+  context menus.
+- Web UI feature work: settings search, restart markers, an empty state and
+  expiry notice for the queue, paste and drag-and-drop torrent adding, toasts,
+  a connection-lost banner, a keyboard shortcuts overlay with view
+  preferences, and consistent theming and contrast on the feature pages.
+- WebUI API v2 compat: the torrent creator now accepts the full task option
+  set (private, comment, URL seeds, `torrentFilePath`, `startSeeding`, and v2
+  or hybrid formats).
+- WebUI API v2 compat: sequential download and first/last piece priority are
+  stored and reported (`toggleSequentialDownload`,
+  `toggleFirstLastPiecePrio`, `seq_dl`, `f_l_piece_prio`), and `picker` uses
+  them.
+- WebUI API v2 compat: `log/main` and `log/peers` over a bounded in-memory log
+  ring, and session peer bans through `transfer/banPeers`.
+- WebUI API v2 compat: moving and renaming a running torrent now work and are
+  persisted (`setLocation`, `setSavePath`, `renameFile`, `renameFolder` no
+  longer require a stopped torrent).
+- WebUI API v2 compat: `clientdata/load` and `clientdata/store` over a small
+  JSON key/value file in the session directory, and
+  `torrents/properties` now reports `comment`, `created_by` and
+  `creation_date`.
+- WebUI API v2 compat: trackers can be added, edited and removed on a live
+  torrent, and force-reannounce works without a restart.
 - Native torrent tags: a session tag registry plus a per-torrent tag set,
   persisted by the JSON session store (`tags.json` and per-torrent state). The
   WebUI API v2 compat tag endpoints (`torrents/tags`, `createTags`,
@@ -49,6 +110,73 @@ upgrade notes in each release describe what to back up and check.
   (changed fields only, plus `torrents_removed` / `categories_removed` /
   `tags_removed`) instead of a full snapshot every poll, and
   `sync/torrentPeers` is routed with the same rid encoding.
+- Packaging: RPM packages (`rtbit-<tag>-x86_64.rpm`) alongside the Debian
+  package, a CycloneDX SBOM in every release, and Authenticode signing of the
+  Windows executable with an RFC 3161 timestamp. `verify-release.sh` checks
+  the signature and timestamp.
+- Packaging: per-release channel manifests for AUR (`rtbit-bin`), Homebrew,
+  Flatpak (offline, with a signed vendor tarball) and winget. Rendering fails
+  closed when a digest or placeholder is missing.
+- Release verification now requires a valid keyless cosign signature over
+  `SHA256SUMS` and every listed artefact before the release is published.
+
+### Changed
+
+- WebUI API v2 compat coverage grew from 66 to 81 of 97 in-scope endpoints
+  (36 of them full, 45 partial) across `auth`, `app`, `torrents`, `transfer`,
+  `sync`, `torrentcreator`, `clientdata` and `log`. `log` and `transfer` are
+  now fully routed.
+- `app/version` reports `v5.0.0` (was `v0.0.1`), which is the version gate
+  several *arr apps check before enabling features. The advertised
+  `webapiVersion` is still `2.11.3`.
+- Torrent tags moved from `qbit-tags.json` to `tags.json` plus per-torrent
+  state. A legacy `qbit-tags.json` is imported once at startup.
+- `--log-file` now defaults to the `info` filter instead of
+  `librtbit=debug,info`, so log files are less verbose unless asked.
+- The compat layer is split into per-controller modules. This is
+  behaviour-neutral and internal only.
+- Web UI polling is visibility-aware, the speed tab reads from the session
+  store, and feature pages are loaded lazily, reducing background work while
+  the tab is hidden.
+- The desktop app now builds for Linux and Windows only; macOS bundle targets
+  were removed. The self-updater is behind the `self-update` feature so the
+  Flatpak build can omit it.
+- The `torrents` table gains columns for queue and share state, `.part`
+  handling, output-folder roots, file renames and the have-bitfield. They are
+  added with `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` on startup.
+
+### Fixed
+
+- WebUI API v2 compat: `torrentcreator/status` emits `taskID` (was `taskId`),
+  matching the upstream field name.
+- WebUI API v2 compat: `setPreferences` applies speed-limit and seeding-limit
+  fields partially, ignores unknown fields, and treats `announce_port` as
+  optional instead of rejecting the whole request.
+- WebUI API v2 compat: session IDs expire after one hour of inactivity and
+  idle sessions are purged, instead of accumulating for the process lifetime.
+- Torrents that were queued, held for disk space or paused by a share limit no
+  longer come back permanently paused after a restart; those flags are
+  persisted and restored.
+- Share limits, the uploaded byte total and the `.part` choice are persisted
+  correctly, including when they change through the compat API. Session state
+  is also persisted on a 60 s timer and on shutdown rather than only at
+  selected points.
+- PostgreSQL persistence no longer binds the same parameter twice, and writes
+  are serialised behind a single lock.
+- An on-complete command that hangs is bounded by a timeout, and resuming a
+  torrent resets its inactivity clock for share limits.
+- Tests no longer write compat tags into the user's real data directory
+  (`qbit-tags.json`), which leaked tags between runs.
+- Desktop: the app reads hashed credentials correctly, read-only accounts can
+  log out, and the CLI no longer consumes the pending setup token.
+- Web UI: the `M` shortcut reopens the shortcuts overlay reliably, focus
+  follows Home/End scrolling, and the overflow menu is named "More options"
+  and operable from the keyboard.
+- Web UI status text meets WCAG AA contrast in both themes (emerald-800,
+  amber-800 and red-700 on light; red-300 on dark).
+- An invalid CORS allow regexp is logged as a warning instead of being
+  silently ignored. `RTBIT_CORS_ALLOW_REGEXP` takes precedence over the bare
+  `CORS_ALLOW_REGEXP`.
 
 ## [0.1.0-rc.5] - 2026-10-18
 
@@ -168,7 +296,8 @@ persistent session directory before upgrading.
 - The Docker build and web UI were consolidated so the shipped interface is
   built from the reviewed source tree.
 
-[Unreleased]: https://github.com/TheDancingDeveloper-org/rustTorrent/compare/v0.1.0-rc.5...HEAD
+[Unreleased]: https://github.com/TheDancingDeveloper-org/rustTorrent/compare/v0.2.0-beta.2...HEAD
+[0.2.0-beta.2]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.2.0-beta.2
 [0.1.0-rc.5]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.1.0-rc.5
 [0.1.0-rc.4]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.1.0-rc.4
 [0.1.0-rc.3]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.1.0-rc.3

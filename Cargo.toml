@@ -46,18 +46,18 @@ debug = true
 [workspace.dependencies]
 # Internal crates. Version-plus-path keeps publishing metadata while making this
 # monorepo's sources authoritative for all local builds.
-librtbit = { version = "0.2.0-beta.1", path = "crates/librtbit", package = "swarmforge", default-features = false }
-bencode = { version = "0.2.0-beta.1", path = "crates/librtbit-bencode", package = "swarmforge-bencode", default-features = false }
-buffers = { version = "0.2.0-beta.1", path = "crates/librtbit-buffers", package = "swarmforge-buffers" }
-clone_to_owned = { version = "0.2.0-beta.1", path = "crates/librtbit-clone-to-owned", package = "swarmforge-clone-to-owned" }
-librtbit-core = { version = "0.2.0-beta.1", path = "crates/librtbit-core", package = "swarmforge-core", default-features = false }
-dht = { version = "0.2.0-beta.1", path = "crates/librtbit-dht", package = "swarmforge-dht", default-features = false }
-librtbit-lsd = { version = "0.2.0-beta.1", path = "crates/librtbit-lsd", package = "swarmforge-lsd", default-features = false }
-peer_binary_protocol = { version = "0.2.0-beta.1", path = "crates/librtbit-peer-protocol", package = "swarmforge-peer-protocol", default-features = false }
-sha1w = { version = "0.2.0-beta.1", path = "crates/librtbit-sha1-wrapper", package = "swarmforge-sha1-wrapper", default-features = false }
-tracker_comms = { version = "0.2.0-beta.1", path = "crates/librtbit-tracker-comms", package = "swarmforge-tracker-comms", default-features = false }
-librtbit-upnp = { version = "0.2.0-beta.1", path = "crates/librtbit-upnp", package = "swarmforge-upnp" }
-upnp-serve = { version = "0.2.0-beta.1", path = "crates/librtbit-upnp-serve", package = "swarmforge-upnp-serve", default-features = false }
+librtbit = { version = "0.2.0-beta.2", path = "crates/librtbit", package = "swarmforge", default-features = false }
+bencode = { version = "0.2.0-beta.2", path = "crates/librtbit-bencode", package = "swarmforge-bencode", default-features = false }
+buffers = { version = "0.2.0-beta.2", path = "crates/librtbit-buffers", package = "swarmforge-buffers" }
+clone_to_owned = { version = "0.2.0-beta.2", path = "crates/librtbit-clone-to-owned", package = "swarmforge-clone-to-owned" }
+librtbit-core = { version = "0.2.0-beta.2", path = "crates/librtbit-core", package = "swarmforge-core", default-features = false }
+dht = { version = "0.2.0-beta.2", path = "crates/librtbit-dht", package = "swarmforge-dht", default-features = false }
+librtbit-lsd = { version = "0.2.0-beta.2", path = "crates/librtbit-lsd", package = "swarmforge-lsd", default-features = false }
+peer_binary_protocol = { version = "0.2.0-beta.2", path = "crates/librtbit-peer-protocol", package = "swarmforge-peer-protocol", default-features = false }
+sha1w = { version = "0.2.0-beta.2", path = "crates/librtbit-sha1-wrapper", package = "swarmforge-sha1-wrapper", default-features = false }
+tracker_comms = { version = "0.2.0-beta.2", path = "crates/librtbit-tracker-comms", package = "swarmforge-tracker-comms", default-features = false }
+librtbit-upnp = { version = "0.2.0-beta.2", path = "crates/librtbit-upnp", package = "swarmforge-upnp" }
+upnp-serve = { version = "0.2.0-beta.2", path = "crates/librtbit-upnp-serve", package = "swarmforge-upnp-serve", default-features = false }
 
 # External crates
 anyhow = "1"
