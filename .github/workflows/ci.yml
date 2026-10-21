@@ -102,7 +102,7 @@ jobs:
   rust:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: [self-hosted, Linux, X64, tailnet]
+    runs-on: [self-hosted, rust-heavy]
     env:
       CARGO_BUILD_JOBS: 1
       CARGO_INCREMENTAL: 0
