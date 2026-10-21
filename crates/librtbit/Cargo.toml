@@ -1,6 +1,6 @@
 [package]
 name = "swarmforge"
-version = "0.1.0-rc.5"
+version = "0.2.0-beta.1"
 edition = "2024"
 description = "Core BitTorrent client library for the rtbit torrent client"
 license = "Apache-2.0"
