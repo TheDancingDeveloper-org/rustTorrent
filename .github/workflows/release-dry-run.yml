@@ -1,0 +1,149 @@
+name: Release dry run
+
+# Exercise the build that `release.yml` runs on a tag, without publishing
+# anything: no deploy, no Authenticode signature, no attestation, no cosign
+# signature, no GitHub release and no release secrets. This exists so that a
+# release tag is not the first time the packaging path sees a change to the
+# release tooling (WI-2070).
+#
+# The toolchain, the profile environment and the artefact names below mirror
+# the `build` job in `.github/workflows/release.yml`. Keep the two in step.
+#
+# Both targets are built in separate steps that export their profile
+# environment inline, and `.cargo/config.toml` scopes its rustflags to
+# `[target.arm*]` only. Neither build therefore inherits host flags meant for
+# the other target (the leak rustnzb #264 hit). Do not introduce a job-level
+# `RUSTFLAGS` or `CARGO_TARGET_<triple>_RUSTFLAGS` here.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/release*.yml'
+      - 'packaging/**'
+      - 'scripts/publish.sh'
+      - 'systemd/**'
+  schedule:
+    # Nightly against the default branch, so breakage no PR touched still
+    # surfaces before a release.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-dry-run-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dry-run:
+    # The build runs on a self-hosted runner and needs no secrets, but a fork
+    # pull request still must not execute its code there.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted]
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Derive the tag a release would use
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `scripts/check-repo-hygiene.sh` treats crates/rtbit as the release
+          # version every other package must match, so it is the tag source.
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' crates/rtbit/Cargo.toml | head -1)"
+          test -n "$version"
+          printf 'tag=v%s\n' "$version" >>"$GITHUB_OUTPUT"
+          printf 'dry run for v%s\n' "$version"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: "1.95"
+      - name: Install release toolchain
+        shell: bash
+        run: |
+          apt-get update
+          apt-get install -y gcc-mingw-w64-x86-64 nasm golang-go
+          # nfpm is pinned; it builds both the .deb and the .rpm.
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.1
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          rustup target add x86_64-pc-windows-gnu
+      - name: Build Linux, Debian and RPM artifacts
+        shell: bash
+        run: |
+          export CARGO_PROFILE_RELEASE_GITHUB_LTO=fat
+          export CARGO_PROFILE_RELEASE_GITHUB_CODEGEN_UNITS=1
+          export CARGO_PROFILE_RELEASE_GITHUB_STRIP=symbols
+          cargo build --profile release-github -p rtbit --no-default-features --features default-tls
+          tag="${{ steps.tag.outputs.tag }}"
+          export VERSION="${tag#v}" ARCH=amd64 BINARY=target/release-github/rtbit
+          nfpm package --packager deb --config packaging/linux/nfpm.yaml --target target/release-github/rtbit_amd64.deb
+          nfpm package --packager rpm --config packaging/linux/nfpm.yaml --target target/release-github/rtbit-x86_64.rpm
+      - name: Build Windows artifact
+        shell: bash
+        run: |
+          export CARGO_PROFILE_RELEASE_GITHUB_LTO=fat
+          export CARGO_PROFILE_RELEASE_GITHUB_CODEGEN_UNITS=1
+          export CARGO_PROFILE_RELEASE_GITHUB_STRIP=symbols
+          cargo build --profile release-github -p rtbit --target x86_64-pc-windows-gnu --no-default-features --features default-tls
+      - name: Stage and checksum artifacts
+        shell: bash
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          test -n "$tag"
+          rm -rf release-artifacts
+          mkdir release-artifacts
+          cp target/release-github/rtbit "release-artifacts/rtbit-$tag-linux-x86_64"
+          cp target/x86_64-pc-windows-gnu/release-github/rtbit.exe "release-artifacts/rtbit-$tag-windows-x86_64.exe"
+          cp target/release-github/rtbit_amd64.deb "release-artifacts/rtbit-$tag-amd64.deb"
+          cp target/release-github/rtbit-x86_64.rpm "release-artifacts/rtbit-$tag-x86_64.rpm"
+          # Unit files, sysusers entry and default config, laid out at their
+          # install paths. The AUR package unpacks this as-is.
+          stage=$(mktemp -d)
+          install -Dm644 packaging/linux/rtbit.service "$stage/usr/lib/systemd/system/rtbit.service"
+          install -Dm644 systemd/rtbit.service "$stage/usr/lib/systemd/user/rtbit.service"
+          install -Dm644 systemd/rtbit.socket "$stage/usr/lib/systemd/user/rtbit.socket"
+          install -Dm644 packaging/linux/rtbit.sysusers.conf "$stage/usr/lib/sysusers.d/rtbit.conf"
+          install -Dm644 systemd/rtbit.conf "$stage/etc/rtbit/rtbit.conf"
+          tar --owner=0 --group=0 --numeric-owner -C "$stage" -czf "release-artifacts/rtbit-$tag-service-files.tar.gz" .
+          # Vendored crates for the offline Flatpak build. cargo vendor prints
+          # the source-replacement config, which goes beside vendor/ so that
+          # extracting at the repository root gives a working tree.
+          vendor_stage=$(mktemp -d)
+          mkdir -p "$vendor_stage/.cargo"
+          cargo vendor --locked vendor > "$vendor_stage/.cargo/config.toml"
+          mv vendor "$vendor_stage/vendor"
+          tar --owner=0 --group=0 --numeric-owner -C "$vendor_stage" -cJf "release-artifacts/rtbit-$tag-vendor.tar.xz" .
+          # CycloneDX SBOM of the rtbit crate graph, built with the release
+          # features. Its rtbit-* name puts it under SHA256SUMS, the
+          # provenance attestation and the cosign signature in release.yml.
+          cargo install --locked cargo-cyclonedx --version 0.5.7 --root "$RUNNER_TEMP/cyclonedx"
+          "$RUNNER_TEMP/cyclonedx/bin/cargo-cyclonedx" cyclonedx \
+            --manifest-path crates/rtbit/Cargo.toml \
+            --no-default-features --features default-tls \
+            --format json --spec-version 1.5 \
+            --override-filename rtbit-sbom
+          mv crates/rtbit/rtbit-sbom.json "release-artifacts/rtbit-$tag-sbom.cdx.json"
+          (cd release-artifacts && sha256sum rtbit-*) > "release-artifacts/SHA256SUMS-$tag.txt"
+      - name: Verify the staged set
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.tag.outputs.tag }}"
+          for file in \
+            "rtbit-$tag-linux-x86_64" \
+            "rtbit-$tag-windows-x86_64.exe" \
+            "rtbit-$tag-amd64.deb" \
+            "rtbit-$tag-x86_64.rpm" \
+            "rtbit-$tag-service-files.tar.gz" \
+            "rtbit-$tag-vendor.tar.xz" \
+            "rtbit-$tag-sbom.cdx.json"; do
+            test -s "release-artifacts/$file" || { echo "::error::missing $file"; exit 1; }
+          done
+          (cd release-artifacts && sha256sum -c "SHA256SUMS-$tag.txt")
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-dry-run-${{ steps.tag.outputs.tag }}-${{ github.sha }}
+          path: release-artifacts/
+          if-no-files-found: error
+          retention-days: 7

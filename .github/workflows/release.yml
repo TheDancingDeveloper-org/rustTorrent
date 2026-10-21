@@ -26,6 +26,11 @@ permissions:
 
 jobs:
   build:
+    # `.github/workflows/release-dry-run.yml` mirrors this job without
+    # publishing, and runs nightly and on PRs that touch release tooling. Keep
+    # the toolchain, the profile environment and the artefact names in step.
+    # Each target's profile environment is exported in its own step, so one
+    # target's flags never reach the other build.
     runs-on: [self-hosted]
     env:
       CARGO_BUILD_JOBS: 1
