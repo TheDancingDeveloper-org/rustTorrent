@@ -136,7 +136,7 @@ nix = { version = "0.31", features = ["uio", "fs"] }
 thiserror = "2"
 utoipa = { version = "5", optional = true }
 utoipa-axum = { version = "0.2", optional = true }
-utoipa-swagger-ui = { version = "9", features = ["axum"], optional = true }
+utoipa-swagger-ui = { version = "10", features = ["axum"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32", "Win32_System", "Win32_System_IO", "Win32_System_Ioctl"] }
