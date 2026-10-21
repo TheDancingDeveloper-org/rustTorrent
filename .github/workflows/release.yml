@@ -324,7 +324,10 @@ jobs:
           esac
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+      # The download host is a mirror; GitHub Releases is the source of
+      # truth. An unreachable mirror must not block the release itself.
       - name: Publish download artifacts
+        continue-on-error: true
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           # Pinned host key(s) for the download host, one known_hosts line per
