@@ -13,6 +13,10 @@ and run it all again.
 | `merge_group` (the queue) | **everything** | full |
 | `push` to `main`/`dev` | everything | full |
 
+Only `pull_request` narrows. A `merge_group` entry, a push and a manual run all
+take the full workspace (`rust_full=true`), and the five required contexts are
+the same on every event.
+
 Container-backed compat checks (the real-qBittorrent differential harness and
 the Sonarr end-to-end smoke) run nightly in `compat-nightly.yml`, not per PR.
 See [TESTING.md](TESTING.md#webui-api-v2-compatibility-client-replay-and-differential-testing).
@@ -23,11 +27,35 @@ See [TESTING.md](TESTING.md#webui-api-v2-compatibility-client-replay-and-differe
 
 | Changed paths | Runs |
 |---|---|
-| `.github/`, `ci/`, `Dockerfile*`, `.dockerignore`, `rust-toolchain.toml` | everything, as in the queue |
-| `crates/` (outside the web UI), `fuzz/`, `tests/`, `benchv2/`, `Cargo.*` | `rust` |
+| `.github/`, `ci/`, `.cargo/`, `Dockerfile*`, `.dockerignore`, `rust-toolchain.toml` | everything, as in the queue |
+| `crates/librtbit/` (outside the web UI) | `rust`, scoped to `swarmforge` |
+| `crates/rtbit/` | `rust`, scoped to `rtbit` |
 | `crates/librtbit/webui/`, `desktop/src/` (the splash, tested by `e2e/desktop-splash.spec.ts`) | `webui`, `gui-e2e` |
+| `Cargo.toml`, `Cargo.lock`, `fuzz/`, `tests/`, `benchv2/`, any other `crates/*` path | `rust`, full workspace |
 | `website/` | `website` |
 | anything else (docs, design, the rest of desktop) | nothing; the skipped jobs report success |
+
+The scope is deliberately conservative. `cargo` resolves `--features` against
+the packages it selects, and `default-tls` exists only on `swarmforge`
+(`crates/librtbit`) and `rtbit`. So only those two crates can be named in a
+narrowed run; any other crate, a new member, a root-level file or a change
+that alters how the workspace resolves (the lockfile, the root manifest, the
+toolchain, cargo config, workflows and task scripts) takes the full workspace.
+The scope is also widened when the classifier sees a Rust change it cannot
+attribute to a package, so it never silently runs nothing.
+
+### Cache and test runner
+
+The `rust` job restores a shared `Swatinem/rust-cache` cache keyed on the
+toolchain and the manifests, and runs `cargo nextest` instead of `cargo test`.
+Only the queue and manual runs save the cache: a pull request is untrusted
+input, and letting it write the shared key would let one PR evict or poison
+what every other run restores. Both actions are pinned by commit SHA.
+
+`cargo nextest` does not run doctests. Every doc fence in this workspace is
+`text`, `ignore` or `no_run` with no assertions, so there is nothing for it to
+skip today; if a doctest gains assertions, add a `cargo test --doc` step rather
+than assume nextest covered it.
 
 The `scripts` job is not path-scoped: it runs `scripts/check-repo-hygiene.sh`,
 `scripts/test-publish.sh` and `packaging/scripts/test-render.sh` on every run,
@@ -83,17 +111,41 @@ GitHub's default CodeQL setup is turned off for this repository, so
 Security tab under the `/language:<lang>` categories. The workflow is not a
 required check, because it does not run on pull requests.
 
+## Release dry run
+
+`.github/workflows/release-dry-run.yml` runs the same build `release.yml`
+runs on a tag, with no publishing: no deploy, no Authenticode signing, no
+provenance attestation, no cosign signature, no GitHub release, and no release
+secrets. It runs:
+
+- on a pull request that touches `.github/workflows/release*.yml`,
+  `packaging/**`, `scripts/publish.sh` or `systemd/**`;
+- nightly at 03:17 UTC against `main`, so breakage no PR touched still
+  surfaces before a release;
+- on manual dispatch.
+
+It derives the tag from the `crates/rtbit/Cargo.toml` version (the release
+version `scripts/check-repo-hygiene.sh` enforces everywhere), builds the Linux
+and Windows binaries, the `.deb`, the `.rpm`, the service-files tarball, the
+vendored-crates tarball and the CycloneDX SBOM, checks the checksum manifest,
+and uploads the set as a 7-day artifact. A release tag is therefore not the
+first time the packaging path runs.
+
+Neither the dry run nor `release.yml` sets a job-level `RUSTFLAGS`. Each
+target's profile environment is exported inside its own build step, and
+`.cargo/config.toml` scopes its rustflags to the `arm*` targets, so the
+Windows cross build cannot leak flags into the host build (the failure mode
+rustnzb #264 hit).
+
 ## Landing
 
 Enqueue with `gh pr merge --auto --rebase` (or the workspace `land-pr`, which
 detects the queue and follows the entry's `merge_group` runs). Do not rebase a
 PR by hand while it is queued.
 
-## Turning the queue on (operator)
+## The merge queue (operator)
 
-The workflows support a queue but do not require one. Until a ruleset with a
-`merge_queue` rule exists on `main`, PRs merge as before, with the narrower PR
-checks. The ruleset (`POST repos/TheDancingDeveloper-org/rustTorrent/rulesets`):
+The queue ruleset on `main` (`POST repos/TheDancingDeveloper-org/rustTorrent/rulesets`):
 
 ```json
 {"name":"main merge queue","target":"branch","enforcement":"active",
@@ -104,6 +156,8 @@ checks. The ruleset (`POST repos/TheDancingDeveloper-org/rustTorrent/rulesets`):
    "check_response_timeout_minutes":60}}]}
 ```
 
-Today only `policy` is a required check. The queue is worth having only if it
-gates on the suite, so add `rust`, `webui`, `gui-e2e` and `runner-policy` to
-the required checks. All of them post on `merge_group`.
+All five required checks are live on `main` as branch protection contexts:
+`policy`, `rust`, `webui`, `gui-e2e` and `runner-policy / runner-policy`.
+Each of them posts on both `pull_request` and `merge_group`, so a queue entry
+never waits for a context that will not start. If a required context is ever
+renamed, rename it in branch protection in the same change, or the queue stalls.

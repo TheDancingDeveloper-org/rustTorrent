@@ -1,8 +1,9 @@
 name: CI
 
-# Pull requests run only the areas their diff touches (see `changes`). The
-# merge queue (merge_group), pushes and manual runs run everything. Skipped
-# jobs report success, so a required check never stays pending. See docs/ci.md.
+# Pull requests run only the areas their diff touches (see `changes`), and the
+# `rust` job narrows further to the changed crates. The merge queue
+# (merge_group), pushes and manual runs run everything. Skipped jobs report
+# success, so a required check never stays pending. See docs/ci.md.
 on:
   push:
     branches: [main, dev]
@@ -28,6 +29,8 @@ jobs:
     runs-on: [self-hosted]
     outputs:
       rust: ${{ steps.classify.outputs.rust }}
+      rust_full: ${{ steps.classify.outputs.rust_full }}
+      rust_packages: ${{ steps.classify.outputs.rust_packages }}
       webui: ${{ steps.classify.outputs.webui }}
       website: ${{ steps.classify.outputs.website }}
     steps:
@@ -42,24 +45,48 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$EVENT" != pull_request ]]; then
-            printf 'rust=true\nwebui=true\nwebsite=true\n' >>"$GITHUB_OUTPUT"
+            printf 'rust=true\nrust_full=true\nrust_packages=\nwebui=true\nwebsite=true\n' >>"$GITHUB_OUTPUT"
             exit 0
           fi
           files="$(git diff --name-only "$(git merge-base "$BASE_SHA" HEAD)" HEAD)"
-          rust=false webui=false website=false
+          rust=false full=false webui=false website=false
+          packages=()
+          add_package() {
+            local pkg
+            for pkg in "${packages[@]}"; do
+              [[ "$pkg" == "$1" ]] && return 0
+            done
+            packages+=("$1")
+          }
           while IFS= read -r f; do
             case "$f" in
               '') ;;
-              .github/*|ci/*|Dockerfile*|.dockerignore|rust-toolchain.toml)
-                rust=true webui=true website=true ;;
+              # Anything that can change how the workspace resolves or builds
+              # (workflows, task scripts, the lockfile or root manifest, the
+              # toolchain, cargo config, the nested workspaces) takes the full
+              # workspace.
+              .github/*|ci/*|Dockerfile*|.dockerignore|rust-toolchain.toml|.cargo/*|\
+              Cargo.toml|Cargo.lock|fuzz/*|tests/*|benchv2/*)
+                rust=true webui=true website=true full=true ;;
+              # The web UI is tested by its own jobs, not by a Rust build.
               crates/librtbit/webui/*) webui=true ;;
-              # The desktop splash is tested by the web UI e2e suite
+              # The desktop splash is tested by the web UI e2e suite.
               desktop/src/*) webui=true ;;
+              crates/librtbit/*) rust=true; add_package swarmforge ;;
+              crates/rtbit/*) rust=true; add_package rtbit ;;
               website/*) website=true ;;
-              crates/*|fuzz/*|tests/*|benchv2/*|Cargo.toml|Cargo.lock) rust=true ;;
+              # An unrecognised crate path (a new member, or a path we have not
+              # mapped yet) is not safe to narrow, so it takes everything.
+              crates/*) rust=true full=true ;;
             esac
           done <<<"$files"
-          printf 'rust=%s\nwebui=%s\nwebsite=%s\n' "$rust" "$webui" "$website" | tee -a "$GITHUB_OUTPUT"
+          # A Rust change we could not attribute to a package still needs the
+          # full workspace rather than no check at all.
+          if [[ "$rust" == true && "$full" == false && ${#packages[@]} -eq 0 ]]; then
+            full=true
+          fi
+          printf 'rust=%s\nrust_full=%s\nrust_packages=%s\nwebui=%s\nwebsite=%s\n' \
+            "$rust" "$full" "${packages[*]-}" "$webui" "$website" | tee -a "$GITHUB_OUTPUT"
 
   # Shell checks for the release scripts and repository layout. They take
   # seconds and touch no network, so they run on every event.
@@ -78,17 +105,74 @@ jobs:
     runs-on: [self-hosted, Linux, X64, tailnet]
     env:
       CARGO_BUILD_JOBS: 1
+      CARGO_INCREMENTAL: 0
+      # Restore the cache on every run, but only save it from the queue and
+      # manual runs. A PR run is untrusted input; letting it write the shared
+      # key would let one PR evict or poison what everyone else restores.
+      RUST_CACHE_SAVE_IF: ${{ github.event_name != 'pull_request' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # `cargo` resolves `--features` against the selected packages, and
+      # `default-tls` exists only on `swarmforge` (crates/librtbit) and
+      # `rtbit`. Any other crate, and any path that can change how the
+      # workspace builds, therefore takes the full workspace instead.
+      - name: Resolve the Rust scope
+        id: scope
+        shell: bash
+        env:
+          RUST_FULL: ${{ needs.changes.outputs.rust_full }}
+          RUST_PACKAGES: ${{ needs.changes.outputs.rust_packages }}
+        run: |
+          set -euo pipefail
+          if [[ "$RUST_FULL" == true ]]; then
+            printf 'full=true\nargs=--workspace\n' >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          args=()
+          for pkg in $RUST_PACKAGES; do
+            args+=(-p "$pkg")
+          done
+          printf 'full=false\nargs=%s\n' "${args[*]}" >>"$GITHUB_OUTPUT"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: ci
+          save-if: ${{ env.RUST_CACHE_SAVE_IF }}
+      - uses: taiki-e/install-action@899b013517f9e7774591216672bf75a46bb9a481 # v2.9.4
+        with:
+          tool: cargo-nextest
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: "1.95"
           components: rustfmt,clippy
       - run: cargo fmt --all -- --check
-      - run: cargo check --workspace --exclude rtbit-desktop --no-default-features --features default-tls
-      - run: cargo test --workspace --exclude rtbit-desktop --no-default-features --features default-tls
-      - run: cargo clippy --workspace --exclude rtbit-desktop --no-default-features --features default-tls -- -D warnings
-      - run: cargo build --profile release-github -p rtbit --no-default-features --features default-tls
+      - name: Check
+        env:
+          SCOPE_ARGS: ${{ steps.scope.outputs.args }}
+        run: |
+          read -r -a args <<<"$SCOPE_ARGS"
+          cargo check "${args[@]}" --no-default-features --features default-tls
+      - name: Clippy
+        env:
+          SCOPE_ARGS: ${{ steps.scope.outputs.args }}
+        run: |
+          read -r -a args <<<"$SCOPE_ARGS"
+          cargo clippy "${args[@]}" --no-default-features --features default-tls -- -D warnings
+      # nextest runs each test in its own process and does not run doctests.
+      # Every doc fence in this workspace is `text`, `ignore` or `no_run`
+      # without assertions, so it has nothing to skip; keep it that way, or add
+      # a separate `cargo test --doc` step.
+      - name: Test
+        env:
+          SCOPE_ARGS: ${{ steps.scope.outputs.args }}
+          CARGO_PROFILE_TEST_DEBUG: 0
+        run: |
+          read -r -a args <<<"$SCOPE_ARGS"
+          cargo nextest run "${args[@]}" --all-targets --locked --no-default-features --features default-tls
+      # The shipped binary is worth a release-profile compile on a PR that
+      # touches it. The queue builds it for every entry anyway.
+      - name: Build the release binary
+        if: steps.scope.outputs.full == 'true' || contains(format(' {0} ', needs.changes.outputs.rust_packages), ' rtbit ')
+        run: cargo build --profile release-github -p rtbit --no-default-features --features default-tls
 
   webui:
     needs: changes
