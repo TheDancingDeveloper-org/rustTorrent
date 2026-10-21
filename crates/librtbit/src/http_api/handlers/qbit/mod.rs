@@ -428,6 +428,8 @@ struct QbitPreferences {
     max_ratio_act: u8,
     max_seeding_time_enabled: bool,
     max_seeding_time: i64,
+    max_inactive_seeding_time_enabled: bool,
+    max_inactive_seeding_time: i64,
 }
 
 #[derive(Deserialize)]

@@ -1521,3 +1521,69 @@ async fn clientdata_survives_reopen_and_null_removes() {
             .is_empty()
     );
 }
+
+#[test]
+fn content_layout_sets_the_output_folder() {
+    use super::ContentLayout;
+    let opts = |layout: ContentLayout, single: Option<&str>| {
+        let mut opts = AddTorrentOptions::default();
+        layout.apply(&mut opts, "/data", single);
+        (opts.output_folder, opts.output_folder_root)
+    };
+    assert_eq!(ContentLayout::parse("Subfolder"), ContentLayout::Subfolder);
+    assert_eq!(
+        ContentLayout::parse("NoSubfolder"),
+        ContentLayout::NoSubfolder
+    );
+    assert_eq!(ContentLayout::parse("Original"), ContentLayout::Original);
+    assert_eq!(ContentLayout::parse("bogus"), ContentLayout::Original);
+    assert_eq!(
+        opts(ContentLayout::Original, None),
+        (None, Some("/data".to_owned()))
+    );
+    assert_eq!(
+        opts(ContentLayout::NoSubfolder, None),
+        (Some("/data".to_owned()), None)
+    );
+    assert_eq!(
+        opts(ContentLayout::Subfolder, Some("show.mkv")),
+        (Some("/data/show".to_owned()), None)
+    );
+    // The name of a URL/magnet single-file torrent is unknown before the add.
+    assert_eq!(
+        opts(ContentLayout::Subfolder, None),
+        (None, Some("/data".to_owned()))
+    );
+}
+
+#[test]
+fn incomplete_read_only_payload_reports_missing_files() {
+    use super::qbit_state_for;
+    use crate::torrent_state::{READ_ONLY_INCOMPLETE_PAYLOAD, stats::TorrentStats};
+    let stats = |error: Option<&str>| TorrentStats {
+        state: TorrentStatsState::Paused,
+        file_progress: Vec::new(),
+        error: error.map(str::to_owned),
+        progress_bytes: 0,
+        uploaded_bytes: 0,
+        total_bytes: 10,
+        finished: false,
+        live: None,
+        queued_for_init: None,
+    };
+    assert_eq!(
+        qbit_state_for(&stats(Some(READ_ONLY_INCOMPLETE_PAYLOAD)), false, false),
+        "missingFiles"
+    );
+    assert_eq!(qbit_state_for(&stats(None), false, false), "stoppedDL");
+    assert!(super::matches_filter(
+        "errored",
+        "missingFiles",
+        &stats(Some(READ_ONLY_INCOMPLETE_PAYLOAD))
+    ));
+    assert!(!super::matches_filter(
+        "running",
+        "missingFiles",
+        &stats(None)
+    ));
+}

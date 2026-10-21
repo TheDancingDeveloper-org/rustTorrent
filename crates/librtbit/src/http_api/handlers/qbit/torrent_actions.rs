@@ -17,6 +17,7 @@ pub(super) async fn h_torrents_add(
     let mut tags: Vec<String> = Vec::new();
     let mut ratelimits = LimitsConfig::default();
     let mut paused = false;
+    let mut content_layout = ContentLayout::Original;
 
     while let Ok(Some(field)) = multipart.next_field().await {
         let field_name = field.name().unwrap_or("").to_string();
@@ -74,6 +75,21 @@ pub(super) async fn h_torrents_add(
                     savepath = Some(text);
                 }
             }
+            "contentLayout" => {
+                if let Ok(text) = field.text().await {
+                    content_layout = ContentLayout::parse(&text);
+                }
+            }
+            // Pre-4.3 spelling: true is `Subfolder`, false is `NoSubfolder`.
+            "root_folder" => {
+                if let Ok(text) = field.text().await {
+                    match text.trim() {
+                        "true" => content_layout = ContentLayout::Subfolder,
+                        "false" => content_layout = ContentLayout::NoSubfolder,
+                        _ => {}
+                    }
+                }
+            }
             // `paused` was renamed to `stopped` in WebAPI 2.11; accept both.
             "paused" | "stopped" => {
                 if let Ok(text) = field.text().await
@@ -91,16 +107,19 @@ pub(super) async fn h_torrents_add(
     let api = &state.api_state.api;
     let mut had_error = false;
 
+    let base_opts = || AddTorrentOptions {
+        paused,
+        overwrite: true,
+        category: category.clone(),
+        tags: tags.clone(),
+        ratelimits,
+        ..Default::default()
+    };
+    let save_root = savepath.unwrap_or_else(|| api.api_output_folder());
+
     for url in urls {
-        let opts = AddTorrentOptions {
-            paused,
-            overwrite: true,
-            output_folder_root: savepath.clone(),
-            category: category.clone(),
-            tags: tags.clone(),
-            ratelimits,
-            ..Default::default()
-        };
+        let mut opts = base_opts();
+        content_layout.apply(&mut opts, &save_root, None);
         if let Err(e) = api
             .api_add_torrent(AddTorrent::Url(url.into()), Some(opts))
             .await
@@ -111,15 +130,9 @@ pub(super) async fn h_torrents_add(
     }
 
     for data in torrent_bytes {
-        let opts = AddTorrentOptions {
-            paused,
-            overwrite: true,
-            output_folder_root: savepath.clone(),
-            category: category.clone(),
-            tags: tags.clone(),
-            ratelimits,
-            ..Default::default()
-        };
+        let mut opts = base_opts();
+        let single_file_name = single_file_torrent_name(&data);
+        content_layout.apply(&mut opts, &save_root, single_file_name.as_deref());
         if let Err(e) = api
             .api_add_torrent(AddTorrent::TorrentFileBytes(data), Some(opts))
             .await
@@ -134,6 +147,69 @@ pub(super) async fn h_torrents_add(
     } else {
         (StatusCode::OK, "Ok.")
     }
+}
+
+/// `torrents/add` `contentLayout`: where the payload goes under the save path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ContentLayout {
+    /// Multi-file torrents get their root folder; single files sit directly
+    /// in the save path.
+    Original,
+    /// Every torrent gets a root folder, single files included.
+    Subfolder,
+    /// No root folder: a multi-file torrent's files go straight into the save
+    /// path.
+    NoSubfolder,
+}
+
+impl ContentLayout {
+    pub(super) fn parse(value: &str) -> Self {
+        match value.trim() {
+            "Subfolder" | "Create" => Self::Subfolder,
+            "NoSubfolder" | "NoCreate" => Self::NoSubfolder,
+            _ => Self::Original,
+        }
+    }
+
+    /// Set the output folder for this layout. `single_file_name` is the file
+    /// name of a single-file torrent when it is known before the add (an
+    /// uploaded `.torrent`); a URL or magnet single-file torrent under
+    /// `Subfolder` falls back to `Original`, as its name is not known yet.
+    pub(super) fn apply(
+        self,
+        opts: &mut AddTorrentOptions,
+        save_root: &str,
+        single_file_name: Option<&str>,
+    ) {
+        match (self, single_file_name) {
+            (Self::NoSubfolder, _) => opts.output_folder = Some(save_root.to_owned()),
+            (Self::Subfolder, Some(file)) => {
+                let stem = Path::new(file)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| file.to_owned());
+                opts.output_folder = Some(
+                    Path::new(save_root)
+                        .join(stem)
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+            _ => opts.output_folder_root = Some(save_root.to_owned()),
+        }
+    }
+}
+
+/// The name of a single-file `.torrent`, or `None` for a multi-file or
+/// unparseable one.
+pub(super) fn single_file_torrent_name(torrent_bytes: &[u8]) -> Option<String> {
+    let meta = librtbit_core::torrent_metainfo::torrent_from_bytes(torrent_bytes).ok()?;
+    let info = meta.info.data;
+    if info.files.is_some() || info.length.is_none() {
+        return None;
+    }
+    info.name
+        .map(|n| String::from_utf8_lossy(n.as_ref()).into_owned())
 }
 
 #[derive(Deserialize, Default)]
@@ -532,19 +608,26 @@ pub(super) struct SetCategoryForm {
     pub(super) category: String,
 }
 
+/// `torrents/setCategory`. An empty category clears it; an unknown one is a
+/// 409, as upstream.
 pub(super) async fn h_torrents_set_category(
     State(state): State<Arc<QbitState>>,
     body: Bytes,
-) -> &'static str {
+) -> impl IntoResponse {
     let form: SetCategoryForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
     let api = &state.api_state.api;
     let category = (!form.category.is_empty()).then_some(form.category);
+    if let Some(name) = &category
+        && !api.session().categories().exists(name)
+    {
+        return qbit_error(StatusCode::CONFLICT, "Incorrect category name");
+    }
     for idx in resolve_hashes(api, &form.hashes) {
         if let Err(error) = api.api_set_torrent_category(idx, category.clone()).await {
             warn!(%error, "qbit compat: error setting torrent category");
         }
     }
-    "Ok."
+    (StatusCode::OK, "Ok.").into_response()
 }
 
 #[derive(Deserialize, Default)]

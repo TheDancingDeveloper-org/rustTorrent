@@ -119,6 +119,10 @@ impl<U: TorrentStorage> TorrentStorage for WriteThroughCacheStorage<U> {
         self.underlying.ensure_file_length(file_id, length)
     }
 
+    fn is_read_only(&self) -> bool {
+        self.underlying.is_read_only()
+    }
+
     fn take(&self) -> anyhow::Result<Box<dyn TorrentStorage>> {
         let replacement_cache = LruCache::new(NonZeroUsize::new(1).context("unreachable")?);
         let lru = std::mem::replace(&mut *self.lru.write(), replacement_cache);

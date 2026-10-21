@@ -1755,3 +1755,219 @@ async fn ban_peers_and_logs_through_compat_router() {
         .json();
     assert_eq!(messages(&after), vec!["wi22-probe-normal"]);
 }
+
+/// Posts a `torrents/add` multipart form carrying `torrent` and `fields`.
+async fn post_add(router: &axum::Router, torrent: &[u8], fields: &[(&str, &str)]) -> ProbeResponse {
+    let boundary = "qbitArrBoundary";
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("/torrents/add")
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(axum::body::Body::from(multipart_add_body(
+            boundary, torrent, fields,
+        )))
+        .unwrap();
+    send(router, request).await
+}
+
+/// The calls Sonarr and Radarr make: "Test Connection" (version, preferences,
+/// categories, creating their category) and then a grab (add stopped into the
+/// category with a content layout, read it back by category, properties and
+/// files, then the queue and share-limit calls and finally remove it).
+#[tokio::test]
+async fn arr_test_connection_and_grab_flow() {
+    let spec = parse_spec();
+    let info_contract = response_contract(&spec, "torrents/info");
+    let (router, _session, output) = make_router().await;
+
+    // --- Test Connection ---
+    let version = get(&router, "/app/webapiVersion").await;
+    assert_eq!((version.status, version.text()), (StatusCode::OK, "2.11.3"));
+    assert!(get(&router, "/app/version").await.text().starts_with('v'));
+    let prefs = get(&router, "/app/preferences").await;
+    assert_eq!(prefs.status, StatusCode::OK);
+    let prefs = prefs.json();
+    for key in [
+        "max_ratio_enabled",
+        "max_ratio",
+        "max_ratio_act",
+        "max_seeding_time_enabled",
+        "max_seeding_time",
+        "max_inactive_seeding_time_enabled",
+        "max_inactive_seeding_time",
+        "queueing_enabled",
+        "dht",
+        "save_path",
+    ] {
+        assert!(prefs.get(key).is_some(), "preferences lacks {key}: {prefs}");
+    }
+    assert_eq!(prefs["max_ratio_enabled"], false);
+    assert_eq!(prefs["dht"], true);
+    assert_eq!(
+        get(&router, "/torrents/categories").await.json(),
+        serde_json::json!({})
+    );
+
+    let tv_path = output.path().join("tv").to_string_lossy().into_owned();
+    let created = post_form(
+        &router,
+        "/torrents/createCategory",
+        &[("category", "tv-sonarr"), ("savePath", &tv_path)],
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::OK);
+    // createCategory on an existing name, editCategory on an unknown one and an
+    // invalid name are rejected as upstream does.
+    let again = post_form(
+        &router,
+        "/torrents/createCategory",
+        &[("category", "tv-sonarr")],
+    )
+    .await;
+    assert_eq!(again.status, StatusCode::CONFLICT);
+    let unknown = post_form(&router, "/torrents/editCategory", &[("category", "radarr")]).await;
+    assert_eq!(unknown.status, StatusCode::CONFLICT);
+    let invalid = post_form(&router, "/torrents/createCategory", &[("category", "/bad")]).await;
+    assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+    let empty = post_form(&router, "/torrents/createCategory", &[("category", "")]).await;
+    assert_eq!(empty.status, StatusCode::BAD_REQUEST);
+    // editCategory moves the save path.
+    let payload_root = output.path().to_string_lossy().into_owned();
+    let edited = post_form(
+        &router,
+        "/torrents/editCategory",
+        &[("category", "tv-sonarr"), ("savePath", &payload_root)],
+    )
+    .await;
+    assert_eq!(edited.status, StatusCode::OK);
+    let categories = get(&router, "/torrents/categories").await.json();
+    assert_eq!(categories["tv-sonarr"]["name"], "tv-sonarr", "{categories}");
+    assert_eq!(categories["tv-sonarr"]["savePath"], payload_root.as_str());
+    assert_eq!(
+        get(&router, "/torrents/info?category=tv-sonarr")
+            .await
+            .json(),
+        serde_json::json!([])
+    );
+
+    // --- Grab ---
+    // NoSubfolder into the payload folder itself, so the files are found
+    // complete only if the layout is honoured.
+    let torrent = make_payload_torrent(output.path()).await;
+    let save_path = output.path().join("payload").to_string_lossy().into_owned();
+    let added = post_add(
+        &router,
+        &torrent,
+        &[
+            ("category", "tv-sonarr"),
+            ("savepath", &save_path),
+            ("stopped", "true"),
+            ("contentLayout", "NoSubfolder"),
+        ],
+    )
+    .await;
+    assert_eq!((added.status, added.text()), (StatusCode::OK, "Ok."));
+
+    let listed = get(&router, "/torrents/info?category=tv-sonarr")
+        .await
+        .json();
+    assert_eq!(listed.as_array().map(Vec::len), Some(1), "{listed}");
+    let hash = listed[0]["hash"].as_str().unwrap().to_owned();
+    let info = wait_for_info(&router, info_contract, &hash, "checked complete", |t| {
+        state_of(t) == "stoppedUP" && t["progress"] == 1.0
+    })
+    .await;
+    assert_eq!(info["category"], "tv-sonarr");
+    assert_eq!(info["save_path"], save_path.as_str());
+    let magnet = info["magnet_uri"].as_str().unwrap();
+    assert!(
+        magnet.starts_with(&format!("magnet:?xt=urn:btih:{hash}")),
+        "{magnet}"
+    );
+    assert_eq!(
+        get(&router, "/torrents/info?category=other").await.json(),
+        serde_json::json!([])
+    );
+
+    let props = get(&router, &format!("/torrents/properties?hash={hash}")).await;
+    assert_eq!(props.status, StatusCode::OK);
+    assert_eq!(props.json()["save_path"], save_path.as_str());
+
+    let files = get(&router, &format!("/torrents/files?hash={hash}"))
+        .await
+        .json();
+    let files = files.as_array().unwrap();
+    assert_eq!(files.len(), 2, "{files:?}");
+    // 60 000 bytes in 16 KiB pieces: four pieces, a.bin (40 000) spans 0..=2
+    // and sub/b.bin (20 000) spans 2..=3.
+    let mut ranges: Vec<Value> = files.iter().map(|f| f["piece_range"].clone()).collect();
+    ranges.sort_by_key(|r| r[0].as_u64());
+    assert_eq!(
+        ranges,
+        vec![serde_json::json!([0, 2]), serde_json::json!([2, 3])]
+    );
+
+    // setCategory to an unknown category is a 409 and leaves it alone.
+    let bad = post_form(
+        &router,
+        "/torrents/setCategory",
+        &[("hashes", hash.as_str()), ("category", "nope")],
+    )
+    .await;
+    assert_eq!(bad.status, StatusCode::CONFLICT);
+    assert_eq!(
+        get(&router, "/torrents/info?category=tv-sonarr")
+            .await
+            .json()[0]["hash"],
+        hash.as_str()
+    );
+
+    let limits = post_form(
+        &router,
+        "/torrents/setShareLimits",
+        &[
+            ("hashes", hash.as_str()),
+            ("ratioLimit", "-2"),
+            ("seedingTimeLimit", "-2"),
+            ("inactiveSeedingTimeLimit", "-2"),
+        ],
+    )
+    .await;
+    assert_eq!(limits.status, StatusCode::OK);
+    let top = post_form(&router, "/torrents/topPrio", &[("hashes", hash.as_str())]).await;
+    assert!(
+        matches!(top.status, StatusCode::OK | StatusCode::CONFLICT),
+        "topPrio: {}",
+        top.status
+    );
+    let forced = post_form(
+        &router,
+        "/torrents/setForceStart",
+        &[("hashes", hash.as_str()), ("value", "true")],
+    )
+    .await;
+    assert_eq!(forced.status, StatusCode::OK);
+    wait_for_info(&router, info_contract, &hash, "force-started", |t| {
+        t["force_start"] == true
+    })
+    .await;
+
+    // Remove after import, keeping the files.
+    let deleted = post_form(
+        &router,
+        "/torrents/delete",
+        &[("hashes", hash.as_str()), ("deleteFiles", "false")],
+    )
+    .await;
+    assert_eq!(deleted.text(), "Ok.");
+    assert_eq!(
+        get(&router, "/torrents/info?category=tv-sonarr")
+            .await
+            .json(),
+        serde_json::json!([])
+    );
+    assert!(output.path().join("payload").join("a.bin").exists());
+}

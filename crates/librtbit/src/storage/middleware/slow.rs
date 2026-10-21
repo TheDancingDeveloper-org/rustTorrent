@@ -121,6 +121,10 @@ impl<U: TorrentStorage> TorrentStorage for SlowStorage<U> {
         self.underlying.ensure_file_length(file_id, length)
     }
 
+    fn is_read_only(&self) -> bool {
+        self.underlying.is_read_only()
+    }
+
     fn take(&self) -> anyhow::Result<Box<dyn TorrentStorage>> {
         anyhow::bail!("not implemented")
     }

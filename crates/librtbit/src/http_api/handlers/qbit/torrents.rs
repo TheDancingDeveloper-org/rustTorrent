@@ -41,6 +41,21 @@ pub(super) fn map_state(
     }
 }
 
+/// [`map_state`] plus the `missingFiles` flag: a stopped torrent whose
+/// payload is missing or short on read-only storage cannot be resumed.
+pub(super) fn qbit_state_for(
+    stats: &crate::torrent_state::stats::TorrentStats,
+    queued: bool,
+    forced: bool,
+) -> &'static str {
+    if matches!(stats.state, TorrentStatsState::Paused)
+        && stats.error.as_deref() == Some(crate::torrent_state::READ_ONLY_INCOMPLETE_PAYLOAD)
+    {
+        return "missingFiles";
+    }
+    map_state(stats.state, stats.finished, queued, forced)
+}
+
 #[derive(Deserialize, Default)]
 pub(super) struct TorrentsInfoQuery {
     pub(super) filter: Option<String>,
@@ -72,7 +87,7 @@ pub(super) fn matches_filter(
         "active" => is_active_state(qbit_state),
         "inactive" => !is_active_state(qbit_state),
         // `resumed` was renamed to `running` in 2.11; accept both spellings.
-        "resumed" | "running" => qbit_state != "stoppedDL" && qbit_state != "stoppedUP",
+        "resumed" | "running" => !matches!(qbit_state, "stoppedDL" | "stoppedUP" | "missingFiles"),
         "stalled" | "stalled_uploading" | "stalled_downloading" => {
             matches!(stats.state, TorrentStatsState::Live)
                 && stats
@@ -81,7 +96,7 @@ pub(super) fn matches_filter(
                     .map(|l| l.download_speed.mbps < 0.001 && l.upload_speed.mbps < 0.001)
                     .unwrap_or(true)
         }
-        "errored" => qbit_state == "error",
+        "errored" => matches!(qbit_state, "error" | "missingFiles"),
         _ => true,
     }
 }
@@ -107,7 +122,7 @@ pub(super) fn build_torrent_info(
     let output_folder = qbit_save_path(handle);
     let content_path = qbit_content_path(handle, &name);
     let forced = handle.is_force_started();
-    let qbit_state = map_state(stats.state, stats.finished, handle.is_queued(), forced);
+    let qbit_state = qbit_state_for(stats, handle.is_queued(), forced);
     let limits = handle.rate_limits();
     let category = handle.shared().category.read().clone().unwrap_or_default();
     let share_limits = *handle.shared().share_limits.read();
@@ -174,6 +189,19 @@ pub(super) fn build_torrent_info(
         .unwrap_or_default();
 
     let trackers_count = handle.shared().trackers.read().len();
+    let magnet_uri = {
+        let trackers = handle
+            .shared()
+            .trackers
+            .read()
+            .iter()
+            .map(|u| u.to_string())
+            .collect();
+        let mut magnet =
+            librtbit_core::magnet::Magnet::from_id20(handle.shared().info_hash, trackers, None);
+        magnet.name = Some(name.clone());
+        magnet.to_string()
+    };
 
     QbitTorrentInfo {
         added_on,
@@ -206,7 +234,7 @@ pub(super) fn build_torrent_info(
             added_on
         },
         max_inactive_seeding_time: inactive_seeding_time_limit,
-        magnet_uri: String::new(),
+        magnet_uri,
         max_ratio: ratio_limit,
         max_seeding_time: seeding_time_limit,
         name,
@@ -588,6 +616,20 @@ pub(super) async fn h_torrents_files(
         })
         .unwrap_or_default();
     let use_rel_names = rel_names.len() == details_files.len();
+    // Inclusive [first, last] piece indices, as upstream reports them.
+    let piece_ranges: Vec<[u32; 2]> = handle
+        .with_metadata(|metadata| {
+            metadata
+                .file_infos
+                .iter()
+                .map(|fi| {
+                    let r = &fi.piece_range;
+                    [r.start, r.end.saturating_sub(1).max(r.start)]
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let use_piece_ranges = piece_ranges.len() == details_files.len();
     let files: Vec<QbitFileInfo> = details_files
         .iter()
         .enumerate()
@@ -611,7 +653,11 @@ pub(super) async fn h_torrents_files(
                 progress,
                 priority: if f.included { 1 } else { 0 },
                 is_seed,
-                piece_range: [0, 0],
+                piece_range: if use_piece_ranges {
+                    piece_ranges[i]
+                } else {
+                    [0, 0]
+                },
                 availability: if progress >= 1.0 { 1.0 } else { progress },
             }
         })

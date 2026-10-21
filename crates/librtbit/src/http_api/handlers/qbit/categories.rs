@@ -31,34 +31,60 @@ pub(super) struct CreateCategoryForm {
     pub(super) save_path: String,
 }
 
+/// Upstream rejects names with a leading or trailing `/`, or an empty path
+/// segment (`a//b`).
+pub(super) fn is_valid_category_name(name: &str) -> bool {
+    !name.is_empty() && !name.starts_with('/') && !name.ends_with('/') && !name.contains("//")
+}
+
+/// `torrents/createCategory`: 400 for a missing or invalid name, 409 when the
+/// category already exists.
 pub(super) async fn h_create_category(
     State(state): State<Arc<QbitState>>,
     body: Bytes,
 ) -> impl IntoResponse {
     let form: CreateCategoryForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
     if form.category.is_empty() {
-        return qbit_error(StatusCode::BAD_REQUEST, "category name is required");
+        return qbit_error(StatusCode::BAD_REQUEST, "Category cannot be empty");
     }
-    let save_path = (!form.save_path.is_empty()).then(|| form.save_path.into());
-    match state
+    if !is_valid_category_name(&form.category) {
+        return qbit_error(StatusCode::BAD_REQUEST, "Incorrect category name");
+    }
+    if state
         .api_state
         .api
-        .api_create_or_edit_category(form.category, save_path)
-        .await
+        .session()
+        .categories()
+        .exists(&form.category)
     {
-        Ok(_) => (StatusCode::OK, "Ok.").into_response(),
-        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+        return qbit_error(StatusCode::CONFLICT, "Unable to create category");
     }
+    save_category(&state, form).await
 }
 
+/// `torrents/editCategory`: 400 for a missing name, 409 when the category
+/// does not exist. An empty `savePath` resets the category to the default.
 pub(super) async fn h_edit_category(
     State(state): State<Arc<QbitState>>,
     body: Bytes,
 ) -> impl IntoResponse {
     let form: CreateCategoryForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
     if form.category.is_empty() {
-        return qbit_error(StatusCode::BAD_REQUEST, "category name is required");
+        return qbit_error(StatusCode::BAD_REQUEST, "Category cannot be empty");
     }
+    if !state
+        .api_state
+        .api
+        .session()
+        .categories()
+        .exists(&form.category)
+    {
+        return qbit_error(StatusCode::CONFLICT, "Unable to edit category");
+    }
+    save_category(&state, form).await
+}
+
+async fn save_category(state: &QbitState, form: CreateCategoryForm) -> axum::response::Response {
     let save_path = (!form.save_path.is_empty()).then(|| form.save_path.into());
     match state
         .api_state
@@ -67,7 +93,7 @@ pub(super) async fn h_edit_category(
         .await
     {
         Ok(_) => (StatusCode::OK, "Ok.").into_response(),
-        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+        Err(error) => qbit_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }
 }
 

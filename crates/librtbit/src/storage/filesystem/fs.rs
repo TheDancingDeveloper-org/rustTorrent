@@ -88,6 +88,10 @@ impl FilesystemStorage {
 }
 
 impl TorrentStorage for FilesystemStorage {
+    fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
     fn pread_exact(&self, file_id: usize, offset: u64, buf: &mut [u8]) -> anyhow::Result<()> {
         self.opened_files
             .get(file_id)
