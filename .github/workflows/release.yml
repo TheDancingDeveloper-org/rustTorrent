@@ -31,7 +31,7 @@ jobs:
     # the toolchain, the profile environment and the artefact names in step.
     # Each target's profile environment is exported in its own step, so one
     # target's flags never reach the other build.
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, rust-heavy]
     env:
       CARGO_BUILD_JOBS: 1
     steps:
@@ -117,7 +117,7 @@ jobs:
     # Only this job can mint the OIDC token used for the provenance attestation
     # and the keyless cosign signature.
     needs: build
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, rust-heavy]
     permissions:
       contents: read
       id-token: write
@@ -201,7 +201,7 @@ jobs:
   # winget, Flatpak) hang off this job as further steps.
   channels:
     needs: sign
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, rust-heavy]
     permissions:
       contents: read
     steps:
@@ -298,7 +298,7 @@ jobs:
 
   publish:
     needs: [build, sign, channels]
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, rust-heavy]
     permissions:
       contents: write
     outputs:
@@ -386,7 +386,7 @@ jobs:
   submit:
     needs: publish
     if: needs.publish.outputs.prerelease == 'false'
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, rust-heavy]
     permissions:
       contents: read
     strategy:
