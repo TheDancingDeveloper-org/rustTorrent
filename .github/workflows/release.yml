@@ -32,7 +32,6 @@ jobs:
     # Each target's profile environment is exported in its own step, so one
     # target's flags never reach the other build.
     runs-on: [self-hosted, rust-heavy]
-    env:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
