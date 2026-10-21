@@ -51,20 +51,27 @@ GCP or spot labels.
 
 ## CodeQL runs on release builds only
 
-`codeql.yml` (advanced setup, `rust` and `javascript-typescript`) never runs on
-`pull_request`, `merge_group` or `push` to `main`. It runs for release builds
-only, from three callers:
+`codeql.yml` (advanced setup, `rust` and `javascript-typescript`) has no
+`pull_request`, `merge_group` or branch `push` trigger. It runs for release
+builds only, from three callers:
 
 | Release build | How CodeQL is triggered |
 |---|---|
 | `v*` tag pushed by hand (pre-release or stable) | `push` tag trigger in `codeql.yml` |
-| `:dev` image (`container.yml`, `dev` branch) | `codeql-dev` job calls `codeql.yml` with the commit SHA |
+| `:dev` image (`container.yml`, `main` branch) | `codeql-dev` job calls `codeql.yml` with `github.ref` |
 | Stable promotion (`promote-release.yml`) | `codeql` job calls `codeql.yml` with the stable tag |
 
 The stable tag is created with the workflow token, which fires no push event,
 so the promotion must call CodeQL explicitly. There is no `release:` trigger,
 which would double-run the tag builds. `workflow_dispatch` is available for a
 manual run, and the `ref` input chooses what to scan.
+
+A called workflow inherits the caller's ref, so `analyze` would otherwise
+upload a stable-tag scan as `refs/heads/main`. `codeql.yml` therefore resolves
+`inputs.ref` to a full `refs/...` ref (accepting `refs/...`, `heads/...`,
+`tags/...`, or a branch or tag name; empty means `github.ref`) and passes the
+checked-out commit (`git rev-parse HEAD`) as `sha`, so results are filed
+against the scanned tag or branch.
 
 GitHub's default CodeQL setup is turned off for this repository, so
 `codeql.yml` is the only code-scanning configuration. Results land in the
