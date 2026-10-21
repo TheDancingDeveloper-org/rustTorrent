@@ -1,0 +1,319 @@
+#!/usr/bin/env python3
+"""Import a qbit BT_backup directory into rustTorrent over the WebUI API v2 compat layer.
+
+Reads `<hash>.torrent` + `<hash>.fastresume` pairs and, unless `--apply` is given,
+only prints a JSON report of what would happen (dry run is the default).
+
+With `--apply` it:
+  1. creates any categories the backup uses that rustTorrent lacks,
+  2. adds each torrent STOPPED with the same save path, category and tags,
+     skipping info-hashes rustTorrent already has,
+  3. optionally (`--recheck`) rechecks the added torrents in throttled batches.
+
+The tool only reads the backup and talks HTTP; it never opens, moves or writes
+payload files. Credentials come from the environment
+(RUSTTORRENT_USERNAME / RUSTTORRENT_PASSWORD) or `--credentials-file`, never argv.
+
+Standard library only. See docs/migrating-from-qbit.md.
+"""
+import argparse
+import collections
+import hashlib
+import http.cookiejar
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+
+HEX = set("0123456789abcdef")
+
+
+# --- bencode -----------------------------------------------------------------
+
+def bdecode(data, i=0):
+    """Decode one bencoded value at `data[i:]`; return (value, end_index)."""
+    c = data[i:i + 1]
+    if c == b"i":
+        j = data.index(b"e", i)
+        return int(data[i + 1:j]), j + 1
+    if c == b"l":
+        i += 1
+        out = []
+        while data[i:i + 1] != b"e":
+            v, i = bdecode(data, i)
+            out.append(v)
+        return out, i + 1
+    if c == b"d":
+        i += 1
+        out = {}
+        while data[i:i + 1] != b"e":
+            k, i = bdecode(data, i)
+            v, i = bdecode(data, i)
+            out[k] = v
+        return out, i + 1
+    if not c.isdigit():
+        raise ValueError(f"invalid bencode at offset {i}")
+    j = data.index(b":", i)
+    n = int(data[i:j])
+    if j + 1 + n > len(data):
+        raise ValueError("truncated bencode string")
+    return data[j + 1:j + 1 + n], j + 1 + n
+
+
+def info_slice(data):
+    """Return the raw bytes of the top-level `info` dict of a .torrent file."""
+    if data[:1] != b"d":
+        raise ValueError("torrent is not a bencoded dict")
+    i = 1
+    while data[i:i + 1] != b"e":
+        k, i = bdecode(data, i)
+        start = i
+        _, i = bdecode(data, i)
+        if k == b"info":
+            return data[start:i]
+    raise ValueError("torrent has no info dict")
+
+
+def text(v):
+    return v.decode("utf-8", "replace") if isinstance(v, bytes) else (v or "")
+
+
+# --- backup reading ----------------------------------------------------------
+
+def read_backup(bt_dir):
+    """Parse every fastresume/torrent pair. Returns (entries, errors)."""
+    entries, errors = [], []
+    for fname in sorted(os.listdir(bt_dir)):
+        if not fname.endswith(".fastresume"):
+            continue
+        stem = fname[: -len(".fastresume")].lower()
+        tor_path = os.path.join(bt_dir, stem + ".torrent")
+        try:
+            with open(os.path.join(bt_dir, fname), "rb") as f:
+                fr, _ = bdecode(f.read())
+            if not os.path.exists(tor_path):
+                errors.append({"hash": stem, "error": "missing .torrent"})
+                continue
+            with open(tor_path, "rb") as f:
+                tor_bytes = f.read()
+            info_raw = info_slice(tor_bytes)
+            info, _ = bdecode(info_raw)
+            info_hash = hashlib.sha1(info_raw).hexdigest()
+            save_path = text(fr.get(b"qBt-savePath") or fr.get(b"save_path"))
+            entries.append({
+                "hash": info_hash,
+                "name": text(info.get(b"name")) or text(fr.get(b"qBt-name")),
+                "save_path": save_path,
+                "category": text(fr.get(b"qBt-category")),
+                "tags": [text(t) for t in fr.get(b"qBt-tags", [])],
+                "stopped_in_source": bool(fr.get(b"paused", 0) or fr.get(b"stopped", 0)),
+                "ratio_limit": fr.get(b"qBt-ratioLimit"),
+                "seeding_time_limit": fr.get(b"qBt-seedingTimeLimit"),
+                "torrent_path": tor_path,
+            })
+        except (OSError, ValueError, IndexError, KeyError) as e:
+            errors.append({"hash": stem, "error": repr(e)})
+    return entries, errors
+
+
+# --- API client --------------------------------------------------------------
+
+class ApiError(Exception):
+    pass
+
+
+class Client:
+    def __init__(self, base_url, timeout=30):
+        self.base = base_url.rstrip("/") + "/api/v2"
+        self.timeout = timeout
+        self.opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+
+    def _req(self, method, path, body=None, headers=None):
+        req = urllib.request.Request(self.base + path, data=body, method=method,
+                                     headers=headers or {})
+        try:
+            with self.opener.open(req, timeout=self.timeout) as resp:
+                return resp.status, resp.read()
+        except urllib.error.HTTPError as e:
+            raise ApiError(f"{method} {path}: HTTP {e.code} {e.read()[:200]!r}") from None
+        except urllib.error.URLError as e:
+            raise ApiError(f"{method} {path}: {e.reason}") from None
+
+    def get_json(self, path):
+        _, body = self._req("GET", path)
+        return json.loads(body or b"null")
+
+    def post_form(self, path, fields):
+        body = urllib.parse.urlencode(fields).encode()
+        return self._req("POST", path, body,
+                         {"Content-Type": "application/x-www-form-urlencoded"})
+
+    def post_multipart(self, path, fields, files):
+        boundary = uuid.uuid4().hex
+        parts = []
+        for k, v in fields.items():
+            parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"'
+                         f"\r\n\r\n{v}\r\n".encode())
+        for k, (fname, data) in files.items():
+            parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"; '
+                         f'filename="{fname}"\r\nContent-Type: application/x-bittorrent'
+                         "\r\n\r\n".encode() + data + b"\r\n")
+        parts.append(f"--{boundary}--\r\n".encode())
+        return self._req("POST", path, b"".join(parts),
+                         {"Content-Type": f"multipart/form-data; boundary={boundary}"})
+
+    def login(self, username, password):
+        _, body = self.post_form("/auth/login", {"username": username, "password": password})
+        if body.strip() != b"Ok.":
+            raise ApiError("login rejected")
+
+    def hashes(self):
+        return {t["hash"].lower() for t in self.get_json("/torrents/info") or []}
+
+    def categories(self):
+        return set((self.get_json("/torrents/categories") or {}).keys())
+
+
+# --- credentials -------------------------------------------------------------
+
+def load_credentials(path):
+    """Env wins; a credentials file holds `username=` / `password=` lines."""
+    user = os.environ.get("RUSTTORRENT_USERNAME")
+    pw = os.environ.get("RUSTTORRENT_PASSWORD")
+    if path:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                key, sep, val = line.strip().partition("=")
+                if not sep or key.startswith("#"):
+                    continue
+                if key.strip() == "username" and user is None:
+                    user = val.strip()
+                elif key.strip() == "password" and pw is None:
+                    pw = val.strip()
+    return user, pw
+
+
+# --- planning and applying ---------------------------------------------------
+
+def plan(entries, existing_hashes, existing_categories):
+    for e in entries:
+        e["status"] = "already-present" if e["hash"] in existing_hashes else "new"
+    wanted = {e["category"] for e in entries if e["category"] and e["status"] == "new"}
+    return sorted(wanted - existing_categories)
+
+
+def apply(client, entries, missing_categories, recheck, batch_size, batch_delay, log):
+    results = {"categories_created": [], "added": [], "failed": [], "rechecked": 0}
+    for cat in missing_categories:
+        client.post_form("/torrents/createCategory", {"category": cat})
+        results["categories_created"].append(cat)
+    for e in entries:
+        if e["status"] != "new":
+            continue
+        fields = {"savepath": e["save_path"], "stopped": "true", "paused": "true"}
+        if e["category"]:
+            fields["category"] = e["category"]
+        if e["tags"]:
+            fields["tags"] = ",".join(e["tags"])
+        try:
+            with open(e["torrent_path"], "rb") as f:
+                data = f.read()
+            client.post_multipart("/torrents/add", fields,
+                                  {"torrents": (e["hash"] + ".torrent", data)})
+            results["added"].append(e["hash"])
+            log(f"added {e['hash']} {e['name']}")
+        except (ApiError, OSError) as err:
+            results["failed"].append({"hash": e["hash"], "error": str(err)})
+    if recheck and results["added"]:
+        added = results["added"]
+        for i in range(0, len(added), batch_size):
+            if i:
+                time.sleep(batch_delay)
+            batch = added[i:i + batch_size]
+            client.post_form("/torrents/recheck", {"hashes": "|".join(batch)})
+            results["rechecked"] += len(batch)
+            log(f"recheck queued for {results['rechecked']}/{len(added)}")
+    return results
+
+
+def summarise(entries, errors, missing_categories):
+    return {
+        "total": len(entries),
+        "errors": len(errors),
+        "error_list": errors[:50],
+        "status": dict(collections.Counter(e["status"] for e in entries)),
+        "categories": dict(collections.Counter(e["category"] or "(none)" for e in entries)),
+        "missing_categories": missing_categories,
+        "save_path_roots": dict(collections.Counter(
+            "/".join(e["save_path"].rstrip("/").split("/")[:2]) or "(empty)" for e in entries)),
+        "stopped_in_source": sum(e["stopped_in_source"] for e in entries),
+        "tagged": sum(1 for e in entries if e["tags"]),
+        "with_custom_limits": sum(
+            1 for e in entries
+            if e["ratio_limit"] not in (None, -2000)
+            or e["seeding_time_limit"] not in (None, -2)),
+    }
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    p.add_argument("bt_backup", help="path to the BT_backup directory")
+    p.add_argument("--url", default=os.environ.get("RUSTTORRENT_URL", "http://127.0.0.1:3030"),
+                   help="rustTorrent base URL (env RUSTTORRENT_URL)")
+    p.add_argument("--credentials-file",
+                   help="file with username=/password= lines (env RUSTTORRENT_USERNAME/"
+                        "RUSTTORRENT_PASSWORD take precedence)")
+    p.add_argument("--apply", action="store_true",
+                   help="actually create categories and add torrents (default: dry run)")
+    p.add_argument("--dry-run", action="store_true", help="explicit dry run (the default)")
+    p.add_argument("--recheck", action="store_true", help="recheck added torrents in batches")
+    p.add_argument("--recheck-batch", type=int, default=10)
+    p.add_argument("--recheck-delay", type=float, default=30.0,
+                   help="seconds between recheck batches")
+    p.add_argument("--offline", action="store_true",
+                   help="dry run without contacting rustTorrent (everything counts as new)")
+    p.add_argument("--details", action="store_true", help="include per-torrent rows in the report")
+    args = p.parse_args(argv)
+    if args.apply and (args.dry_run or args.offline):
+        p.error("--apply cannot be combined with --dry-run or --offline")
+    if args.recheck_batch < 1:
+        p.error("--recheck-batch must be at least 1")
+
+    def log(msg):
+        print(msg, file=sys.stderr)
+
+    entries, errors = read_backup(args.bt_backup)
+    try:
+        if args.offline:
+            hashes, cats = set(), set()
+            client = None
+        else:
+            client = Client(args.url)
+            user, pw = load_credentials(args.credentials_file)
+            if user:
+                client.login(user, pw or "")
+            hashes, cats = client.hashes(), client.categories()
+        missing = plan(entries, hashes, cats)
+        report = {"mode": "apply" if args.apply else "dry-run",
+                  **summarise(entries, errors, missing)}
+        if args.apply:
+            report["result"] = apply(client, entries, missing, args.recheck,
+                                     args.recheck_batch, args.recheck_delay, log)
+    except ApiError as e:
+        log(f"error: {e}")
+        return 2
+    if args.details:
+        report["torrents"] = [{k: v for k, v in e.items() if k != "torrent_path"}
+                              for e in entries]
+    print(json.dumps(report, indent=1, default=str))
+    failed = report.get("result", {}).get("failed")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
