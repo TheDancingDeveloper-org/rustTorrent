@@ -115,7 +115,7 @@ jobs:
     # Only this job can mint the OIDC token used for the provenance attestation
     # and the keyless cosign signature.
     needs: build
-    runs-on: [self-hosted, rust-heavy]
+    runs-on: [self-hosted]
     permissions:
       contents: read
       id-token: write
@@ -199,7 +199,7 @@ jobs:
   # winget, Flatpak) hang off this job as further steps.
   channels:
     needs: sign
-    runs-on: [self-hosted, rust-heavy]
+    runs-on: [self-hosted]
     permissions:
       contents: read
     steps:
@@ -296,7 +296,7 @@ jobs:
 
   publish:
     needs: [build, sign, channels]
-    runs-on: [self-hosted, rust-heavy]
+    runs-on: [self-hosted, docker, publish]
     permissions:
       contents: write
     outputs:
@@ -387,7 +387,7 @@ jobs:
   submit:
     needs: publish
     if: needs.publish.outputs.prerelease == 'false'
-    runs-on: [self-hosted, rust-heavy]
+    runs-on: [self-hosted, docker, publish]
     permissions:
       contents: read
     strategy:
