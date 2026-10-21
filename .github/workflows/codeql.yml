@@ -1,12 +1,12 @@
 name: CodeQL
 
-# Code scanning runs only when a release build is cut, never on pull requests,
-# the merge queue or pushes to main. It is triggered three ways:
+# Code scanning runs only for tagged releases or a manual dispatch, never on
+# pull requests, the merge queue or pushes to a branch. It is triggered two
+# ways:
 #   - a `v*` tag push (a pre-release or a stable tag pushed by hand);
-#   - a call from container.yml for the :dev build (`github.ref` is passed);
 #   - a call from promote-release.yml for the stable tag, which is created with
 #     the workflow token and so fires no push event of its own.
-# `workflow_dispatch` is for a manual run. See docs/ci.md.
+# `workflow_dispatch` is for a manual run, including a dev build. See docs/ci.md.
 on:
   push:
     tags: ['v*']
