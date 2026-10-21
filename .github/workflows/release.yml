@@ -102,7 +102,7 @@ jobs:
             --override-filename rtbit-sbom
           mv crates/rtbit/rtbit-sbom.json "release-artifacts/rtbit-$tag-sbom.cdx.json"
           (cd release-artifacts && sha256sum rtbit-*) > "release-artifacts/SHA256SUMS-$tag.txt"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-artifacts
           path: release-artifacts/
@@ -121,7 +121,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.tag || github.ref_name }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-artifacts
           path: release-artifacts/
@@ -152,7 +152,7 @@ jobs:
           test -n "$tag"
           bash packaging/scripts/sign-windows.sh "$tag" release-artifacts
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: release-artifacts/rtbit-*
       # cosign-installer runs envsubst, which the self-hosted runners may not have.
@@ -185,7 +185,7 @@ jobs:
             --output-signature "$sums.sig" \
             --output-certificate "$sums.pem" \
             "$sums"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-artifacts-signed
           path: release-artifacts/
@@ -203,7 +203,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.tag || github.ref_name }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-artifacts-signed
           path: release-artifacts/
@@ -255,7 +255,7 @@ jobs:
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
           packaging/scripts/render-aur.sh "$tag" release-artifacts rendered/aur
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: channel-aur
           path: rendered/aur/
@@ -265,7 +265,7 @@ jobs:
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
           packaging/scripts/render-homebrew.sh "$tag" release-artifacts rendered/homebrew
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: channel-homebrew
           path: rendered/homebrew/
@@ -275,7 +275,7 @@ jobs:
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
           packaging/scripts/render-flatpak.sh "$tag" release-artifacts rendered/flatpak
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: channel-flatpak
           path: rendered/flatpak/
@@ -285,7 +285,7 @@ jobs:
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
           packaging/scripts/render-winget.sh "$tag" release-artifacts rendered/winget
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: channel-winget
           path: rendered/winget/
@@ -303,7 +303,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.tag || github.ref_name }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-artifacts-signed
           path: release-artifacts/
@@ -392,7 +392,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.publish.outputs.tag }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: channel-${{ matrix.channel }}
           path: rendered/
