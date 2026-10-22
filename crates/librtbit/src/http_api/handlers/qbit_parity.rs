@@ -1901,13 +1901,22 @@ async fn arr_test_connection_and_grab_flow() {
         .json();
     let files = files.as_array().unwrap();
     assert_eq!(files.len(), 2, "{files:?}");
-    // 60 000 bytes in 16 KiB pieces: four pieces, a.bin (40 000) spans 0..=2
-    // and sub/b.bin (20 000) spans 2..=3.
-    let mut ranges: Vec<Value> = files.iter().map(|f| f["piece_range"].clone()).collect();
-    ranges.sort_by_key(|r| r[0].as_u64());
-    assert_eq!(
-        ranges,
-        vec![serde_json::json!([0, 2]), serde_json::json!([2, 3])]
+    // 60 000 bytes in 16 KiB pieces: four pieces. The file order in the
+    // torrent follows the directory walk, so either file may come first:
+    // a.bin (40 000) then sub/b.bin gives [0, 2], [2, 3]; the reverse gives
+    // [0, 1], [1, 3] with a.bin second.
+    let range_of = |suffix: &str| {
+        files
+            .iter()
+            .find(|f| f["name"].as_str().is_some_and(|n| n.ends_with(suffix)))
+            .map(|f| f["piece_range"].clone())
+            .unwrap_or_else(|| panic!("no {suffix} in {files:?}"))
+    };
+    let (a, b) = (range_of("a.bin"), range_of("b.bin"));
+    assert!(
+        (a == serde_json::json!([0, 2]) && b == serde_json::json!([2, 3]))
+            || (b == serde_json::json!([0, 1]) && a == serde_json::json!([1, 3])),
+        "a.bin {a}, b.bin {b}"
     );
 
     // setCategory to an unknown category is a 409 and leaves it alone.
