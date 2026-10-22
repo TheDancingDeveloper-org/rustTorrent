@@ -34,7 +34,7 @@ use size_format::SizeFormatterBinary as SF;
 use tokio_util::sync::CancellationToken;
 
 mod config_file;
-use tracing::{debug_span, error, info, trace_span, warn};
+use tracing::{debug, debug_span, error, info, trace_span, warn};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum LogFormatArg {
@@ -1510,7 +1510,7 @@ async fn stats_printer(session: Arc<Session>) -> Result<(), &'static str> {
                         let total = stats.total_bytes;
                         let progress = stats.progress_bytes;
                         let pct =  (progress as f64 / total as f64) * 100f64;
-                        info!("[{}] initializing {:.2}%", idx, pct);
+                        debug!("[{}] initializing {:.2}%", idx, pct);
                         continue;
                     }
                     let (live, live_stats) = match (torrent.live(), stats.live.as_ref()) {
@@ -1532,7 +1532,7 @@ async fn stats_printer(session: Arc<Session>) -> Result<(), &'static str> {
                         None => String::new()
                     };
                     let peer_stats = &live_stats.snapshot.peer_stats;
-                    info!(
+                    debug!(
                         "[{}]: {:.2}% ({:.2} / {:.2}), ↓{:.2} MiB/s, ↑{:.2} MiB/s ({:.2}){}, {{live: {}, queued: {}, dead: {}, known: {}}}",
                         idx,
                         downloaded_pct,

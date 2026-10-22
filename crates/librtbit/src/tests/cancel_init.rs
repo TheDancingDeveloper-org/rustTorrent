@@ -137,14 +137,24 @@ async fn test_pause_during_initialization() -> anyhow::Result<()> {
     match pause_result {
         Ok(()) => {
             info!("pause succeeded during initialization");
-            // After pause, the torrent should be in Error state
-            // (with "paused during initialization" message) and paused flag set.
             assert!(handle.is_paused(), "torrent should be marked as paused");
 
+            // Stopping the check leaves the torrent stopped with its check
+            // deferred (or paused, if the check won the race), never errored.
             let state_name = handle.with_state(|s| s.name().to_string());
-            // It should be "error" (from the pause-during-init transition)
-            // or "paused"/"live" if init completed before we paused.
-            info!("state after pause: {state_name}");
+            info!("state after pause: {state_name} {:?}", handle.stats().error);
+            assert_ne!(state_name, "error");
+            assert!(matches!(
+                handle.stats().state,
+                crate::torrent_state::stats::TorrentStatsState::Paused
+            ));
+
+            // Starting it again runs the check and brings it up.
+            session.unpause(&handle).await?;
+            timeout(Duration::from_secs(30), handle.wait_until_initialized())
+                .await
+                .context("timed out re-initializing after stop")??;
+            assert_ne!(handle.with_state(|s| s.name()), "error");
         }
         Err(e) => {
             // If the torrent already finished initialization, pause would succeed

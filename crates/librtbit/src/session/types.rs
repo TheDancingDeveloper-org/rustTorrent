@@ -93,6 +93,13 @@ pub struct AddTorrentOptions {
     /// Start in paused state.
     #[serde(default)]
     pub paused: bool,
+    /// With `paused`, don't hash-check the payload until the torrent is
+    /// started or rechecked: the torrent reports as stopped with nothing
+    /// verified. Bulk imports onto existing (possibly read-only) payloads use
+    /// this so adding hundreds of torrents doesn't start hundreds of checks.
+    /// A restart re-adds the torrent paused and checks it as usual.
+    #[serde(default)]
+    pub defer_initial_check: bool,
     /// Store incomplete files under `.part` names. `None` follows the session
     /// setting (see `Session::set_use_part_files`). Restored torrents set this
     /// to the choice they were added with.

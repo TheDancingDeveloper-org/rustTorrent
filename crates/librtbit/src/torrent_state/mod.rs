@@ -671,6 +671,8 @@ impl ManagedTorrent {
                 }
                 ManagedTorrentState::Initializing(init) => {
                     let init = init.clone();
+                    init.deferred
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
                     let t = t.clone();
                     let span = t.shared().span.clone();
                     let token = token.clone();
@@ -692,9 +694,13 @@ impl ManagedTorrent {
                                 .store(false, std::sync::atomic::Ordering::Relaxed);
 
                             match init.check().await {
-                                Ok(paused) => {
+                                Ok(chunk_tracker) => {
                                     let mut g = t.locked.write();
-                                    if let ManagedTorrentState::Initializing(_) = &g.state {
+                                    // A stop during the check swaps in a
+                                    // fresh initializer; this result is stale.
+                                    if let ManagedTorrentState::Initializing(current) = &g.state
+                                        && Arc::ptr_eq(current, &init)
+                                    {
                                     } else {
                                         debug!(
                                             "no need to start torrent anymore, as it switched state from initializing"
@@ -702,13 +708,31 @@ impl ManagedTorrent {
                                         return Ok(());
                                     }
 
+                                    let paused = match init.make_paused(chunk_tracker) {
+                                        Ok(paused) => paused,
+                                        Err(err) => {
+                                            let result = anyhow::anyhow!("{err:?}");
+                                            g.state = ManagedTorrentState::Error(err);
+                                            t.state_change_notify.notify_waiters();
+                                            return Err(result);
+                                        }
+                                    };
                                     g.state = ManagedTorrentState::Paused(paused);
                                     t.state_change_notify.notify_waiters();
                                     _start(&t, peer_rx, start_paused, session, Some(g), token)
                                 }
                                 Err(err) => {
                                     let result = anyhow::anyhow!("{err:?}");
-                                    t.locked.write().state = ManagedTorrentState::Error(err);
+                                    let mut g = t.locked.write();
+                                    // A stop cancels the check; the stopped
+                                    // state it left must not become an error.
+                                    if !matches!(&g.state, ManagedTorrentState::Initializing(current) if Arc::ptr_eq(current, &init))
+                                    {
+                                        debug!("check stopped: {err:#}");
+                                        return Ok(());
+                                    }
+                                    g.state = ManagedTorrentState::Error(err);
+                                    drop(g);
                                     t.state_change_notify.notify_waiters();
                                     Err(result)
                                 }
@@ -837,6 +861,15 @@ impl ManagedTorrent {
             .context("torrent metadata was not loaded")?;
         let mut locked = self.locked.write();
         let (files, resume_after_check) = match locked.state.take() {
+            ManagedTorrentState::Initializing(initializing) if initializing.is_deferred() => {
+                match initializing.files.take() {
+                    Ok(files) => (files, false),
+                    Err(error) => {
+                        locked.state = ManagedTorrentState::Initializing(initializing);
+                        return Err(error);
+                    }
+                }
+            }
             ManagedTorrentState::Initializing(initializing) => {
                 locked.state = ManagedTorrentState::Initializing(initializing);
                 bail!("torrent is already checking")
@@ -912,13 +945,27 @@ impl ManagedTorrent {
                 self.state_change_notify.notify_waiters();
                 Ok(())
             }
-            ManagedTorrentState::Initializing(_) => {
+            ManagedTorrentState::Initializing(init) if init.is_deferred() => {
+                g.paused = true;
+                Ok(())
+            }
+            ManagedTorrentState::Initializing(init) => {
                 // Cancel the init task via the per-torrent cancellation token,
                 // then reset the token so the torrent can be restarted later.
-                // Transition to Error state so it can be re-initialized on unpause.
+                // The torrent goes back to a deferred check on the same storage
+                // handles, so it reports stopped and checks again when started.
+                // The cancelled check only takes the handles under this lock,
+                // and only while it is still the current initializer.
                 self.shared.cancel_and_reset_token();
-                g.state =
-                    ManagedTorrentState::Error(anyhow::anyhow!("paused during initialization"));
+                let files = init.files.take();
+                g.state = match files
+                    .and_then(|f| self.new_deferred_initializing(g.only_files.clone(), f))
+                {
+                    Ok(init) => ManagedTorrentState::Initializing(init),
+                    Err(e) => ManagedTorrentState::Error(
+                        e.context("error keeping storage after stopping the check"),
+                    ),
+                };
                 g.paused = true;
                 self.state_change_notify.notify_waiters();
                 Ok(())
@@ -931,6 +978,32 @@ impl ManagedTorrent {
             }
             ManagedTorrentState::None => bail!("bug: torrent is in empty state"),
         }
+    }
+
+    fn new_deferred_initializing(
+        &self,
+        only_files: Option<Vec<usize>>,
+        files: crate::type_aliases::FileStorage,
+    ) -> anyhow::Result<Arc<TorrentStateInitializing>> {
+        let metadata = self
+            .metadata
+            .load_full()
+            .context("torrent metadata was not loaded")?;
+        let init =
+            TorrentStateInitializing::new(self.shared.clone(), metadata, only_files, files, false);
+        init.deferred.store(true, Ordering::Relaxed);
+        Ok(Arc::new(init))
+    }
+
+    /// Keep a newly added, paused torrent stopped without checking it: the
+    /// check runs when the torrent is started or rechecked.
+    pub(crate) fn defer_initial_check(&self) {
+        let mut g = self.locked.write();
+        g.paused = true;
+        if let ManagedTorrentState::Initializing(init) = &g.state {
+            init.deferred.store(true, Ordering::Relaxed);
+        }
+        self.state_change_notify.notify_waiters();
     }
 
     /// Bytes uploaded across every run of this torrent, including the current one.
@@ -965,6 +1038,10 @@ impl ManagedTorrent {
         resp.uploaded_bytes = self.shared.uploaded_bytes_base.load(Ordering::Relaxed);
         self.with_state(|s| {
             match s {
+                // Stopped before its check: nothing is verified yet.
+                ManagedTorrentState::Initializing(i) if i.is_deferred() => {
+                    resp.state = S::Paused;
+                }
                 ManagedTorrentState::Initializing(i) => {
                     resp.state = S::Initializing;
                     resp.progress_bytes = i.checked_bytes.load(Ordering::Relaxed);
@@ -1016,7 +1093,7 @@ impl ManagedTorrent {
             // TODO: rewrite, this polling is horrible
             loop {
                 let done = self.with_state(|s| match s {
-                    ManagedTorrentState::Initializing(_) => Ok(false),
+                    ManagedTorrentState::Initializing(i) => Ok(i.is_deferred()),
                     ManagedTorrentState::Error(e) => bail!("{e:?}"),
                     ManagedTorrentState::None => bail!("bug: torrent state is None"),
                     _ => Ok(true),

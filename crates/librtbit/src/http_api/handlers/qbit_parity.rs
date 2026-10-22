@@ -817,6 +817,101 @@ async fn filter_count(router: &axum::Router, filter: &str) -> usize {
         .unwrap_or_else(|| panic!("{list}"))
 }
 
+/// A stopped add onto an existing payload on read-only storage (the bulk
+/// import case) reports stopped straight away without checking or touching the
+/// payload, survives a stop, and a recheck then finds it complete.
+#[tokio::test]
+async fn stopped_add_on_read_only_storage_defers_the_check() {
+    use crate::storage::{StorageFactoryExt, filesystem::FilesystemStorageFactory};
+
+    let output = tempfile::TempDir::with_prefix("qbit_parity_ro").unwrap();
+    let session = Session::new_with_opts(
+        output.path().to_owned(),
+        SessionOptions {
+            disable_dht: true,
+            disable_trackers: true,
+            disable_local_service_discovery: true,
+            default_storage_factory: Some(FilesystemStorageFactory::read_only().boxed()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let api = Api::new(
+        session.clone(),
+        None,
+        #[cfg(feature = "tracing-subscriber-utils")]
+        None,
+    );
+    let router = super::qbit::make_qbit_router(Arc::new(HttpApi::new(
+        api,
+        Some(HttpApiOptions {
+            allow_create: true,
+            ..Default::default()
+        }),
+    )));
+
+    let torrent = make_payload_torrent(output.path()).await;
+    let payload = output.path().join("payload").join("a.bin");
+    let modified = std::fs::metadata(&payload).unwrap().modified().unwrap();
+    let save_path = output.path().to_string_lossy().into_owned();
+    let boundary = "qbitReadOnlyBoundary";
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("/torrents/add")
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(axum::body::Body::from(multipart_add_body(
+            boundary,
+            &torrent,
+            &[("savepath", &save_path), ("paused", "true")],
+        )))
+        .unwrap();
+    let added = send(&router, request).await;
+    assert_eq!((added.status, added.text()), (StatusCode::OK, "Ok."));
+
+    // Stopped from the first look, and it stays that way: no check runs.
+    for _ in 0..10 {
+        let list = get(&router, "/torrents/info").await.json();
+        assert_eq!(state_of(&list[0]), "stoppedDL", "{list}");
+        assert_eq!(list[0]["progress"], 0.0, "{list}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let list = get(&router, "/torrents/info").await.json();
+    let hash = list[0]["hash"].as_str().unwrap().to_owned();
+    let form = [("hashes", hash.as_str())];
+
+    // Stopping a torrent whose check is deferred leaves it stopped, not errored.
+    assert_eq!(
+        post_form(&router, "/torrents/stop", &form).await.text(),
+        "Ok."
+    );
+    let list = get(&router, "/torrents/info").await.json();
+    assert_eq!(state_of(&list[0]), "stoppedDL", "{list}");
+
+    // A recheck verifies the payload in place and keeps the torrent stopped.
+    assert_eq!(
+        post_form(&router, "/torrents/recheck", &form).await.text(),
+        "Ok."
+    );
+    let mut last = Value::Null;
+    for _ in 0..400 {
+        last = get(&router, "/torrents/info").await.json()[0].clone();
+        if state_of(&last) == "stoppedUP" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(state_of(&last), "stoppedUP", "{last}");
+    assert_eq!(last["progress"], 1.0, "{last}");
+    assert_eq!(
+        std::fs::metadata(&payload).unwrap().modified().unwrap(),
+        modified
+    );
+}
+
 /// add -> stop -> start -> recheck -> setCategory -> delete, driven entirely
 /// through the compat router against a real session, asserting what a client
 /// would observe through `torrents/info` after each step.
@@ -1538,7 +1633,9 @@ async fn bridge_endpoints_through_compat_router() {
         .as_str()
         .unwrap()
         .to_owned();
-    // The payload is already on disk, so the initial check finds it complete.
+    // A stopped add is not checked until rechecked; the payload is already
+    // on disk, so the recheck finds it complete.
+    post_form(&router, "/torrents/recheck", &[("hashes", hash.as_str())]).await;
     wait_for_info(&router, info_contract, &hash, "fully checked", |t| {
         t["progress"].as_f64() == Some(1.0)
     })
@@ -1876,6 +1973,8 @@ async fn arr_test_connection_and_grab_flow() {
         .json();
     assert_eq!(listed.as_array().map(Vec::len), Some(1), "{listed}");
     let hash = listed[0]["hash"].as_str().unwrap().to_owned();
+    // A stopped add is not checked until rechecked.
+    post_form(&router, "/torrents/recheck", &[("hashes", hash.as_str())]).await;
     let info = wait_for_info(&router, info_contract, &hash, "checked complete", |t| {
         state_of(t) == "stoppedUP" && t["progress"] == 1.0
     })

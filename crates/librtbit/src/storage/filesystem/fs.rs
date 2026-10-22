@@ -172,7 +172,11 @@ impl TorrentStorage for FilesystemStorage {
     fn ensure_file_length(&self, file_id: usize, len: u64) -> anyhow::Result<()> {
         let f = &self.opened_files.get(file_id).context("no such file")?;
         if self.read_only {
-            let actual = f.lock_read()?.metadata()?.len();
+            // A missing file has no open handle on read-only storage.
+            let Ok(file) = f.lock_read() else {
+                anyhow::bail!("filesystem storage is read-only and the file is missing")
+            };
+            let actual = file.metadata()?.len();
             if actual != len {
                 anyhow::bail!(
                     "filesystem storage is read-only and file length is {actual}, expected {len}"

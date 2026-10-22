@@ -109,6 +109,8 @@ pub(super) async fn h_torrents_add(
 
     let base_opts = || AddTorrentOptions {
         paused,
+        // A stopped add is not checked until it is started or rechecked.
+        defer_initial_check: paused,
         overwrite: true,
         category: category.clone(),
         tags: tags.clone(),
