@@ -71,7 +71,7 @@ upnp-serve = { workspace = true, optional = true }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "macros", "postgres"], optional = true }
 home = { version = "0.5", optional = true }
 chrono = { version = "0.4", features = ["serde"] }
-feed-rs = "2"
+feed-rs = "3"
 # Only used by the optional `rss` feature. Optional so SQLite isn't linked twice
 # when a consumer (e.g. crossseed via sqlx) already links it — see the `rss`
 # feature note above.
