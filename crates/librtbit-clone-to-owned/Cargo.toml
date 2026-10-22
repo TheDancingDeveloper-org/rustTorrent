@@ -1,6 +1,6 @@
 [package]
 name = "swarmforge-clone-to-owned"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 edition = "2024"
 description = "Util traits to represent something that can be made owned and change type at the same time"
 license = "Apache-2.0"
