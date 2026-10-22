@@ -7,6 +7,7 @@ mod types;
 
 pub use on_complete::{CompletedTorrent, OnCompleteHook};
 pub(crate) use scheduler::PolicyFlags;
+#[cfg(any(feature = "http-api", test))]
 pub use scheduler::QueueMove;
 pub use scheduler::ShareLimits;
 use scheduler::encode_limit;
