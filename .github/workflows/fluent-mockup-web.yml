@@ -1,0 +1,31 @@
+name: Fluent mockup (web build)
+
+# Builds the static Fluent 2 mockup (crates/rtbit-fluent-mockup) for the browser with trunk,
+# the way fluent2-egui's gallery `pages.yml` does, and uploads the bundle as an artifact.
+# Manual only: it is a design preview, not part of the release or the required checks.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: "1.95"
+          targets: wasm32-unknown-unknown
+      # The version fluent2-egui's gallery deploys with.
+      - name: Install trunk
+        run: cargo install --locked trunk --version 0.21.14
+      - name: Build with trunk
+        working-directory: crates/rtbit-fluent-mockup
+        run: trunk build index.html --release --public-url ./
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rtbit-fluent-mockup-web
+          path: crates/rtbit-fluent-mockup/dist
