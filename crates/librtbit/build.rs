@@ -73,5 +73,39 @@ fn main() {
         // keep the deterministic build command fail-fast.
         run_cmd_with_retry(webui_dir, "npm ci --no-audit --no-fund", 3).unwrap();
         run_cmd(webui_dir, "npm run build").unwrap();
+
+        write_webui_asset_table(webui_dir).unwrap();
     }
+}
+
+/// Embed every file Vite emitted under `dist/assets`, including the hashed
+/// code-split chunks of lazy pages, so none of them is served as a 404.
+#[allow(dead_code)]
+fn write_webui_asset_table(webui_dir: &Path) -> anyhow::Result<()> {
+    let assets_dir = std::fs::canonicalize(webui_dir.join("dist").join("assets"))
+        .context("webui dist/assets missing after build")?;
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(&assets_dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            names.push(
+                entry
+                    .file_name()
+                    .into_string()
+                    .map_err(|n| anyhow::anyhow!("non-UTF-8 asset file name {n:?}"))?,
+            );
+        }
+    }
+    names.sort();
+    let mut out = String::from("&[\n");
+    for name in &names {
+        out.push_str(&format!(
+            "    ({name:?}, include_bytes!({:?})),\n",
+            assets_dir.join(name)
+        ));
+    }
+    out.push_str("]\n");
+    let out_path = Path::new(&std::env::var("OUT_DIR")?).join("webui_assets.rs");
+    std::fs::write(out_path, out)?;
+    Ok(())
 }
