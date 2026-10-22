@@ -48,6 +48,15 @@ fn now() -> Instant {
     Instant::now()
 }
 
+/// Per-request failures are routine on a live DHT, and a response timeout is
+/// the most common one. Keep those at TRACE so they don't flood the debug log.
+fn log_request_error(e: &Error) {
+    match e {
+        Error::ResponseTimeout(_) => trace!("error: {e:#}"),
+        _ => debug!("error: {e:#}"),
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct DhtStats {
     #[serde(serialize_with = "crate::utils::serialize_id20")]
@@ -311,7 +320,7 @@ impl RecursiveRequest<RecursiveRequestCallbacksFindNodes> {
         let request_one = |id, addr, depth| {
             req.request_one(id, addr, depth)
                 .map_err(|e| {
-                    debug!("error: {e:#}");
+                    log_request_error(&e);
                     e
                 })
                 .instrument(debug_span!(
@@ -407,7 +416,7 @@ impl RecursiveRequest<RecursiveRequestCallbacksGetPeers> {
                             let Some((id, addr, depth)) = addr else { break Ok(()) };
                             futs.push(
                                 this.request_one(id, addr, depth)
-                                    .map_err(|e| debug!("error: {e:#}"))
+                                    .map_err(|e| log_request_error(&e))
                                     .instrument(debug_span!("addr", addr=addr.to_string()))
                             );
                         }
@@ -1230,7 +1239,7 @@ impl DhtWorker {
                             },
                             Err(e) => {
                                 table.write().mark_error(&id);
-                                debug!("error: {e:#}");
+                                log_request_error(&e);
                             }
                         }
                     }.instrument(debug_span!("ping", addr=addr.to_string())))

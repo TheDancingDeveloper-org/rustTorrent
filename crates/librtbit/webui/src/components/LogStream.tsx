@@ -11,7 +11,15 @@ import { loopUntilSuccess } from "../helper/loopUntilSuccess";
 import debounce from "lodash.debounce";
 import { LogLine } from "./LogLine";
 import { JSONLogLine } from "../api-types";
-import { Virtuoso } from "react-virtuoso";
+import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
+import {
+  DEFAULT_ENABLED_LEVELS,
+  LOG_BUFFER_CAP,
+  LOG_LEVELS,
+  linesSincePause,
+  prependBounded,
+  visibleLines,
+} from "../helper/logStreamBuffer";
 
 interface LogStreamProps {
   url: string;
@@ -45,8 +53,6 @@ export interface Line {
   parsed: JSONLogLine;
   show: boolean;
 }
-
-const LOG_LEVELS = ["TRACE", "DEBUG", "INFO", "WARN", "ERROR"] as const;
 
 const levelButtonActiveClass = (level: string): string => {
   switch (level) {
@@ -136,7 +142,7 @@ const streamLogs = (
 
       buffer = mergeBuffers(buffer, value);
 
-      for (let newLineIdx: number; (newLineIdx = buffer.indexOf(10)) !== -1; ) {
+      for (let newLineIdx: number; (newLineIdx = buffer.indexOf(10)) !== -1;) {
         const lineBytes = buffer.slice(0, newLineIdx);
         const line = new TextDecoder().decode(lineBytes);
         addLine(line);
@@ -185,40 +191,57 @@ export const LogStream: React.FC<LogStreamProps> = ({
   const [filter, setFilter] = useState<string>("");
   const filterRegex = useRef<RegExp | null>(null);
   const [enabledLevels, setEnabledLevels] = useState<Set<string>>(
-    new Set(["TRACE", "DEBUG", "INFO", "WARN", "ERROR"]),
+    () => new Set(DEFAULT_ENABLED_LEVELS),
   );
+  // Newest id on screen while paused; null while live.
+  const [pausedAt, setPausedAt] = useState<number | null>(null);
 
-  const maxL = maxLines ?? 1000;
+  const maxL = Math.min(maxLines ?? LOG_BUFFER_CAP, LOG_BUFFER_CAP);
 
-  const toggleLevel = useCallback((level: string) => {
-    setEnabledLevels((prev) => {
-      const next = new Set(prev);
-      if (next.has(level)) next.delete(level);
-      else next.add(level);
-      return next;
-    });
-  }, []);
+  // Lines arrive one event at a time. They are collected here and flushed
+  // once per animation frame, so a burst costs one state update and one
+  // render rather than one of each per line.
+  const nextIdRef = useRef(0);
+  const pendingRef = useRef<Line[]>([]);
+  const frameRef = useRef<number | null>(null);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const atTopRef = useRef(true);
+
+  const flush = useCallback(() => {
+    frameRef.current = null;
+    const batch = pendingRef.current;
+    if (batch.length === 0) {
+      return;
+    }
+    pendingRef.current = [];
+    // Pending lines are oldest first; the buffer is newest first.
+    batch.reverse();
+    setLogLines((prev) => prependBounded(prev, batch, maxL));
+  }, [maxL]);
 
   const addLine = useCallback(
     (text: string) => {
-      setLogLines((logLines: Line[]) => {
-        const nextLineId = logLines.length == 0 ? 0 : logLines[0].id + 1;
-        // Read filterRegex.current inside the state updater to avoid stale closure
-        const currentFilter = filterRegex.current;
-
-        const newLogLines = [
-          {
-            id: nextLineId,
-            content: text,
-            parsed: JSON.parse(text) as JSONLogLine,
-            show: currentFilter ? !!text.match(currentFilter) : true,
-          },
-          ...logLines.slice(0, maxL - 1),
-        ];
-        return newLogLines;
+      const currentFilter = filterRegex.current;
+      pendingRef.current.push({
+        id: nextIdRef.current++,
+        content: text,
+        parsed: JSON.parse(text) as JSONLogLine,
+        show: currentFilter ? !!text.match(currentFilter) : true,
       });
+      if (frameRef.current === null) {
+        frameRef.current = requestAnimationFrame(flush);
+      }
     },
-    [maxLines],
+    [flush],
+  );
+
+  useEffect(
+    () => () => {
+      if (frameRef.current !== null) {
+        cancelAnimationFrame(frameRef.current);
+      }
+    },
+    [],
   );
 
   const addLineRef = useRef(addLine);
@@ -252,16 +275,48 @@ export const LogStream: React.FC<LogStreamProps> = ({
     return streamLogs(url, (line) => addLineRef.current(line), setError);
   }, [url]);
 
+  const toggleLevel = useCallback((level: string) => {
+    setEnabledLevels((prev) => {
+      const next = new Set(prev);
+      if (next.has(level)) next.delete(level);
+      else next.add(level);
+      return next;
+    });
+  }, []);
+
+  const togglePause = useCallback(() => {
+    if (pausedAt === null) {
+      // Everything received so far, including lines not yet flushed, stays visible.
+      setPausedAt(nextIdRef.current - 1);
+    } else {
+      setPausedAt(null);
+      virtuosoRef.current?.scrollToIndex({ index: 0, behavior: "smooth" });
+    }
+  }, [pausedAt]);
+
+  // Newest lines sit at the top. Follow them only while the reader is already
+  // there and the view is live, so reading further down is never interrupted.
+  useEffect(() => {
+    if (pausedAt === null && atTopRef.current) {
+      virtuosoRef.current?.scrollToIndex({ index: 0 });
+    }
+  }, [logLines, pausedAt]);
+
   const filteredLines = useMemo(
     () =>
-      logLines.filter(
+      visibleLines(logLines, pausedAt).filter(
         (line) =>
           line.show &&
           enabledLevels.has(line.parsed.level) &&
           (!torrentFilter ||
             lineMatchesTorrent(line.parsed, line.content, torrentFilter)),
       ),
-    [logLines, enabledLevels, torrentFilter],
+    [logLines, pausedAt, enabledLevels, torrentFilter],
+  );
+
+  const newSincePause = useMemo(
+    () => linesSincePause(logLines, pausedAt),
+    [logLines, pausedAt],
   );
 
   const copyLogs = useCallback(() => {
@@ -281,6 +336,7 @@ export const LogStream: React.FC<LogStreamProps> = ({
   }, [filteredLines]);
 
   const levelBtnInactive = "bg-surface-sunken text-tertiary";
+  const controlBtn = "text-xs text-secondary hover:text-primary cursor-pointer";
 
   return (
     <div className="flex flex-col h-full">
@@ -306,17 +362,20 @@ export const LogStream: React.FC<LogStreamProps> = ({
         {/* Spacer */}
         <div className="flex-1" />
 
-        {/* Copy/Download */}
+        {/* Pause/Resume */}
         <button
-          onClick={copyLogs}
-          className="text-xs text-secondary hover:text-primary cursor-pointer"
+          onClick={togglePause}
+          aria-pressed={pausedAt !== null}
+          className={controlBtn}
         >
+          {pausedAt === null ? "Pause" : "Resume"}
+        </button>
+
+        {/* Copy/Download */}
+        <button onClick={copyLogs} className={controlBtn}>
           Copy
         </button>
-        <button
-          onClick={downloadLogs}
-          className="text-xs text-secondary hover:text-primary cursor-pointer"
-        >
+        <button onClick={downloadLogs} className={controlBtn}>
           Download
         </button>
       </div>
@@ -335,13 +394,19 @@ export const LogStream: React.FC<LogStreamProps> = ({
       <div className="text-xs text-tertiary mb-1">
         Showing {filteredLines.length} of {logLines.length} lines (last {maxL}{" "}
         since window opened)
+        {pausedAt !== null && (
+          <span className="ml-2 text-warning">Paused, {newSincePause} new</span>
+        )}
       </div>
 
-      {/* Virtualized log output */}
+      {/* Virtualized log output: only the rows in view are rendered. */}
       <div className="flex-1 min-h-0" style={{ minHeight: "300px" }}>
         <Virtuoso
+          ref={virtuosoRef}
           data={filteredLines}
-          followOutput="smooth"
+          atTopStateChange={(atTop) => {
+            atTopRef.current = atTop;
+          }}
           itemContent={(_, line) => <LogLine line={line.parsed} />}
         />
       </div>
