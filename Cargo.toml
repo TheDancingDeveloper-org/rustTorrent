@@ -107,7 +107,7 @@ leaky-bucket = "1.1"
 libc = "0.2"
 librqbit-dualstack-sockets = "0.7"
 librqbit-utp = "0.7"
-lru = "0.18"
+lru = "0.19"
 memchr = "2"
 memmap2 = "0.9"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
