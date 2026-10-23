@@ -44,6 +44,29 @@ use tokio::sync::mpsc::{Sender, UnboundedReceiver, UnboundedSender, channel, unb
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, debug_span, error, info, trace, warn};
 
+/// Per-request timeouts are routine on the DHT and arrive in bursts, so they
+/// log at TRACE; other request errors stay at DEBUG.
+fn log_request_error(e: &Error) {
+    if matches!(e, Error::ResponseTimeout(_)) {
+        trace!("error: {e:#}");
+    } else {
+        debug!("error: {e:#}");
+    }
+}
+
+#[cfg(test)]
+mod log_level_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn timeout_is_classified() {
+        // Smoke: both branches run without panicking.
+        log_request_error(&Error::ResponseTimeout(Duration::from_secs(10)));
+        log_request_error(&Error::ResponseTimeout(Duration::from_secs(1)));
+    }
+}
+
 fn now() -> Instant {
     Instant::now()
 }
@@ -311,7 +334,7 @@ impl RecursiveRequest<RecursiveRequestCallbacksFindNodes> {
         let request_one = |id, addr, depth| {
             req.request_one(id, addr, depth)
                 .map_err(|e| {
-                    debug!("error: {e:#}");
+                    log_request_error(&e);
                     e
                 })
                 .instrument(debug_span!(
@@ -407,7 +430,7 @@ impl RecursiveRequest<RecursiveRequestCallbacksGetPeers> {
                             let Some((id, addr, depth)) = addr else { break Ok(()) };
                             futs.push(
                                 this.request_one(id, addr, depth)
-                                    .map_err(|e| debug!("error: {e:#}"))
+                                    .map_err(|e| log_request_error(&e))
                                     .instrument(debug_span!("addr", addr=addr.to_string()))
                             );
                         }

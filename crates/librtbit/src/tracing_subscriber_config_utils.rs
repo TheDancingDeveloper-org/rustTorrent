@@ -172,6 +172,13 @@ fn open_log_file(
         .with_context(|| format!("error opening log file {:?}", path.display()))
 }
 
+/// The uTP socket warns "couldn't set UDP rcv buf size" on every start when the
+/// kernel caps the requested buffer (e.g. a container with the default
+/// `net.core.rmem_max`). It is harmless, so the default filters only show errors
+/// from that module; an explicit RUST_LOG still wins. To get the full buffer set
+/// `net.core.rmem_max` (see docs).
+const UTP_RCVBUF_QUIET: &str = "librqbit_utp::socket=error";
+
 #[inline(never)]
 pub fn init_logging(opts: InitLoggingOptions) -> anyhow::Result<InitLoggingResult> {
     if opts.log_file.is_none()
@@ -183,15 +190,24 @@ pub fn init_logging(opts: InitLoggingOptions) -> anyhow::Result<InitLoggingResul
         anyhow::bail!("--log-file-max-files needs --log-file-rotation hourly or daily");
     }
 
-    let stderr_filter = EnvFilter::builder()
-        .with_default_directive(
-            opts.default_rust_log_value
-                .unwrap_or("info")
-                .parse()
-                .context("can't parse provided rust_log value")?,
-        )
-        .from_env()
-        .context("invalid RUST_LOG value")?;
+    let stderr_filter = if std::env::var_os(EnvFilter::DEFAULT_ENV).is_some() {
+        EnvFilter::builder()
+            .with_default_directive(
+                opts.default_rust_log_value
+                    .unwrap_or("info")
+                    .parse()
+                    .context("can't parse provided rust_log value")?,
+            )
+            .from_env()
+            .context("invalid RUST_LOG value")?
+    } else {
+        EnvFilter::builder()
+            .parse(format!(
+                "{},{UTP_RCVBUF_QUIET}",
+                opts.default_rust_log_value.unwrap_or("info")
+            ))
+            .context("can't parse provided rust_log value")?
+    };
 
     let (stderr_filter, reload_stderr_filter) =
         tracing_subscriber::reload::Layer::new(stderr_filter);
@@ -205,7 +221,10 @@ pub fn init_logging(opts: InitLoggingOptions) -> anyhow::Result<InitLoggingResul
             Some(
                 fmt_layer(opts.log_format, appender, false).with_filter(
                     EnvFilter::builder()
-                        .parse(opts.log_file_rust_log.unwrap_or("info,librtbit=debug"))
+                        .parse(opts.log_file_rust_log.map_or_else(
+                            || format!("info,librtbit=debug,{UTP_RCVBUF_QUIET}"),
+                            str::to_owned,
+                        ))
                         .context("can't parse log-file-rust-log")?,
                 ),
             )

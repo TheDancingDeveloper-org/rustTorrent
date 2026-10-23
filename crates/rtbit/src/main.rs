@@ -34,7 +34,7 @@ use size_format::SizeFormatterBinary as SF;
 use tokio_util::sync::CancellationToken;
 
 mod config_file;
-use tracing::{debug_span, error, info, trace_span, warn};
+use tracing::{debug, debug_span, error, info, trace_span, warn};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum LogFormatArg {
@@ -772,8 +772,12 @@ fn main() -> anyhow::Result<()> {
     }
 
     let result = rt.block_on(async_main(opts, token.clone()));
-    if let Err(e) = result.as_ref() {
-        error!("error running rtbit: {e:?}");
+    match result.as_ref() {
+        Err(e) if librtbit_core::spawn_utils::is_cancelled(e) => {
+            info!("rtbit shut down: cancelled");
+        }
+        Err(e) => error!("error running rtbit: {e:?}"),
+        Ok(_) => {}
     }
     rt.shutdown_timeout(Duration::from_secs(1));
     match result {
@@ -1171,7 +1175,7 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
                         futures::future::join_all(handles.iter().map(|h| h.wait_until_completed()));
                     let results = tokio::select! {
                         _ = cancel.cancelled() => {
-                            bail!("cancelled");
+                            bail!(librtbit_core::spawn_utils::Cancelled);
                         },
                         r = results => r
                     };
@@ -1183,7 +1187,7 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
                 } else {
                     // Sleep forever.
                     cancel.cancelled().await;
-                    bail!("cancelled");
+                    bail!(librtbit_core::spawn_utils::Cancelled);
                 }
             } else {
                 anyhow::bail!("no torrents were added")
@@ -1493,7 +1497,7 @@ async fn start_http_api(
                 }
             }
             None => tokio::select! {
-                _ = cancel.cancelled() => bail!("cancelled"),
+                _ = cancel.cancelled() => bail!(librtbit_core::spawn_utils::Cancelled),
                 r = http_api_fut => r,
             },
         };
@@ -1502,15 +1506,28 @@ async fn start_http_api(
 }
 
 async fn stats_printer(session: Arc<Session>) -> Result<(), &'static str> {
+    // Per-torrent progress is logged at DEBUG every second; only state changes are logged at INFO.
+    let last_phase = std::cell::RefCell::new(std::collections::HashMap::new());
     loop {
         session.with_torrents(|torrents| {
+                let mut last_phase = last_phase.borrow_mut();
                 for (idx, torrent) in torrents {
                     let stats = torrent.stats();
+                    let phase = if matches!(stats.state, TorrentStatsState::Initializing) {
+                        "initializing"
+                    } else if stats.finished {
+                        "finished"
+                    } else {
+                        "active"
+                    };
+                    if last_phase.insert(idx, phase) != Some(phase) {
+                        info!("[{}] {}", idx, phase);
+                    }
                     if let TorrentStatsState::Initializing = stats.state {
                         let total = stats.total_bytes;
                         let progress = stats.progress_bytes;
                         let pct =  (progress as f64 / total as f64) * 100f64;
-                        info!("[{}] initializing {:.2}%", idx, pct);
+                        debug!("[{}] initializing {:.2}%", idx, pct);
                         continue;
                     }
                     let (live, live_stats) = match (torrent.live(), stats.live.as_ref()) {
@@ -1532,7 +1549,7 @@ async fn stats_printer(session: Arc<Session>) -> Result<(), &'static str> {
                         None => String::new()
                     };
                     let peer_stats = &live_stats.snapshot.peer_stats;
-                    info!(
+                    debug!(
                         "[{}]: {:.2}% ({:.2} / {:.2}), ↓{:.2} MiB/s, ↑{:.2} MiB/s ({:.2}){}, {{live: {}, queued: {}, dead: {}, known: {}}}",
                         idx,
                         downloaded_pct,

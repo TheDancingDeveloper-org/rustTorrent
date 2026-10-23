@@ -50,3 +50,21 @@ After five failed logins from one client address (or one IPv6 `/64`), that
 client gets `429 Too Many Requests` with `Retry-After`. The delay doubles up to
 one hour. The same limit applies to `/auth/login`, `/auth/change_credentials`,
 the qBittorrent-compatible login, and failed HTTP Basic auth.
+
+## uTP receive buffer (optional)
+
+uTP asks the kernel for a large UDP receive buffer. Inside a container the
+kernel caps it at `net.core.rmem_max` (default about 208 KiB), which is enough
+to run but can drop packets at high rates. The resulting "couldn't set UDP rcv
+buf size" warning from the uTP socket is hidden by the default log filter (set
+`RUST_LOG=librqbit_utp=warn` to see it). To get the full buffer, raise the
+limit, for example in compose:
+
+```yaml
+sysctls:
+  net.core.rmem_max: 33554432
+  net.core.rmem_default: 33554432
+```
+
+Some network modes (host networking, shared namespaces) reject per-container
+sysctls; set them on the host instead.
