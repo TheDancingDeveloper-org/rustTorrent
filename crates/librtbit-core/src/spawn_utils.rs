@@ -3,6 +3,21 @@ use std::{borrow::Cow, fmt::Display};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, error, trace};
 
+/// Error for work abandoned because shutdown was requested. It is expected,
+/// so it is logged without ERROR severity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("cancelled")]
+pub struct Cancelled;
+
+/// True if `e` is, or wraps, a [`Cancelled`].
+pub fn is_cancelled<E: std::any::Any>(e: &E) -> bool {
+    let any = e as &dyn std::any::Any;
+    any.downcast_ref::<Cancelled>().is_some()
+        || any
+            .downcast_ref::<anyhow::Error>()
+            .is_some_and(|e| e.downcast_ref::<Cancelled>().is_some())
+}
+
 /// Spawns a future with tracing instrumentation.
 #[track_caller]
 pub fn spawn<E: Display + Send + 'static>(
@@ -25,6 +40,9 @@ pub fn spawn<E: Display + Send + 'static>(
                     match r {
                         Ok(_) => {
                             trace!("finished");
+                        }
+                        Err(e) if is_cancelled(&e) => {
+                            debug!("{name} cancelled")
                         }
                         Err(e) => {
                             error!("{name} finished with error: {:#}", e)
@@ -55,4 +73,24 @@ pub fn spawn_with_cancel<E: Display + Send + 'static>(
             r = fut => r
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancelled_is_detected_directly_and_through_anyhow() {
+        assert!(is_cancelled(&Cancelled));
+        assert!(is_cancelled(&anyhow::Error::from(Cancelled)));
+        assert!(is_cancelled(
+            &anyhow::Error::from(Cancelled).context("while starting")
+        ));
+    }
+
+    #[test]
+    fn other_errors_are_not_cancellation() {
+        assert!(!is_cancelled(&anyhow::anyhow!("cancelled")));
+        assert!(!is_cancelled(&"boom".to_string()));
+    }
 }

@@ -156,7 +156,7 @@ impl TorrentStateInitializing {
                     .enumerate()
                 {
                     if token.is_cancelled() {
-                        anyhow::bail!("fastresume validation cancelled");
+                        return Err(librtbit_core::spawn_utils::Cancelled.into());
                     }
 
                     if fo.check_piece(piece_id).is_err() {
