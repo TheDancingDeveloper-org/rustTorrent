@@ -25,6 +25,7 @@ interface TorrentTableRowProps {
   consumeRowFocus: () => boolean;
   onRowFocus: (index: number) => void;
   onRowClick: (id: number, e: React.MouseEvent) => void;
+  onRowDoubleClick: (id: number) => void;
   onContextMenu: (id: number, e: React.MouseEvent) => void;
   onCheckboxChange: (id: number) => void;
   visibleColumns: ColumnDef[];
@@ -81,6 +82,7 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
   consumeRowFocus,
   onRowFocus,
   onRowClick,
+  onRowDoubleClick,
   onContextMenu,
   onCheckboxChange,
   visibleColumns,
@@ -516,6 +518,11 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
             if (e.target === e.currentTarget) onRowFocus(rowIndex);
           }}
           onMouseDown={handleRowClick}
+          onDoubleClick={(e) => {
+            // The selection checkbox has its own click handling
+            if ((e.target as HTMLElement).closest("input, button")) return;
+            onRowDoubleClick(torrent.id);
+          }}
           onContextMenu={handleContextMenu}
           className={`focus-ring cursor-pointer border-b border-divider/60 text-sm h-8 pointer-coarse:h-11 transition-colors ${
             isSelected
