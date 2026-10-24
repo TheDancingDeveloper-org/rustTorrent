@@ -1,6 +1,6 @@
 import { useMemo, useCallback, useEffect, useState, useRef } from "react";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
-import { TorrentListItem } from "../../api-types";
+import { TorrentLimits, TorrentListItem } from "../../api-types";
 import { TorrentTableRow } from "./TorrentTableRow";
 import { useUIStore } from "../../stores/uiStore";
 import { useColumnStore, ColumnDef, ColumnId } from "../../stores/columnStore";
@@ -16,6 +16,7 @@ import { ColumnMenu } from "./ColumnMenu";
 import { loadViewPref, oneOf, saveViewPref } from "../../helper/viewPrefs";
 import { nextSort } from "../../helper/sortToggle";
 import { TorrentContextMenu, ContextMenuState } from "../TorrentContextMenu";
+import { useTorrentLimits } from "../../hooks/useTorrentLimits";
 
 // Sort columns: all sortable column IDs
 const TABLE_SORT_COLUMNS = [
@@ -26,6 +27,8 @@ const TABLE_SORT_COLUMNS = [
   "downloadedBytes",
   "downSpeed",
   "upSpeed",
+  "downLimit",
+  "upLimit",
   "uploadedBytes",
   "eta",
   "peers",
@@ -68,6 +71,7 @@ const RESIZE_STEP_PX = 16;
 function getTableSortValue(
   t: TorrentListItem,
   column: TableSortColumn,
+  limits: Map<number, TorrentLimits>,
 ): number | string {
   switch (column) {
     case "id":
@@ -86,6 +90,11 @@ function getTableSortValue(
       return t.stats?.live?.download_speed?.mbps ?? 0;
     case "upSpeed":
       return t.stats?.live?.upload_speed?.mbps ?? 0;
+    case "downLimit":
+      // Unlimited (unset or 0) sorts above any finite limit
+      return limits.get(t.id)?.download_rate || Infinity;
+    case "upLimit":
+      return limits.get(t.id)?.upload_rate || Infinity;
     case "uploadedBytes":
       return t.stats?.live?.snapshot.uploaded_bytes ?? 0;
     case "eta": {
@@ -186,6 +195,16 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
 
   const normalizedQuery = searchQuery.toLowerCase().trim();
 
+  // Per-torrent speed limits, fetched only while a limit column is shown
+  const showLimits = visibleColumns.some(
+    (c) => c.id === "downLimit" || c.id === "upLimit",
+  );
+  const torrentIds = useMemo(
+    () => (torrents ?? []).map((t) => t.id),
+    [torrents],
+  );
+  const torrentLimits = useTorrentLimits(torrentIds, showLimits);
+
   // Local sorting state
   const [sortColumn, setSortColumnState] = useState<TableSortColumn>(
     () => loadViewPref("tableSort", DEFAULT_SORT_PREF, isTableSortPref).column,
@@ -251,8 +270,8 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
         ),
       )
       .sort((a, b) => {
-        const aVal = getTableSortValue(a, sortColumn);
-        const bVal = getTableSortValue(b, sortColumn);
+        const aVal = getTableSortValue(a, sortColumn, torrentLimits);
+        const bVal = getTableSortValue(b, sortColumn, torrentLimits);
         const cmp =
           typeof aVal === "string"
             ? aVal.localeCompare(bVal as string)
@@ -267,6 +286,7 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
     trackerFilter,
     sortColumn,
     sortDirection,
+    torrentLimits,
   ]);
 
   // Compute visible IDs for keyboard navigation
@@ -530,6 +550,7 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
           onContextMenu={handleRowContextMenu}
           onCheckboxChange={toggleSelection}
           visibleColumns={visibleColumns}
+          limits={torrentLimits.get(torrent.id)}
         />
       );
     },
