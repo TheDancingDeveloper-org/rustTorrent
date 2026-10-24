@@ -7,18 +7,20 @@ import { OverviewTab } from "./OverviewTab";
 import { FilesTab } from "./FilesTab";
 import { PeersTab } from "./PeersTab";
 import { TrackersTab } from "./TrackersTab";
+import { HttpSourcesTab } from "./HttpSourcesTab";
 import { SpeedTab } from "./SpeedTab";
 import { TabButton, TabList } from "../Tabs";
 import { LogStream } from "../LogStream";
 import { loadViewPref, oneOf, saveViewPref } from "../../helper/viewPrefs";
 
-type TabId = "overview" | "files" | "peers" | "trackers" | "speed" | "logs";
+type TabId = "overview" | "files" | "peers" | "trackers" | "http-sources" | "speed" | "logs";
 
 const VALID_TABS: TabId[] = [
   "overview",
   "files",
   "peers",
   "trackers",
+  "http-sources",
   "speed",
   "logs",
 ];
@@ -94,6 +96,12 @@ export const DetailPane: React.FC = () => {
           label="Trackers"
           active={activeTab === "trackers"}
           onClick={() => setActiveTab("trackers")}
+        />
+        <TabButton
+          id="http-sources"
+          label="HTTP Sources"
+          active={activeTab === "http-sources"}
+          onClick={() => setActiveTab("http-sources")}
         />
         <TabButton
           id="speed"
@@ -179,6 +187,9 @@ const DetailPaneContent: React.FC<DetailPaneContentProps> = ({
       )}
       {activeTab === "peers" && <PeersTab torrent={torrent ?? null} />}
       {activeTab === "trackers" && <TrackersTab torrent={torrent ?? null} />}
+      {activeTab === "http-sources" && (
+        <HttpSourcesTab torrent={torrent ?? null} />
+      )}
       {activeTab === "speed" && <SpeedTab torrent={torrent ?? null} />}
       {activeTab === "logs" && (
         <div className="h-full p-2">
