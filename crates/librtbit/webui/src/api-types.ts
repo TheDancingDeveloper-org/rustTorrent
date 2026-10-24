@@ -158,6 +158,10 @@ export interface TrackerStatusEntry {
   last_error: string | null;
 }
 
+export interface WebSeedEntry {
+  url: string;
+}
+
 export interface TrackerStatusResponse {
   trackers: TrackerStatusEntry[];
 }
@@ -498,6 +502,7 @@ export interface RtbitAPI {
   getTorrentDetails: (index: number) => Promise<TorrentDetails>;
   getTorrentStats: (index: number) => Promise<TorrentStats>;
   getTrackerStatus: (index: number) => Promise<TrackerStatusResponse>;
+  getWebSeeds: (index: number) => Promise<WebSeedEntry[]>;
   getTorrentHaves: (index: number) => Promise<Uint8Array>;
   getPeerStats: (index: number) => Promise<PeerStatsSnapshot>;
   getTorrentStreamUrl: (
