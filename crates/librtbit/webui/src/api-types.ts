@@ -201,11 +201,13 @@ export interface QueueLimitsConfig {
 export interface DhtStats {
   id?: string;
   outstanding_requests?: number;
+  routing_table_size?: number;
+  routing_table_size_v6?: number;
+  // Older mocks reported peer counts instead of the routing table.
   seen_peers?: number;
   have_peers?: number;
   inflight_peers?: number;
-  // Make it flexible - the exact shape may vary
-  [key: string]: any;
+  [key: string]: string | number | undefined;
 }
 
 // Interface for the Torrent Stats API response
