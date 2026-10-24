@@ -485,6 +485,7 @@ mod tests {
             max_active_downloads: Some(3),
             max_active_seeds: None,
             part_files: Some(true),
+            seed_limits: None,
         };
 
         store.store_session_settings(&settings).await.unwrap();
