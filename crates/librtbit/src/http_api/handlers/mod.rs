@@ -203,6 +203,22 @@ pub fn make_api_router(state: ApiState) -> Router {
                 "/torrents/{id}/limits",
                 post(torrents::h_set_torrent_rate_limits),
             )
+            .route(
+                "/torrents/{id}/queue/top",
+                post(torrents::h_torrent_queue_top),
+            )
+            .route(
+                "/torrents/{id}/queue/up",
+                post(torrents::h_torrent_queue_up),
+            )
+            .route(
+                "/torrents/{id}/queue/down",
+                post(torrents::h_torrent_queue_down),
+            )
+            .route(
+                "/torrents/{id}/queue/bottom",
+                post(torrents::h_torrent_queue_bottom),
+            )
             .route("/session/folders", post(configure::h_set_folders))
             .route("/session/downloads", post(configure::h_set_downloads))
             .route("/speed/alt", post(speed::h_toggle_alt_speed))

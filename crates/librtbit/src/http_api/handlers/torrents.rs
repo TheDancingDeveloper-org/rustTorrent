@@ -294,6 +294,52 @@ pub async fn h_torrent_action_pause(
         (status = 200, description = "Torrent started", body = EmptyJsonResponse)
     )
 ))]
+#[cfg_attr(feature = "swagger", utoipa::path(
+    post,
+    path = "/torrents/{id}/queue/{action}",
+    params(("id" = String, Path, description = "Torrent ID or info hash")),
+    responses(
+        (status = 200, description = "Torrent moved in the queue", body = EmptyJsonResponse)
+    )
+))]
+async fn h_torrent_queue_move(
+    state: ApiState,
+    idx: TorrentIdOrHash,
+    mv: crate::session::scheduler::QueueMove,
+) -> Result<impl IntoResponse> {
+    let id = state.api.mgr_handle(idx)?.id();
+    state.api.session().move_in_queue(&[id], mv).await;
+    Ok(axum::Json(crate::api::EmptyJsonResponse {}))
+}
+
+pub async fn h_torrent_queue_top(
+    State(state): State<ApiState>,
+    Path(idx): Path<TorrentIdOrHash>,
+) -> Result<impl IntoResponse> {
+    h_torrent_queue_move(state, idx, crate::session::scheduler::QueueMove::Top).await
+}
+
+pub async fn h_torrent_queue_up(
+    State(state): State<ApiState>,
+    Path(idx): Path<TorrentIdOrHash>,
+) -> Result<impl IntoResponse> {
+    h_torrent_queue_move(state, idx, crate::session::scheduler::QueueMove::Up).await
+}
+
+pub async fn h_torrent_queue_down(
+    State(state): State<ApiState>,
+    Path(idx): Path<TorrentIdOrHash>,
+) -> Result<impl IntoResponse> {
+    h_torrent_queue_move(state, idx, crate::session::scheduler::QueueMove::Down).await
+}
+
+pub async fn h_torrent_queue_bottom(
+    State(state): State<ApiState>,
+    Path(idx): Path<TorrentIdOrHash>,
+) -> Result<impl IntoResponse> {
+    h_torrent_queue_move(state, idx, crate::session::scheduler::QueueMove::Bottom).await
+}
+
 pub async fn h_torrent_action_start(
     State(state): State<ApiState>,
     Path(idx): Path<TorrentIdOrHash>,
@@ -784,7 +830,8 @@ mod tests {
     use super::{
         AddTrackersRequest, EditTrackerRequest, RemoveTrackersRequest,
         h_torrent_action_add_trackers, h_torrent_action_edit_tracker, h_torrent_action_recheck,
-        h_torrent_action_remove_trackers,
+        h_torrent_action_remove_trackers, h_torrent_queue_bottom, h_torrent_queue_down,
+        h_torrent_queue_top, h_torrent_queue_up,
     };
     use crate::{
         AddTorrent, AddTorrentOptions, Api, CreateTorrentOptions, Session, SessionOptions,
@@ -942,6 +989,62 @@ mod tests {
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         handle.wait_until_initialized().await?;
         assert!(matches!(handle.stats().state, TorrentStatsState::Paused));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn queue_move_handlers_reorder() -> anyhow::Result<()> {
+        let (state, first, payload) = torrent_api().await?;
+        let session = state.api.session().clone();
+        let torrent = create_torrent(
+            payload.path(),
+            CreateTorrentOptions {
+                name: Some("second"),
+                piece_length: Some(16_384),
+                ..Default::default()
+            },
+            &BlockingSpawner::new(1),
+        )
+        .await?
+        .as_bytes()?
+        .to_vec();
+        let second = session
+            .add_torrent(
+                AddTorrent::from_bytes(torrent),
+                Some(AddTorrentOptions {
+                    paused: true,
+                    overwrite: true,
+                    output_folder: Some(payload.path().to_string_lossy().into_owned()),
+                    ..Default::default()
+                }),
+            )
+            .await?
+            .into_handle()
+            .context("expected second torrent")?;
+        second.wait_until_initialized().await?;
+
+        let order = || session.queue_order();
+        let first_id = first.id();
+        let second_id = second.id();
+        assert_eq!(order(), vec![first_id, second_id]);
+
+        let move_err = |error| anyhow::anyhow!("{error:?}");
+        h_torrent_queue_top(State(state.clone()), Path(second_id.into()))
+            .await
+            .map_err(move_err)?;
+        assert_eq!(order(), vec![second_id, first_id]);
+        h_torrent_queue_down(State(state.clone()), Path(second_id.into()))
+            .await
+            .map_err(move_err)?;
+        assert_eq!(order(), vec![first_id, second_id]);
+        h_torrent_queue_up(State(state.clone()), Path(second_id.into()))
+            .await
+            .map_err(move_err)?;
+        assert_eq!(order(), vec![second_id, first_id]);
+        h_torrent_queue_bottom(State(state), Path(second_id.into()))
+            .await
+            .map_err(move_err)?;
+        assert_eq!(order(), vec![first_id, second_id]);
         Ok(())
     }
 }
