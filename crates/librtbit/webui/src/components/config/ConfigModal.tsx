@@ -6,8 +6,7 @@ import { ConnectionTab } from "./ConnectionTab";
 import { DHTTab } from "./DHTTab";
 import { HttpApiTab } from "./HttpApiTab";
 import { SecurityTab } from "./SecurityTab";
-import { SeedingTab } from "./SeedingTab";
-import { QueueTab } from "./QueueTab";
+import { BehaviourTab } from "./BehaviourTab";
 import { RSSTab } from "./RSSTab";
 import { FoldersTab } from "./FoldersTab";
 import { SETTINGS } from "./settingsRegistry";
@@ -149,10 +148,10 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
           content: <ConnectionTab />,
         },
         {
-          id: "queue",
-          label: "Queue",
+          id: "behaviour",
+          label: "Behaviour",
           content: (
-            <QueueTab
+            <BehaviourTab
               maxActiveDownloads={limits.max_active_downloads}
               maxActiveUploads={limits.max_active_uploads}
               maxActiveTotal={limits.max_active_total}
@@ -167,11 +166,6 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
               }
             />
           ),
-        },
-        {
-          id: "seeding",
-          label: "Seeding",
-          content: <SeedingTab />,
         },
         {
           id: "dht",

@@ -35,3 +35,14 @@ test("restartRequiredSettings filters by tab", () => {
   );
   assert.deepEqual([...tabs], ["connections"]);
 });
+
+test("queue, seeding and add settings share the Behaviour tab", () => {
+  for (const id of [
+    "max-active-downloads",
+    "seed-ratio-limit",
+    "add-start-paused",
+    "double-click-action",
+  ]) {
+    assert.equal(SETTINGS.find((s) => s.id === id)?.tab, "behaviour", id);
+  }
+});

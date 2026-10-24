@@ -7,8 +7,7 @@ export type SettingsTabId =
   | "folders"
   | "speed"
   | "connections"
-  | "queue"
-  | "seeding"
+  | "behaviour"
   | "dht"
   | "security"
   | "http-api"
@@ -78,22 +77,32 @@ export const SETTINGS: readonly SettingDefinition[] = [
     description: "Set with --listen-ip.",
   },
 
-  { id: "max-active-downloads", tab: "queue", label: "Max active downloads" },
-  { id: "max-active-uploads", tab: "queue", label: "Max active uploads" },
-  { id: "max-active-total", tab: "queue", label: "Max active total" },
+  { id: "max-active-downloads", tab: "behaviour", label: "Max active downloads" },
+  { id: "max-active-uploads", tab: "behaviour", label: "Max active uploads" },
+  { id: "max-active-total", tab: "behaviour", label: "Max active total" },
 
   {
     id: "seed-ratio-enabled",
-    tab: "seeding",
+    tab: "behaviour",
     label: "Limit seed ratio globally",
   },
-  { id: "seed-ratio-limit", tab: "seeding", label: "Ratio limit" },
+  { id: "seed-ratio-limit", tab: "behaviour", label: "Ratio limit" },
   {
     id: "seed-time-enabled",
-    tab: "seeding",
+    tab: "behaviour",
     label: "Limit seeding time globally",
   },
-  { id: "seed-time-limit", tab: "seeding", label: "Time limit (hours)" },
+  { id: "seed-time-limit", tab: "behaviour", label: "Time limit (hours)" },
+  {
+    id: "add-start-paused",
+    tab: "behaviour",
+    label: "Start torrents paused",
+  },
+  {
+    id: "double-click-action",
+    tab: "behaviour",
+    label: "Double-click action",
+  },
 
   {
     id: "dht-enabled",
