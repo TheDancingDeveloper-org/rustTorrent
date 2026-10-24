@@ -467,6 +467,10 @@ export interface RssSettings {
 }
 
 // Folder configuration
+export interface DownloadsConfig {
+  incomplete_file_suffix: boolean;
+}
+
 export interface FoldersConfig {
   download_folder: string;
   completed_folder: string | null;
@@ -554,5 +558,7 @@ export interface RtbitAPI {
   // Folder management
   getFolders: () => Promise<FoldersConfig>;
   setFolders: (config: FoldersConfig) => Promise<void>;
+  getDownloadsConfig: () => Promise<DownloadsConfig>;
+  setDownloadsConfig: (config: DownloadsConfig) => Promise<void>;
   browseDirectory: (path?: string) => Promise<BrowseResponse>;
 }
