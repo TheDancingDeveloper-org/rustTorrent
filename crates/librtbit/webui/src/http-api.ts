@@ -8,6 +8,7 @@ import {
   DhtStats,
   ErrorDetails,
   FoldersConfig,
+  DownloadsConfig,
   IndexarrIdentityStatus,
   IndexarrRecentResponse,
   IndexarrSearchResponse,
@@ -538,6 +539,12 @@ export const API: RtbitAPI & { getVersion: () => Promise<string> } = {
   },
   setFolders: (config: FoldersConfig): Promise<void> => {
     return makeRequest("POST", "/session/folders", config, true);
+  },
+  getDownloadsConfig: (): Promise<DownloadsConfig> => {
+    return makeRequest("GET", "/session/downloads");
+  },
+  setDownloadsConfig: (config: DownloadsConfig): Promise<void> => {
+    return makeRequest("POST", "/session/downloads", config, true);
   },
   browseDirectory: (path?: string): Promise<BrowseResponse> => {
     const params = new URLSearchParams();

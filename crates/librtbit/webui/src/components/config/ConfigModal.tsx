@@ -9,6 +9,7 @@ import { SecurityTab } from "./SecurityTab";
 import { BehaviourTab } from "./BehaviourTab";
 import { RSSTab } from "./RSSTab";
 import { FoldersTab } from "./FoldersTab";
+import { DownloadsTab } from "./DownloadsTab";
 import { SETTINGS } from "./settingsRegistry";
 import { APIContext } from "../../context";
 import { LimitsConfig, ErrorDetails } from "../../api-types";
@@ -117,6 +118,11 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
               onCompletedFolderChange={setCompletedFolder}
             />
           ),
+        },
+        {
+          id: "downloads",
+          label: "Downloads",
+          content: <DownloadsTab />,
         },
         {
           id: "speed",

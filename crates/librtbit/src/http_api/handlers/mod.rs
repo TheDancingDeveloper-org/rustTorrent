@@ -130,6 +130,7 @@ pub fn make_api_router(state: ApiState) -> Router {
         .route("/speed/schedule", get(speed::h_get_speed_schedule))
         .route("/torrents/categories", get(torrents::h_list_categories))
         .route("/session/folders", get(configure::h_get_folders))
+        .route("/session/downloads", get(configure::h_get_downloads))
         .route("/fs/browse", get(configure::h_browse_directory));
 
     #[cfg(feature = "tracing-subscriber-utils")]
@@ -203,6 +204,7 @@ pub fn make_api_router(state: ApiState) -> Router {
                 post(torrents::h_set_torrent_rate_limits),
             )
             .route("/session/folders", post(configure::h_set_folders))
+            .route("/session/downloads", post(configure::h_set_downloads))
             .route("/speed/alt", post(speed::h_toggle_alt_speed))
             .route("/speed/alt/config", post(speed::h_set_alt_speed_config))
             .route("/speed/schedule", post(speed::h_set_speed_schedule));

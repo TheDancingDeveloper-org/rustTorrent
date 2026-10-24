@@ -442,6 +442,7 @@ impl Session {
             let mut resolved_completed_folder = opts.completed_folder.clone();
             let mut max_active_downloads = 0;
             let mut max_active_seeds = 0;
+            let mut use_part_files = false;
             if let Some(p) = persistence.as_ref() {
                 match p.load_session_settings().await {
                     Ok(settings) => {
@@ -453,6 +454,7 @@ impl Session {
                         }
                         max_active_downloads = encode_limit(settings.max_active_downloads);
                         max_active_seeds = encode_limit(settings.max_active_seeds);
+                        use_part_files = settings.part_files.unwrap_or(false);
                     }
                     Err(e) => warn!("error loading session settings from persistence: {e:#}"),
                 }
@@ -529,7 +531,7 @@ impl Session {
                 max_active_downloads: AtomicUsize::new(max_active_downloads),
                 max_active_seeds: AtomicUsize::new(max_active_seeds),
                 min_free_disk_space: std::sync::atomic::AtomicU64::new(0),
-                use_part_files: std::sync::atomic::AtomicBool::new(false),
+                use_part_files: std::sync::atomic::AtomicBool::new(use_part_files),
                 alt_speed: Default::default(),
             });
 
@@ -1477,6 +1479,12 @@ impl Session {
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Whether new torrents write incomplete files under a `.part` name.
+    pub fn use_part_files(&self) -> bool {
+        self.use_part_files
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Set the completed folder (move-on-complete destination).
     pub fn set_completed_folder(&self, folder: Option<PathBuf>) {
         *self.completed_folder.write() = folder;
@@ -1492,6 +1500,7 @@ impl Session {
                 completed_folder: self.completed_folder(),
                 max_active_downloads: self.max_active_downloads(),
                 max_active_seeds: self.max_active_seeds(),
+                part_files: Some(self.use_part_files()),
             })
             .await
     }
