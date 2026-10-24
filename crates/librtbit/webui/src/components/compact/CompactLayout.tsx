@@ -72,8 +72,8 @@ export const CompactLayout: React.FC<CompactLayoutProps> = ({
   const hasTorrents = (torrents?.length ?? 0) > 0;
 
   return (
-    <div ref={containerRef} className="flex flex-col h-full">
-      <div className="flex-1 overflow-auto min-h-0">
+    <div ref={containerRef} className="flex flex-col h-full min-w-0">
+      <div className="flex-1 overflow-auto min-h-0 min-w-0">
         <TorrentTable torrents={torrents} loading={loading} />
       </div>
       {hasTorrents && (
