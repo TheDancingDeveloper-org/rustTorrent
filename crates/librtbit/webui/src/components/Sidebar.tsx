@@ -4,12 +4,22 @@ import {
   FaUpload,
   FaPause,
   FaExclamationTriangle,
+  FaCheck,
+  FaPlay,
+  FaStop,
+  FaBolt,
+  FaSync,
 } from "react-icons/fa";
 import { BsChevronLeft, BsChevronRight, BsCollection } from "react-icons/bs";
 import { MdQueue } from "react-icons/md";
 import { useUIStore, CurrentPage } from "../stores/uiStore";
 import { useTorrentStore } from "../stores/torrentStore";
-import { StatusFilter } from "../helper/torrentFilters";
+import {
+  StatusFilter,
+  STATUS_FILTERS,
+  STATUS_FILTER_LABELS,
+  matchesStatus,
+} from "../helper/torrentFilters";
 import { CategoryFilter } from "./compact/CategoryFilter";
 import { TrackerFilter } from "./compact/TrackerFilter";
 
@@ -37,72 +47,39 @@ export const Sidebar: React.FC<{ variant?: "default" | "drawer" }> = ({
   };
 
   const statusCounts = useMemo(() => {
-    if (!torrents)
-      return {
-        all: 0,
-        downloading: 0,
-        seeding: 0,
-        paused: 0,
-        queued: 0,
-        initializing: 0,
-        error: 0,
-      };
-    return {
-      all: torrents.length,
-      downloading: torrents.filter(
-        (t) => t.stats?.state === "live" && !t.stats?.finished,
-      ).length,
-      seeding: torrents.filter(
-        (t) => t.stats?.state === "live" && t.stats?.finished,
-      ).length,
-      paused: torrents.filter((t) => t.stats?.state === "paused").length,
-      queued: torrents.filter((t) => t.stats?.queue_state === "Queued").length,
-      initializing: torrents.filter((t) => t.stats?.state === "initializing")
-        .length,
-      error: torrents.filter((t) => t.stats?.state === "error").length,
-    };
+    const counts = {} as Record<StatusFilter, number>;
+    for (const key of STATUS_FILTERS) {
+      counts[key] = torrents
+        ? torrents.filter((t) => matchesStatus(t, key)).length
+        : 0;
+    }
+    return counts;
   }, [torrents]);
 
   const iconClass = "w-3.5 h-3.5 shrink-0";
 
-  const filters: FilterItem[] = [
-    {
-      key: "all",
-      label: "All",
-      icon: <BsCollection className={iconClass} />,
-      count: statusCounts.all,
-    },
-    {
-      key: "downloading",
-      label: "Downloading",
-      icon: <FaDownload className={iconClass} />,
-      count: statusCounts.downloading,
-    },
-    {
-      key: "seeding",
-      label: "Seeding",
-      icon: <FaUpload className={iconClass} />,
-      count: statusCounts.seeding,
-    },
-    {
-      key: "paused",
-      label: "Paused",
-      icon: <FaPause className={iconClass} />,
-      count: statusCounts.paused,
-    },
-    {
-      key: "queued",
-      label: "Queued",
-      icon: <MdQueue className={iconClass} />,
-      count: statusCounts.queued,
-    },
-    {
-      key: "error",
-      label: "Error",
-      icon: <FaExclamationTriangle className={iconClass} />,
-      count: statusCounts.error,
-    },
-  ];
+  const icons: Record<StatusFilter, React.ReactNode> = {
+    all: <BsCollection className={iconClass} />,
+    downloading: <FaDownload className={iconClass} />,
+    seeding: <FaUpload className={iconClass} />,
+    completed: <FaCheck className={iconClass} />,
+    running: <FaPlay className={iconClass} />,
+    stopped: <FaStop className={iconClass} />,
+    active: <FaBolt className={iconClass} />,
+    stalled_up: <FaUpload className={`${iconClass} opacity-50`} />,
+    stalled_down: <FaDownload className={`${iconClass} opacity-50`} />,
+    checking: <FaSync className={iconClass} />,
+    paused: <FaPause className={iconClass} />,
+    queued: <MdQueue className={iconClass} />,
+    error: <FaExclamationTriangle className={iconClass} />,
+  };
+
+  const filters: FilterItem[] = STATUS_FILTERS.map((key) => ({
+    key,
+    label: STATUS_FILTER_LABELS[key],
+    icon: icons[key],
+    count: statusCounts[key],
+  }));
 
   const activeItemClass = "bg-primary/10 text-primary font-medium";
   const inactiveItemClass =
