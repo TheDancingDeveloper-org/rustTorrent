@@ -364,7 +364,7 @@ export const RtbitWebUI = (props: {
 
         {/* Main content area */}
         <main
-          className="flex-1 min-h-0 relative"
+          className="flex-1 min-h-0 min-w-0 relative"
           onDragEnter={handleDragEnter}
           onDragLeave={handleDragLeave}
           onDragOver={handleDragOver}

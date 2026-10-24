@@ -166,6 +166,19 @@ function TableColGroup({ columns }: { columns: ColumnDef[] }) {
   );
 }
 
+/** Auto-width columns (Name) keep at least this much room when the table overflows */
+const AUTO_COLUMN_MIN_PX = 240;
+
+/** Sum of the visible column widths, so the table scrolls sideways rather than squeezing Name to nothing */
+function useTableMinWidth(columns: ColumnDef[]): number {
+  useColumnStore((s) => s.columnWidths);
+  const getWidth = useColumnStore((s) => s.getWidth);
+  return columns.reduce((sum, col) => {
+    const w = getWidth(col.id);
+    return sum + (w > 0 ? w : Math.max(col.minWidth, AUTO_COLUMN_MIN_PX));
+  }, 0);
+}
+
 interface TorrentTableProps {
   torrents: TorrentListItem[] | null;
   loading: boolean;
@@ -577,6 +590,8 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
     setContextMenu({ x: e.clientX, y: e.clientY });
   }, []);
 
+  const tableMinWidth = useTableMinWidth(visibleColumns);
+
   // The list can shrink under the active row (filter, search), so clamp it into range
   const focusIndex = Math.min(
     activeIndex,
@@ -663,6 +678,7 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
         aria-colcount={visibleColumns.length}
         onKeyDown={handleGridKeyDown}
         className="flex flex-col h-full"
+        style={{ minWidth: tableMinWidth }}
       >
         {/* Header */}
         <table className="w-full table-fixed" role="presentation">
