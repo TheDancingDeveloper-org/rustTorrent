@@ -1,14 +1,83 @@
-import { useMemo } from "react";
-import { BsBroadcast, BsBroadcastPin } from "react-icons/bs";
+import { useContext, useEffect, useMemo } from "react";
+import {
+  BsBroadcast,
+  BsBroadcastPin,
+  BsExclamationTriangle,
+  BsXOctagon,
+} from "react-icons/bs";
+import { APIContext } from "../../context";
 import { useUIStore } from "../../stores/uiStore";
 import { useTorrentStore } from "../../stores/torrentStore";
-import { torrentTrackerHosts } from "../../helper/torrentFilters";
+import {
+  TrackerHealth,
+  useTrackerHealthStore,
+} from "../../stores/trackerHealthStore";
+import {
+  TRACKER_FILTER_ERROR,
+  TRACKER_FILTER_WARNING,
+  torrentTrackerHosts,
+} from "../../helper/torrentFilters";
+
+/** How often tracker health is re-checked. The list API has no tracker
+ * state, so this costs one status request per torrent with trackers. */
+const HEALTH_POLL_MS = 30_000;
 
 /** Sidebar section: filter torrents by tracker host, qBittorrent-style. */
 export const TrackerFilter: React.FC = () => {
   const torrents = useTorrentStore((state) => state.torrents);
   const trackerFilter = useUIStore((state) => state.trackerFilter);
   const setTrackerFilter = useUIStore((state) => state.setTrackerFilter);
+  const API = useContext(APIContext);
+  const health = useTrackerHealthStore((state) => state.health);
+  const setHealth = useTrackerHealthStore((state) => state.setHealth);
+
+  // Ids of torrents with trackers; a stable string so polling doesn't restart
+  // on every list refresh.
+  const trackedIds = useMemo(
+    () =>
+      (torrents ?? [])
+        .filter((t) => (t.trackers?.length ?? 0) > 0)
+        .map((t) => t.id)
+        .join(","),
+    [torrents],
+  );
+
+  useEffect(() => {
+    const ids = trackedIds ? trackedIds.split(",").map(Number) : [];
+    let cancelled = false;
+    const check = async () => {
+      const next: Record<number, TrackerHealth> = {};
+      await Promise.all(
+        ids.map(async (id) => {
+          try {
+            const { trackers } = await API.getTrackerStatus(id);
+            const failing = trackers.filter((tr) => tr.state === "error");
+            if (failing.length === 0) return;
+            next[id] = failing.length === trackers.length ? "error" : "warning";
+          } catch {
+            // Torrent removed or status unavailable: treat as healthy.
+          }
+        }),
+      );
+      if (!cancelled) setHealth(next);
+    };
+    check();
+    const timer = setInterval(check, HEALTH_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [API, trackedIds, setHealth]);
+
+  const healthCounts = useMemo(() => {
+    let error = 0;
+    let warning = 0;
+    for (const h of Object.values(health)) {
+      if (h === "error") error++;
+      else warning++;
+    }
+    return { error, warning };
+  }, [health]);
 
   const trackerCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -91,6 +160,20 @@ export const TrackerFilter: React.FC = () => {
             "Trackerless",
             trackerCounts.trackerless,
             <BsBroadcast className={iconClass} />,
+          )}
+        {healthCounts.error > 0 &&
+          item(
+            TRACKER_FILTER_ERROR,
+            "Tracker error",
+            healthCounts.error,
+            <BsXOctagon className={`${iconClass} text-error`} />,
+          )}
+        {healthCounts.warning > 0 &&
+          item(
+            TRACKER_FILTER_WARNING,
+            "Tracker warning",
+            healthCounts.warning,
+            <BsExclamationTriangle className={`${iconClass} text-warning`} />,
           )}
         {hosts.map((host) =>
           item(
