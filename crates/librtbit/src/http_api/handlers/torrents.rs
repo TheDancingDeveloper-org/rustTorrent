@@ -807,6 +807,80 @@ pub async fn h_get_torrent_rate_limits(
     state.api.api_torrent_rate_limits(idx).map(axum::Json)
 }
 
+/// Global seed limits the Seeding tab reads and writes. `null` disables a limit.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
+pub struct SeedLimitsBody {
+    pub ratio_limit: Option<f64>,
+    pub time_limit_secs: Option<u64>,
+}
+
+impl From<crate::session::ShareLimits> for SeedLimitsBody {
+    fn from(limits: crate::session::ShareLimits) -> Self {
+        Self {
+            ratio_limit: limits.max_ratio,
+            time_limit_secs: limits.max_seeding_time.map(|d| d.as_secs()),
+        }
+    }
+}
+
+impl From<SeedLimitsBody> for crate::session::ShareLimits {
+    fn from(body: SeedLimitsBody) -> Self {
+        use std::time::Duration;
+        Self {
+            max_ratio: body.ratio_limit.filter(|ratio| *ratio > 0.0),
+            max_seeding_time: body
+                .time_limit_secs
+                .filter(|secs| *secs > 0)
+                .map(Duration::from_secs),
+            max_inactive_seeding_time: None,
+        }
+    }
+}
+
+pub async fn h_get_seed_limits(State(state): State<ApiState>) -> impl IntoResponse {
+    axum::Json(SeedLimitsBody::from(state.api.session().seed_limits()))
+}
+
+pub async fn h_set_seed_limits(
+    State(state): State<ApiState>,
+    axum::Json(body): axum::Json<SeedLimitsBody>,
+) -> Result<impl IntoResponse> {
+    state
+        .api
+        .session()
+        .set_seed_limits(body.into())
+        .await
+        .context("error saving seed limits")?;
+    Ok(axum::Json(serde_json::json!({})))
+}
+
+pub async fn h_get_torrent_seed_limits(
+    State(state): State<ApiState>,
+    Path(idx): Path<TorrentIdOrHash>,
+) -> Result<impl IntoResponse> {
+    let handle = state.api.mgr_handle(idx)?;
+    Ok(axum::Json(SeedLimitsBody::from(
+        state.api.session().share_limits(&handle),
+    )))
+}
+
+pub async fn h_set_torrent_seed_limits(
+    State(state): State<ApiState>,
+    Path(idx): Path<TorrentIdOrHash>,
+    axum::Json(body): axum::Json<SeedLimitsBody>,
+) -> Result<impl IntoResponse> {
+    let handle = state.api.mgr_handle(idx)?;
+    // A per-torrent change keeps the inactive-seeding limit the torrent already has.
+    let mut limits = crate::session::ShareLimits::from(body);
+    limits.max_inactive_seeding_time = state
+        .api
+        .session()
+        .share_limits(&handle)
+        .max_inactive_seeding_time;
+    state.api.session().set_share_limits(&handle, limits).await;
+    Ok(axum::Json(serde_json::json!({})))
+}
+
 pub async fn h_set_torrent_rate_limits(
     State(state): State<ApiState>,
     Path(idx): Path<TorrentIdOrHash>,
@@ -840,6 +914,26 @@ mod tests {
         spawn_utils::BlockingSpawner,
         torrent_state::{ManagedTorrentHandle, TorrentStatsState},
     };
+
+    #[test]
+    fn seed_limits_body_roundtrips_and_normalizes_disabled_values() {
+        let limits = crate::session::ShareLimits::from(super::SeedLimitsBody {
+            ratio_limit: Some(2.5),
+            time_limit_secs: Some(7200),
+        });
+        assert_eq!(limits.max_ratio, Some(2.5));
+        assert_eq!(
+            limits.max_seeding_time,
+            Some(std::time::Duration::from_secs(7200))
+        );
+        assert_eq!(super::SeedLimitsBody::from(limits).ratio_limit, Some(2.5));
+
+        let disabled = crate::session::ShareLimits::from(super::SeedLimitsBody {
+            ratio_limit: Some(0.0),
+            time_limit_secs: Some(0),
+        });
+        assert!(disabled.is_unset());
+    }
 
     async fn torrent_api() -> anyhow::Result<(Arc<HttpApi>, ManagedTorrentHandle, TempDir)> {
         let payload = TempDir::with_prefix("rtbit_http_action_payload")?;

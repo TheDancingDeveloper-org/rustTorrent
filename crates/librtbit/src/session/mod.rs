@@ -175,6 +175,8 @@ pub struct Session {
     max_active_seeds: AtomicUsize,
     min_free_disk_space: std::sync::atomic::AtomicU64,
     use_part_files: std::sync::atomic::AtomicBool,
+    /// Global seed limits for torrents that have none of their own.
+    seed_limits: RwLock<crate::session::ShareLimits>,
 
     // Alternative ("turtle mode") speed limits state.
     pub(crate) alt_speed: crate::alt_speed::AltSpeedState,
@@ -443,11 +445,15 @@ impl Session {
             let mut max_active_downloads = 0;
             let mut max_active_seeds = 0;
             let mut use_part_files = false;
+            let mut seed_limits = crate::session::ShareLimits::default();
             if let Some(p) = persistence.as_ref() {
                 match p.load_session_settings().await {
                     Ok(settings) => {
                         if let Some(output_folder) = settings.output_folder {
                             resolved_output_folder = output_folder;
+                        }
+                        if let Some(limits) = settings.seed_limits {
+                            seed_limits = limits;
                         }
                         if resolved_completed_folder.is_none() {
                             resolved_completed_folder = settings.completed_folder;
@@ -532,6 +538,7 @@ impl Session {
                 max_active_seeds: AtomicUsize::new(max_active_seeds),
                 min_free_disk_space: std::sync::atomic::AtomicU64::new(0),
                 use_part_files: std::sync::atomic::AtomicBool::new(use_part_files),
+                seed_limits: RwLock::new(seed_limits),
                 alt_speed: Default::default(),
             });
 
@@ -1501,6 +1508,7 @@ impl Session {
                 max_active_downloads: self.max_active_downloads(),
                 max_active_seeds: self.max_active_seeds(),
                 part_files: Some(self.use_part_files()),
+                seed_limits: Some(self.seed_limits()),
             })
             .await
     }

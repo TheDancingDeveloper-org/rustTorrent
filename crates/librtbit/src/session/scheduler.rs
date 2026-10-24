@@ -115,6 +115,10 @@ pub(crate) enum ShareLimitReason {
 /// `seeding_secs` is zero when the completion time is unknown, which disables
 /// the seeding-time check rather than tripping it. `inactive_secs` is the time
 /// since the upload counter last moved, and zero likewise disables its check.
+pub(crate) fn effective_share_limits(own: ShareLimits, global: ShareLimits) -> ShareLimits {
+    if own.is_unset() { global } else { own }
+}
+
 pub(crate) fn share_limit_reached(
     limits: &ShareLimits,
     uploaded_bytes: u64,
@@ -307,6 +311,18 @@ impl Session {
         *handle.shared().share_limits.read()
     }
 
+    /// Global seed limits. Applied to torrents that have no limits of their own.
+    pub fn seed_limits(&self) -> ShareLimits {
+        *self.seed_limits.read()
+    }
+
+    /// Set the global seed limits and save them with the session settings.
+    /// The next policy pass applies them to torrents without their own limits.
+    pub async fn set_seed_limits(&self, limits: ShareLimits) -> anyhow::Result<()> {
+        *self.seed_limits.write() = limits;
+        self.persist_session_settings().await
+    }
+
     /// Maximum concurrently downloading torrents. `None` means unlimited.
     pub fn max_active_downloads(&self) -> Option<usize> {
         decode_limit(self.max_active_downloads.load(Ordering::Relaxed))
@@ -471,7 +487,8 @@ impl Session {
             ) && stats.finished
                 && !handle.is_paused()
             {
-                let limits = *handle.shared().share_limits.read();
+                let own = *handle.shared().share_limits.read();
+                let limits = effective_share_limits(own, *self.seed_limits.read());
                 let completed_at = handle.shared().completion_on.load(Ordering::Relaxed);
                 let seeding_secs = if completed_at > 0 {
                     now.saturating_sub(completed_at)
@@ -591,6 +608,18 @@ mod tests {
             max_seeding_time: secs.map(Duration::from_secs),
             max_inactive_seeding_time: None,
         }
+    }
+
+    #[test]
+    fn global_share_limits_apply_only_without_per_torrent_limits() {
+        let global = limits(Some(2.0), Some(3600));
+        assert_eq!(
+            effective_share_limits(ShareLimits::default(), global),
+            global
+        );
+
+        let own = limits(Some(1.5), None);
+        assert_eq!(effective_share_limits(own, global), own);
     }
 
     #[test]
