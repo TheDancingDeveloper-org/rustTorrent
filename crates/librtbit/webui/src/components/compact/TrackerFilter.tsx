@@ -1,4 +1,4 @@
-import { useContext, useEffect, useMemo } from "react";
+import { useContext, useEffect, useMemo, useState } from "react";
 import {
   BsBroadcast,
   BsBroadcastPin,
@@ -30,6 +30,7 @@ export const TrackerFilter: React.FC = () => {
   const API = useContext(APIContext);
   const health = useTrackerHealthStore((state) => state.health);
   const setHealth = useTrackerHealthStore((state) => state.setHealth);
+  const [healthChecked, setHealthChecked] = useState(false);
 
   // Ids of torrents with trackers; a stable string so polling doesn't restart
   // on every list refresh.
@@ -59,7 +60,10 @@ export const TrackerFilter: React.FC = () => {
           }
         }),
       );
-      if (!cancelled) setHealth(next);
+      if (!cancelled) {
+        setHealth(next);
+        setHealthChecked(true);
+      }
     };
     check();
     const timer = setInterval(check, HEALTH_POLL_MS);
@@ -78,6 +82,19 @@ export const TrackerFilter: React.FC = () => {
     }
     return { error, warning };
   }, [health]);
+
+  // A health group with no torrents has no sidebar item, so a selected (or
+  // persisted) one would leave an empty list with nothing selected: fall back
+  // to "All" once health has been checked.
+  useEffect(() => {
+    if (!healthChecked) return;
+    if (
+      (trackerFilter === TRACKER_FILTER_ERROR && healthCounts.error === 0) ||
+      (trackerFilter === TRACKER_FILTER_WARNING && healthCounts.warning === 0)
+    ) {
+      setTrackerFilter(null);
+    }
+  }, [healthChecked, trackerFilter, healthCounts, setTrackerFilter]);
 
   const trackerCounts = useMemo(() => {
     const counts: Record<string, number> = {};
