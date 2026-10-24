@@ -25,7 +25,7 @@ use crate::{
     torrent_state::{ManagedTorrentHandle, ManagedTorrentShared},
 };
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct SessionSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_folder: Option<PathBuf>,
@@ -39,6 +39,10 @@ pub struct SessionSettings {
     /// Write new torrents' incomplete files under `.part` names. Absent means off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub part_files: Option<bool>,
+    /// Global seed limits applied to torrents that have none of their own.
+    /// Absent means no global limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_limits: Option<crate::session::ShareLimits>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

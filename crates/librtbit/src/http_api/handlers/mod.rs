@@ -71,6 +71,10 @@ async fn h_api_root(parts: Parts) -> impl IntoResponse {
             "POST /torrents": "Add a torrent here. magnet: or http:// or a local file.",
             "POST /torrents/create": "Create a torrent and start seeding. Body should be a local folder",
             "POST /torrents/resolve_magnet": "Resolve a magnet to torrent file bytes",
+            "GET /torrents/seed_limits": "Global seed ratio and time limits",
+            "POST /torrents/seed_limits": "Set global seed limits: {\"ratio_limit\": n, \"time_limit_secs\": n}, null = off",
+            "GET /torrents/{id_or_infohash}/seed_limits": "Per-torrent seed ratio and time limits",
+            "POST /torrents/{id_or_infohash}/seed_limits": "Set per-torrent seed limits",
             "GET /torrents/{id_or_infohash}/limits": "Per-torrent speed limits",
             "POST /torrents/{id_or_infohash}/limits": "Set per-torrent speed limits: {\"download_bps\": n, \"upload_bps\": n}, omitted = unlimited",
             "POST /torrents/{id_or_infohash}/pause": "Pause torrent",
@@ -121,7 +125,12 @@ pub fn make_api_router(state: ApiState) -> Router {
             "/torrents/{id}/stream/{file_id}/{*filename}",
             get(streaming::h_torrent_stream_file),
         )
+        .route("/torrents/seed_limits", get(torrents::h_get_seed_limits))
         .route("/torrents/limits", get(configure::h_get_session_ratelimits))
+        .route(
+            "/torrents/{id}/seed_limits",
+            get(torrents::h_get_torrent_seed_limits),
+        )
         .route(
             "/torrents/{id}/limits",
             get(torrents::h_get_torrent_rate_limits),
@@ -141,6 +150,7 @@ pub fn make_api_router(state: ApiState) -> Router {
     if !state.opts.read_only {
         api_router = api_router
             .route("/torrents", post(torrents::h_torrents_post))
+            .route("/torrents/seed_limits", post(torrents::h_set_seed_limits))
             .route(
                 "/torrents/limits",
                 post(configure::h_update_session_ratelimits),
@@ -198,6 +208,10 @@ pub fn make_api_router(state: ApiState) -> Router {
             .route(
                 "/torrents/{id}/set_category",
                 post(torrents::h_set_torrent_category),
+            )
+            .route(
+                "/torrents/{id}/seed_limits",
+                post(torrents::h_set_torrent_seed_limits),
             )
             .route(
                 "/torrents/{id}/limits",
