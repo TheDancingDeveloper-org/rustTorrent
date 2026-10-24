@@ -1,27 +1,64 @@
-use std::{io::LineWriter, path::Path};
+use std::{collections::VecDeque, io::LineWriter, path::Path, sync::Arc};
 
 use anyhow::Context;
 use bytes::Bytes;
 use librtbit_core::spawn_utils::spawn;
+use parking_lot::Mutex;
 use tracing::debug_span;
 use tracing_subscriber::{
     EnvFilter, Layer, filter::FilterExt, fmt, fmt::MakeWriter, prelude::*, registry::LookupSpan,
 };
 
 struct Subscriber {
-    tx: tokio::sync::broadcast::Sender<Bytes>,
+    broadcast: LineBroadcast,
 }
 
 struct Writer {
-    tx: tokio::sync::broadcast::Sender<Bytes>,
+    broadcast: LineBroadcast,
 }
 
-pub type LineBroadcast = tokio::sync::broadcast::Sender<Bytes>;
+const LINE_BROADCAST_CAPACITY: usize = 1000;
+
+#[derive(Clone)]
+pub struct LineBroadcast {
+    tx: tokio::sync::broadcast::Sender<Bytes>,
+    history: Arc<Mutex<VecDeque<Bytes>>>,
+}
+
+impl LineBroadcast {
+    pub fn receiver_count(&self) -> usize {
+        self.tx.receiver_count()
+    }
+
+    pub fn subscribe(&self) -> (VecDeque<Bytes>, tokio::sync::broadcast::Receiver<Bytes>) {
+        let history = self.history.lock();
+        let receiver = self.tx.subscribe();
+        (history.clone(), receiver)
+    }
+
+    fn send(&self, line: Bytes) {
+        let mut history = self.history.lock();
+        if history.len() == LINE_BROADCAST_CAPACITY {
+            history.pop_front();
+        }
+        history.push_back(line.clone());
+        let _ = self.tx.send(line);
+    }
+}
 
 impl Subscriber {
     pub fn new() -> (Self, LineBroadcast) {
-        let (tx, _) = tokio::sync::broadcast::channel(100);
-        (Self { tx: tx.clone() }, tx)
+        let (tx, _) = tokio::sync::broadcast::channel(LINE_BROADCAST_CAPACITY);
+        let broadcast = LineBroadcast {
+            tx,
+            history: Arc::new(Mutex::new(VecDeque::with_capacity(LINE_BROADCAST_CAPACITY))),
+        };
+        (
+            Self {
+                broadcast: broadcast.clone(),
+            },
+            broadcast,
+        )
     }
 }
 
@@ -30,7 +67,7 @@ impl MakeWriter<'_> for Subscriber {
 
     fn make_writer(&self) -> Self::Writer {
         LineWriter::new(Writer {
-            tx: self.tx.clone(),
+            broadcast: self.broadcast.clone(),
         })
     }
 }
@@ -38,11 +75,7 @@ impl MakeWriter<'_> for Subscriber {
 impl std::io::Write for Writer {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let len = buf.len();
-        if self.tx.receiver_count() == 0 {
-            return Ok(len);
-        }
-        let arc = buf.to_vec().into();
-        let _ = self.tx.send(arc);
+        self.broadcast.send(Bytes::copy_from_slice(buf));
         Ok(len)
     }
 
@@ -292,6 +325,8 @@ pub fn init_logging(opts: InitLoggingOptions) -> anyhow::Result<InitLoggingResul
 mod tests {
     use std::io::Write;
 
+    use tracing_subscriber::fmt::MakeWriter;
+
     use super::{LogRotation, open_log_file};
 
     #[test]
@@ -386,5 +421,18 @@ mod tests {
         );
         assert!(serde_json::from_str::<serde_json::Value>(output.trim()).is_err());
         assert!(!output.contains('\x1b'), "ANSI escapes with ansi=false");
+    }
+
+    #[test]
+    fn line_broadcast_replays_history_then_streams_new_lines() {
+        let (subscriber, broadcast) = super::Subscriber::new();
+        let mut writer = subscriber.make_writer();
+        writer.write_all(b"before\n").unwrap();
+
+        let (history, mut receiver) = broadcast.subscribe();
+        assert_eq!(history.into_iter().collect::<Vec<_>>(), ["before\n"]);
+
+        writer.write_all(b"after\n").unwrap();
+        assert_eq!(receiver.try_recv().unwrap(), "after\n");
     }
 }
