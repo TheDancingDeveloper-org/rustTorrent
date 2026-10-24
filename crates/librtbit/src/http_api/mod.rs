@@ -166,7 +166,13 @@ fn is_public_auth_path(path: &str) -> bool {
 /// Paths reachable before any credentials exist: the setup status and setup endpoints,
 /// and the static web UI that hosts the setup page. Everything else waits for setup.
 fn is_pre_setup_path(path: &str) -> bool {
-    path == "/auth/status" || path == "/auth/setup" || path == "/web" || path.starts_with("/web/")
+    path == "/auth/status" || path == "/auth/setup" || is_web_ui_path(path)
+}
+
+/// Static web UI. Served without a session so the browser can load the sign-in page
+/// instead of a Basic-auth dialog. API calls from the page still authenticate.
+fn is_web_ui_path(path: &str) -> bool {
+    path == "/" || path == "/web" || path.starts_with("/web/")
 }
 
 impl HttpApi {
@@ -294,7 +300,7 @@ impl HttpApi {
                     async move {
                         // Always skip auth for these public endpoints
                         let path = request.uri().path();
-                        if is_public_auth_path(path) {
+                        if is_public_auth_path(path) || is_web_ui_path(path) {
                             return Ok(next.run(request).await);
                         }
 
@@ -355,6 +361,20 @@ impl HttpApi {
                         let user_pass = match user_pass {
                             Some(up) => up,
                             None => {
+                                // Browser navigation to the UI gets the sign-in page, not a
+                                // Basic challenge. API clients still receive the challenge.
+                                if headers
+                                    .get("Accept")
+                                    .and_then(|h| h.to_str().ok())
+                                    .is_some_and(|h| h.contains("text/html"))
+                                {
+                                    return Ok((
+                                        StatusCode::TEMPORARY_REDIRECT,
+                                        [("Location", "/web/")],
+                                        "sign in",
+                                    )
+                                        .into_response());
+                                }
                                 return Ok((
                                     StatusCode::UNAUTHORIZED,
                                     [("WWW-Authenticate", "Basic realm=\"API\"")],
@@ -515,7 +535,8 @@ mod tests {
         assert!(is_pre_setup_path("/web/"));
         assert!(is_pre_setup_path("/web/assets/index.js"));
 
-        assert!(!is_pre_setup_path("/"));
+        // `/` is the browser entry point; it redirects to the sign-in page.
+        assert!(is_pre_setup_path("/"));
         assert!(!is_pre_setup_path("/torrents"));
         assert!(!is_pre_setup_path("/fs/browse"));
         assert!(!is_pre_setup_path("/auth/change_credentials"));
