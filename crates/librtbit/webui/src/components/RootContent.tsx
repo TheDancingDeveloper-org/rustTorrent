@@ -15,6 +15,9 @@ const IndexarrBrowse = lazy(() =>
 const RSSPage = lazy(() =>
   import("./RSSPage").then((m) => ({ default: m.RSSPage })),
 );
+const StatisticsPage = lazy(() =>
+  import("./StatisticsPage").then((m) => ({ default: m.StatisticsPage })),
+);
 
 export const RootContent = () => {
   const closeableError = useErrorStore((state) => state.closeableError);
@@ -42,6 +45,23 @@ export const RootContent = () => {
         <div className="flex-1 min-h-0">
           <Suspense fallback={<Spinner />}>
             <IndexarrBrowse />
+          </Suspense>
+        </div>
+      </div>
+    );
+  }
+
+  if (currentPage === "statistics") {
+    return (
+      <div className="h-full flex flex-col">
+        <ErrorComponent
+          error={closeableError}
+          remove={() => setCloseableError(null)}
+        />
+        <ErrorComponent error={otherError} />
+        <div className="flex-1 min-h-0">
+          <Suspense fallback={<Spinner />}>
+            <StatisticsPage />
           </Suspense>
         </div>
       </div>
