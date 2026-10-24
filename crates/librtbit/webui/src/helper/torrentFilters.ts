@@ -1,6 +1,7 @@
 // Shared torrent filtering and sorting utilities
 
 import { TorrentListItem } from "../api-types";
+import { useTrackerHealthStore } from "../stores/trackerHealthStore";
 
 // Sort types
 export type TorrentSortColumn =
@@ -117,12 +118,22 @@ export function torrentTrackerHosts(t: TorrentListItem): string[] {
   return Array.from(hosts);
 }
 
-// Check if torrent matches tracker filter (a tracker host, "" = trackerless)
+// Pseudo tracker filters for the tracker health groups (":" never appears in
+// a host returned by trackerHost)
+export const TRACKER_FILTER_ERROR = ":error";
+export const TRACKER_FILTER_WARNING = ":warning";
+
+// Check if torrent matches tracker filter (a tracker host, "" = trackerless,
+// or one of the health groups above)
 export function matchesTracker(
   t: TorrentListItem,
   trackerFilter: string | null,
 ): boolean {
   if (trackerFilter === null) return true;
+  if (trackerFilter === TRACKER_FILTER_ERROR)
+    return useTrackerHealthStore.getState().health[t.id] === "error";
+  if (trackerFilter === TRACKER_FILTER_WARNING)
+    return useTrackerHealthStore.getState().health[t.id] === "warning";
   const hosts = torrentTrackerHosts(t);
   if (trackerFilter === "") return hosts.length === 0;
   return hosts.includes(trackerFilter);
