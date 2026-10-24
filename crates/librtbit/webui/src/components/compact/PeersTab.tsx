@@ -34,11 +34,27 @@ const SPEED_AVERAGE_WINDOW_MS = 5000;
 
 type PeerSortColumn =
   | "addr"
+  | "state"
   | "connKind"
   | "downloadSpeed"
   | "uploadSpeed"
   | "downloaded"
-  | "uploaded";
+  | "uploaded"
+  | "chunks"
+  | "errors";
+
+const PEER_COLUMNS: { column: PeerSortColumn; label: string }[] = [
+  { column: "addr", label: "Address" },
+  { column: "state", label: "State" },
+  { column: "connKind", label: "Connection" },
+  { column: "downloadSpeed", label: "Down Speed" },
+  { column: "uploadSpeed", label: "Up Speed" },
+  { column: "downloaded", label: "Downloaded" },
+  { column: "uploaded", label: "Uploaded" },
+  { column: "chunks", label: "Chunks" },
+  { column: "errors", label: "Errors" },
+];
+
 type PeerSortDirection = "asc" | "desc";
 
 const formatSpeed = (bytesPerSecond: number): string => {
@@ -175,10 +191,20 @@ export const PeersTab: React.FC<PeersTabProps> = ({ torrent }) => {
         case "addr":
           cmp = a.addr.localeCompare(b.addr);
           break;
+        case "state":
+          cmp = a.stats.state.localeCompare(b.stats.state);
+          break;
         case "connKind":
           cmp = (a.stats.conn_kind ?? "").localeCompare(
             b.stats.conn_kind ?? "",
           );
+          break;
+        case "chunks":
+          cmp =
+            a.stats.counters.fetched_chunks - b.stats.counters.fetched_chunks;
+          break;
+        case "errors":
+          cmp = a.stats.counters.errors - b.stats.counters.errors;
           break;
         case "downloadSpeed":
           cmp = a.downloadSpeed - b.downloadSpeed;
@@ -215,155 +241,47 @@ export const PeersTab: React.FC<PeersTabProps> = ({ torrent }) => {
 
   return (
     <div className="p-3">
+      <p className="mb-2 text-xs text-tertiary">
+        Client name, flags and relevance are not in the peer stats API, so
+        they are not shown. Connection, state and transfer counters are.
+      </p>
       <div className="overflow-x-auto">
         <table className="min-w-full">
           <thead>
             <tr className="border-b border-divider">
-              <th
-                className={headerClass}
-                aria-sort={
-                  sortColumn !== "addr"
-                    ? "none"
-                    : sortDirection === "asc"
-                      ? "ascending"
-                      : "descending"
-                }
-              >
-                <button
-                  type="button"
-                  onClick={() => handleSort("addr")}
-                  className="inline-flex items-center gap-0.5 rounded focus-ring hover:text-text"
+              {PEER_COLUMNS.map(({ column, label }) => (
+                <th
+                  key={column}
+                  className={headerClass}
+                  aria-sort={
+                    sortColumn !== column
+                      ? "none"
+                      : sortDirection === "asc"
+                        ? "ascending"
+                        : "descending"
+                  }
                 >
-                  IP Address
-                  <SortIcon
-                    column="addr"
-                    sortColumn={sortColumn}
-                    sortDirection={sortDirection}
-                  />
-                </button>
-              </th>
-              <th
-                className={headerClass}
-                aria-sort={
-                  sortColumn !== "connKind"
-                    ? "none"
-                    : sortDirection === "asc"
-                      ? "ascending"
-                      : "descending"
-                }
-              >
-                <button
-                  type="button"
-                  onClick={() => handleSort("connKind")}
-                  className="inline-flex items-center gap-0.5 rounded focus-ring hover:text-text"
-                >
-                  Type
-                  <SortIcon
-                    column="connKind"
-                    sortColumn={sortColumn}
-                    sortDirection={sortDirection}
-                  />
-                </button>
-              </th>
-              <th
-                className={headerClass}
-                aria-sort={
-                  sortColumn !== "downloadSpeed"
-                    ? "none"
-                    : sortDirection === "asc"
-                      ? "ascending"
-                      : "descending"
-                }
-              >
-                <button
-                  type="button"
-                  onClick={() => handleSort("downloadSpeed")}
-                  className="inline-flex items-center gap-0.5 rounded focus-ring hover:text-text"
-                >
-                  Down Speed
-                  <SortIcon
-                    column="downloadSpeed"
-                    sortColumn={sortColumn}
-                    sortDirection={sortDirection}
-                  />
-                </button>
-              </th>
-              <th
-                className={headerClass}
-                aria-sort={
-                  sortColumn !== "uploadSpeed"
-                    ? "none"
-                    : sortDirection === "asc"
-                      ? "ascending"
-                      : "descending"
-                }
-              >
-                <button
-                  type="button"
-                  onClick={() => handleSort("uploadSpeed")}
-                  className="inline-flex items-center gap-0.5 rounded focus-ring hover:text-text"
-                >
-                  Up Speed
-                  <SortIcon
-                    column="uploadSpeed"
-                    sortColumn={sortColumn}
-                    sortDirection={sortDirection}
-                  />
-                </button>
-              </th>
-              <th
-                className={headerClass}
-                aria-sort={
-                  sortColumn !== "downloaded"
-                    ? "none"
-                    : sortDirection === "asc"
-                      ? "ascending"
-                      : "descending"
-                }
-              >
-                <button
-                  type="button"
-                  onClick={() => handleSort("downloaded")}
-                  className="inline-flex items-center gap-0.5 rounded focus-ring hover:text-text"
-                >
-                  Downloaded
-                  <SortIcon
-                    column="downloaded"
-                    sortColumn={sortColumn}
-                    sortDirection={sortDirection}
-                  />
-                </button>
-              </th>
-              <th
-                className={headerClass}
-                aria-sort={
-                  sortColumn !== "uploaded"
-                    ? "none"
-                    : sortDirection === "asc"
-                      ? "ascending"
-                      : "descending"
-                }
-              >
-                <button
-                  type="button"
-                  onClick={() => handleSort("uploaded")}
-                  className="inline-flex items-center gap-0.5 rounded focus-ring hover:text-text"
-                >
-                  Uploaded
-                  <SortIcon
-                    column="uploaded"
-                    sortColumn={sortColumn}
-                    sortDirection={sortDirection}
-                  />
-                </button>
-              </th>
+                  <button
+                    type="button"
+                    onClick={() => handleSort(column)}
+                    className="inline-flex items-center gap-0.5 rounded focus-ring hover:text-text"
+                  >
+                    {label}
+                    <SortIcon
+                      column={column}
+                      sortColumn={sortColumn}
+                      sortDirection={sortDirection}
+                    />
+                  </button>
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
             {sortedPeers.length === 0 ? (
               <tr>
                 <td
-                  colSpan={6}
+                  colSpan={PEER_COLUMNS.length}
                   className="px-2 py-3 text-center text-sm text-tertiary"
                 >
                   {peerSnapshot === null
@@ -375,6 +293,9 @@ export const PeersTab: React.FC<PeersTabProps> = ({ torrent }) => {
               sortedPeers.map((peer) => (
                 <tr key={peer.addr} className="hover:bg-surface-raised">
                   <td className="px-2 py-1 text-sm font-mono">{peer.addr}</td>
+                  <td className="px-2 py-1 text-sm text-secondary">
+                    {peer.stats.state || "-"}
+                  </td>
                   <td className="px-2 py-1 text-sm text-secondary">
                     {peer.stats.conn_kind ?? "-"}
                   </td>
@@ -389,6 +310,12 @@ export const PeersTab: React.FC<PeersTabProps> = ({ torrent }) => {
                   </td>
                   <td className="px-2 py-1 text-sm text-secondary">
                     {formatBytes(peer.stats.counters.uploaded_bytes)}
+                  </td>
+                  <td className="px-2 py-1 text-sm text-secondary">
+                    {peer.stats.counters.fetched_chunks}
+                  </td>
+                  <td className="px-2 py-1 text-sm text-secondary">
+                    {peer.stats.counters.errors}
                   </td>
                 </tr>
               ))
