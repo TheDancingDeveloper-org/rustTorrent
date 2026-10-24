@@ -27,7 +27,7 @@ pub async fn h_set_rust_log(
     get,
     path = "/stream_logs",
     responses(
-        (status = 200, description = "Continuous log stream (Server-Sent Events)")
+        (status = 200, description = "Recent and continuous newline-delimited JSON log stream")
     )
 ))]
 pub async fn h_stream_logs(State(state): State<ApiState>) -> Result<impl IntoResponse> {
@@ -35,5 +35,11 @@ pub async fn h_stream_logs(State(state): State<ApiState>) -> Result<impl IntoRes
         debug!(error=%e, "stream_logs");
         e
     });
-    Ok(axum::body::Body::from_stream(s))
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "application/x-ndjson"),
+            (axum::http::header::CACHE_CONTROL, "no-store"),
+        ],
+        axum::body::Body::from_stream(s),
+    ))
 }
