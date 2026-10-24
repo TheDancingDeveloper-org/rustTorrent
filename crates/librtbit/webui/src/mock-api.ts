@@ -925,9 +925,8 @@ export const MockAPI: RtbitAPI & { getVersion: () => Promise<string> } = {
     return {
       id: "mock-dht-node-id-abc123def456",
       outstanding_requests: 5,
-      seen_peers: 1234,
-      have_peers: 567,
-      inflight_peers: 12,
+      routing_table_size: 180,
+      routing_table_size_v6: 24,
     };
   },
 
