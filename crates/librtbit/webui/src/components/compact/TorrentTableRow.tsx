@@ -1,6 +1,11 @@
-import { TorrentListItem, STATE_INITIALIZING } from "../../api-types";
+import {
+  TorrentLimits,
+  TorrentListItem,
+  STATE_INITIALIZING,
+} from "../../api-types";
 import { StatusIcon } from "../StatusIcon";
 import { formatBytes } from "../../helper/formatBytes";
+import { formatRateLimit } from "../../helper/formatRateLimit";
 import { formatSecondsToTime } from "../../helper/formatSecondsToTime";
 import { formatUnixDate } from "../../helper/formatUnixDate";
 import { getCompletionETA } from "../../helper/getCompletionETA";
@@ -23,6 +28,8 @@ interface TorrentTableRowProps {
   onContextMenu: (id: number, e: React.MouseEvent) => void;
   onCheckboxChange: (id: number) => void;
   visibleColumns: ColumnDef[];
+  /** Per-torrent speed limits; undefined until fetched */
+  limits?: TorrentLimits;
 }
 
 /** Human label + badge styling for the torrent state column */
@@ -77,6 +84,7 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
   onContextMenu,
   onCheckboxChange,
   visibleColumns,
+  limits,
 }) => {
   const rowRef = useRef<HTMLTableRowElement>(null);
 
@@ -274,6 +282,20 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
             }`}
           >
             {uploadSpeed}
+          </td>
+        );
+      }
+      case "downLimit":
+      case "upLimit": {
+        const rate =
+          col.id === "downLimit" ? limits?.download_rate : limits?.upload_rate;
+        return (
+          <td
+            role="gridcell"
+            key={col.id}
+            className={`${baseCls} ${alignClass} text-secondary tabular-nums`}
+          >
+            {limits ? formatRateLimit(rate) : "\u2014"}
           </td>
         );
       }
