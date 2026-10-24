@@ -13,6 +13,7 @@ const read = (path) =>
 
 const FILES = [
   "../components/RSSPage.tsx",
+  "../components/StatisticsPage.tsx",
   "../components/IndexarrBrowse.tsx",
   "../components/IndexarrSetup.tsx",
   "../components/LogStream.tsx",
