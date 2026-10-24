@@ -484,6 +484,7 @@ mod tests {
             completed_folder: Some(dir.path().join("completed/{category}")),
             max_active_downloads: Some(3),
             max_active_seeds: None,
+            part_files: Some(true),
         };
 
         store.store_session_settings(&settings).await.unwrap();

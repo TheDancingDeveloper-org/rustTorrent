@@ -36,6 +36,9 @@ pub struct SessionSettings {
     pub max_active_downloads: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_active_seeds: Option<usize>,
+    /// Write new torrents' incomplete files under `.part` names. Absent means off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part_files: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

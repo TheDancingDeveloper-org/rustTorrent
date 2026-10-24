@@ -1013,6 +1013,10 @@ export const MockAPI: RtbitAPI & { getVersion: () => Promise<string> } = {
     completed_folder: null,
   }),
   setFolders: async () => {},
+  getDownloadsConfig: async () => ({
+    incomplete_file_suffix: false,
+  }),
+  setDownloadsConfig: async () => {},
   browseDirectory: async (path?: string) => ({
     current: path ?? "/",
     parent:

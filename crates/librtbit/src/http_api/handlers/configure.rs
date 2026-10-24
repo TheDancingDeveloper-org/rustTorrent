@@ -78,6 +78,35 @@ pub async fn h_set_folders(
     Ok(Json(EmptyJsonResponse {}))
 }
 
+// --- Downloads settings ---
+
+/// Session-wide download behaviour shown on the settings Downloads tab.
+#[derive(Serialize, Deserialize)]
+pub struct DownloadsConfig {
+    /// Write incomplete files under a `.part` name; applies to torrents added afterwards.
+    pub incomplete_file_suffix: bool,
+}
+
+pub async fn h_get_downloads(State(state): State<ApiState>) -> Result<impl IntoResponse> {
+    let session = state.api.session();
+    Ok(Json(DownloadsConfig {
+        incomplete_file_suffix: session.use_part_files(),
+    }))
+}
+
+pub async fn h_set_downloads(
+    State(state): State<ApiState>,
+    Json(config): Json<DownloadsConfig>,
+) -> Result<impl IntoResponse> {
+    let session = state.api.session();
+    session.set_use_part_files(config.incomplete_file_suffix);
+    session
+        .persist_session_settings()
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(EmptyJsonResponse {}))
+}
+
 // --- Directory browsing ---
 
 #[derive(Deserialize)]

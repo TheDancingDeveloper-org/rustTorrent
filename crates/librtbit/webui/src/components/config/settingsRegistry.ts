@@ -5,6 +5,7 @@
 export type SettingsTabId =
   | "general"
   | "folders"
+  | "downloads"
   | "speed"
   | "connections"
   | "behaviour"
@@ -39,6 +40,12 @@ export const SETTINGS: readonly SettingDefinition[] = [
     restartRequired: true,
     description:
       "Where session state is persisted. Set with --persistence-location.",
+  },
+
+  {
+    id: "incomplete-file-suffix",
+    tab: "downloads",
+    label: "Append .part to incomplete files",
   },
 
   { id: "download-rate-limit", tab: "speed", label: "Download rate limit" },
