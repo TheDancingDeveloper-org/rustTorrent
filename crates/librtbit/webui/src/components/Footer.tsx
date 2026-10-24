@@ -5,6 +5,7 @@ import { APIContext } from "../context";
 import { formatBytes } from "../helper/formatBytes";
 import { formatSecondsToTime } from "../helper/formatSecondsToTime";
 import { useStatsStore } from "../stores/statsStore";
+import { useUIStore } from "../stores/uiStore";
 import { DhtStats, LimitsConfig } from "../api-types";
 
 /** Turtle icon for alternative speed limits (WebUI API v2 style). */
@@ -71,6 +72,8 @@ function connectionSummary(stats: ReturnType<typeof useStatsStore.getState>["sta
 export const Footer: React.FC = () => {
   const API = useContext(APIContext);
   const stats = useStatsStore((stats) => stats.stats);
+  const setCurrentPage = useUIStore((state) => state.setCurrentPage);
+  const onStatistics = useUIStore((state) => state.currentPage) === "statistics";
 
   const [altSupported, setAltSupported] = useState(false);
   const [altEnabled, setAltEnabled] = useState(false);
@@ -202,7 +205,20 @@ export const Footer: React.FC = () => {
           <span className="tabular-nums">n/a</span>
         </FooterPiece>
         <FooterPiece>
-          <BsSpeedometer2 className="w-3.5 h-3.5 text-tertiary" />
+          <button
+            type="button"
+            onClick={() => setCurrentPage(onStatistics ? "torrents" : "statistics")}
+            aria-pressed={onStatistics}
+            className={`inline-flex items-center gap-1.5 cursor-pointer rounded focus-ring ${
+              onStatistics ? "text-primary" : "text-secondary hover:text-primary"
+            }`}
+            title="Session statistics"
+          >
+            <BsSpeedometer2 className="w-3.5 h-3.5" />
+            <span>Statistics</span>
+          </button>
+        </FooterPiece>
+        <FooterPiece>
           <a
             href="/swagger/"
             target="_blank"
