@@ -1,7 +1,15 @@
 // Shared torrent filtering and sorting utilities
 
-import { TorrentListItem } from "../api-types";
+import type { TorrentListItem } from "../api-types";
 import { useTrackerHealthStore } from "../stores/trackerHealthStore";
+import { StatusFilter, matchesStatus } from "./statusFilter";
+
+export type { StatusFilter } from "./statusFilter";
+export {
+  STATUS_FILTERS,
+  STATUS_FILTER_LABELS,
+  matchesStatus,
+} from "./statusFilter";
 
 // Sort types
 export type TorrentSortColumn =
@@ -16,15 +24,6 @@ export type TorrentSortColumn =
 
 export type SortDirection = "asc" | "desc";
 
-// Status filter types
-export type StatusFilter =
-  | "all"
-  | "downloading"
-  | "seeding"
-  | "paused"
-  | "queued"
-  | "error";
-
 // Sort column display labels
 export const SORT_COLUMN_LABELS: Record<TorrentSortColumn, string> = {
   id: "ID",
@@ -35,16 +34,6 @@ export const SORT_COLUMN_LABELS: Record<TorrentSortColumn, string> = {
   upSpeed: "Up Speed",
   eta: "ETA",
   category: "Category",
-};
-
-// Status filter display labels
-export const STATUS_FILTER_LABELS: Record<StatusFilter, string> = {
-  all: "All",
-  downloading: "Downloading",
-  seeding: "Seeding",
-  paused: "Paused",
-  queued: "Queued",
-  error: "Error",
 };
 
 // Get sort value for a torrent
@@ -147,30 +136,6 @@ export function matchesCategory(
   if (categoryFilter === null) return true;
   if (categoryFilter === "") return !torrent.category; // uncategorized
   return torrent.category === categoryFilter;
-}
-
-// Check if torrent matches status filter
-export function matchesStatus(
-  t: TorrentListItem,
-  filter: StatusFilter,
-): boolean {
-  if (filter === "all") return true;
-
-  const state = t.stats?.state;
-  const finished = t.stats?.finished;
-
-  switch (filter) {
-    case "downloading":
-      return state === "live" && !finished;
-    case "seeding":
-      return state === "live" && !!finished;
-    case "paused":
-      return state === "paused";
-    case "queued":
-      return t.stats?.queue_state === "Queued";
-    case "error":
-      return state === "error";
-  }
 }
 
 // Combined visibility check

@@ -3,6 +3,7 @@ import {
   TorrentSortColumn,
   SortDirection,
   StatusFilter,
+  STATUS_FILTERS,
 } from "../helper/torrentFilters";
 import { CategoryInfo } from "../api-types";
 import {
@@ -12,15 +13,6 @@ import {
   isBoolean,
   isStringOrNull,
 } from "../helper/viewPrefs";
-
-const STATUS_FILTERS: readonly StatusFilter[] = [
-  "all",
-  "downloading",
-  "seeding",
-  "paused",
-  "queued",
-  "error",
-];
 
 const LARGE_SCREEN_BREAKPOINT = 1024;
 
