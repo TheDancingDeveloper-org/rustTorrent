@@ -29,6 +29,7 @@ import {
   TorrentLimits,
   TorrentStats,
   TrackerStatusResponse,
+  WebSeedEntry,
 } from "./api-types";
 import { useAuthStore } from "./stores/authStore";
 
@@ -332,6 +333,14 @@ export const API: RtbitAPI & { getVersion: () => Promise<string> } = {
   },
   getTrackerStatus: (index: number): Promise<TrackerStatusResponse> => {
     return makeRequest("GET", `/torrents/${index}/trackers`);
+  },
+  getWebSeeds: async (index: number): Promise<WebSeedEntry[]> => {
+    const torrent: { info_hash: string } = await makeRequest(
+      "GET",
+      `/torrents/${index}`,
+    );
+    const params = new URLSearchParams({ hash: torrent.info_hash });
+    return makeRequest("GET", `/api/v2/torrents/webseeds?${params}`);
   },
   getPeerStats: (index: number): Promise<PeerStatsSnapshot> => {
     return makeRequest("GET", `/torrents/${index}/peer_stats?state=live`);

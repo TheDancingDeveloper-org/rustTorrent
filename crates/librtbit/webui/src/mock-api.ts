@@ -21,6 +21,7 @@ import {
   TorrentListItem,
   TrackerStatusEntry,
   TrackerStatusResponse,
+  WebSeedEntry,
   LiveTorrentStats,
   TorrentFile,
   RssFeedConfig,
@@ -675,6 +676,18 @@ export const MockAPI: RtbitAPI & { getVersion: () => Promise<string> } = {
       total_pieces: Math.ceil(totalBytes / (256 * 1024)),
       output_folder: `/downloads/torrent_${index}`,
     };
+  },
+
+  getWebSeeds: async (index: number): Promise<WebSeedEntry[]> => {
+    await new Promise((r) => setTimeout(r, 15));
+    if (deletedTorrents.has(index)) {
+      throw { text: "Torrent not found", status: 404 };
+    }
+    if (index % 3 !== 0) return [];
+    return [
+      { url: `https://seeds.example/t${index}/` },
+      { url: `https://mirror.example/files/${index}` },
+    ];
   },
 
   getTrackerStatus: async (index: number): Promise<TrackerStatusResponse> => {

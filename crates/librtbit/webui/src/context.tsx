@@ -29,6 +29,9 @@ export const APIContext = createContext<RtbitAPI>({
   getTrackerStatus: () => {
     throw new Error("Function not implemented.");
   },
+  getWebSeeds: () => {
+    throw new Error("Function not implemented.");
+  },
   getPeerStats: () => {
     throw new Error("Function not implemented.");
   },
