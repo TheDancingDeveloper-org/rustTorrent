@@ -11,6 +11,7 @@ import { FormInput } from "../forms/FormInput";
 import { FormCheckbox } from "../forms/FormCheckbox";
 import { Form } from "../forms/Form";
 import { Spinner } from "../Spinner";
+import { loadStartPaused } from "../../helper/behaviourPrefs";
 import { BsCheckCircleFill, BsXCircleFill } from "react-icons/bs";
 
 type FileStatus = "pending" | "uploading" | "success" | "error";
@@ -36,7 +37,7 @@ export const MultiTorrentUploadModal = ({
 
   const [outputFolder, setOutputFolder] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
-  const [startTorrent, setStartTorrent] = useState(true);
+  const [startTorrent, setStartTorrent] = useState(() => !loadStartPaused());
   const [entries, setEntries] = useState<FileEntry[]>(
     files.map((file) => ({ file, status: "pending" })),
   );

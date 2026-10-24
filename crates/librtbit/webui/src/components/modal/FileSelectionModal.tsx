@@ -11,6 +11,8 @@ import { Button } from "../buttons/Button";
 import { Fieldset } from "../forms/Fieldset";
 import { FormInput } from "../forms/FormInput";
 import { Form } from "../forms/Form";
+import { FormCheckbox } from "../forms/FormCheckbox";
+import { loadStartPaused } from "../../helper/behaviourPrefs";
 import { FileListInput } from "../FileListInput";
 import { useTorrentStore } from "../../stores/torrentStore";
 
@@ -33,6 +35,7 @@ export const FileSelectionModal = (props: {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<ErrorWithLabel | null>(null);
   const [unpopularTorrent, setUnpopularTorrent] = useState(false);
+  const [startTorrent, setStartTorrent] = useState(() => !loadStartPaused());
   const [outputFolder, setOutputFolder] = useState<string>("");
   const refreshTorrents = useTorrentStore((state) => state.refreshTorrents);
   const API = useContext(APIContext);
@@ -85,6 +88,7 @@ export const FileSelectionModal = (props: {
       only_files: allSelected ? undefined : Array.from(selectedFiles),
       initial_peers: initialPeers,
       output_folder: outputFolder,
+      paused: !startTorrent,
     };
     if (unpopularTorrent) {
       opts.peer_opts = {
@@ -130,6 +134,13 @@ export const FileSelectionModal = (props: {
               torrentStats={null}
             />
           </Fieldset>
+
+          <FormCheckbox
+            label="Start torrent after adding"
+            checked={startTorrent}
+            onChange={() => setStartTorrent(!startTorrent)}
+            name="start_torrent"
+          />
 
           {/* <Fieldset label="Options">
             <FormCheckbox

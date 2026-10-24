@@ -1,4 +1,11 @@
-import { useMemo, useCallback, useEffect, useState, useRef } from "react";
+import {
+  useContext,
+  useMemo,
+  useCallback,
+  useEffect,
+  useState,
+  useRef,
+} from "react";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { TorrentLimits, TorrentListItem } from "../../api-types";
 import { TorrentTableRow } from "./TorrentTableRow";
@@ -17,6 +24,10 @@ import { loadViewPref, oneOf, saveViewPref } from "../../helper/viewPrefs";
 import { nextSort } from "../../helper/sortToggle";
 import { TorrentContextMenu, ContextMenuState } from "../TorrentContextMenu";
 import { useTorrentLimits } from "../../hooks/useTorrentLimits";
+import { loadDoubleClickAction } from "../../helper/behaviourPrefs";
+import { APIContext } from "../../context";
+import { useTorrentStore } from "../../stores/torrentStore";
+import { useErrorStore } from "../../stores/errorStore";
 
 // Sort columns: all sortable column IDs
 const TABLE_SORT_COLUMNS = [
@@ -361,6 +372,42 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
     [selectRange, selectTorrent],
   );
 
+  // Row double-click: the action is chosen in Settings > Behaviour
+  const API = useContext(APIContext);
+  const refreshTorrents = useTorrentStore((s) => s.refreshTorrents);
+  const setCloseableError = useErrorStore((s) => s.setCloseableError);
+  const openDetailsModal = useUIStore((s) => s.openDetailsModal);
+  const handleRowDoubleClick = useCallback(
+    (id: number) => {
+      const action = loadDoubleClickAction();
+      if (action === "details") {
+        openDetailsModal(id);
+        return;
+      }
+      if (action !== "toggle") return;
+      const state = filteredTorrents?.find((t) => t.id === id)?.stats?.state;
+      const request =
+        state === "live"
+          ? API.pause(id)
+          : state === "paused" || state === "error"
+            ? API.start(id)
+            : null;
+      request?.then(refreshTorrents, (e) =>
+        setCloseableError({
+          text: `Error ${state === "live" ? "pausing" : "starting"} torrent id=${id}`,
+          details: e,
+        }),
+      );
+    },
+    [
+      API,
+      filteredTorrents,
+      openDetailsModal,
+      refreshTorrents,
+      setCloseableError,
+    ],
+  );
+
   // Opens the torrent menu for a row; shared by right-click and the keyboard (Shift+F10 / ContextMenu)
   const openTorrentMenu = useCallback(
     (id: number, pos: { x: number; y: number; anchor?: DOMRect }) => {
@@ -547,6 +594,7 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
           consumeRowFocus={consumeRowFocus}
           onRowFocus={handleRowFocus}
           onRowClick={handleRowClick}
+          onRowDoubleClick={handleRowDoubleClick}
           onContextMenu={handleRowContextMenu}
           onCheckboxChange={toggleSelection}
           visibleColumns={visibleColumns}
@@ -561,6 +609,7 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
       consumeRowFocus,
       handleRowFocus,
       handleRowClick,
+      handleRowDoubleClick,
       handleRowContextMenu,
       toggleSelection,
       visibleColumns,
