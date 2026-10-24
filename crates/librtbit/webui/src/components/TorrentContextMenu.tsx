@@ -5,7 +5,9 @@ import {
   useRef,
   useState,
 } from "react";
-import { ErrorDetails, TorrentListItem } from "../api-types";
+import { ErrorDetails, TorrentLimits, TorrentListItem } from "../api-types";
+import { formatRateLimit } from "../helper/formatRateLimit";
+import { formatSecondsToTime } from "../helper/formatSecondsToTime";
 import { APIContext } from "../context";
 import { useErrorStore } from "../stores/errorStore";
 import { useTorrentStore } from "../stores/torrentStore";
@@ -74,6 +76,9 @@ export const TorrentContextMenu: React.FC<TorrentContextMenuProps> = ({
   const [ulRate, setUlRate] = useState("");
   const [ratioLimit, setRatioLimit] = useState("");
   const [timeLimit, setTimeLimit] = useState("");
+  const [currentLimits, setCurrentLimits] = useState<TorrentLimits | null>(
+    null,
+  );
   const newCategoryInputRef = useRef<HTMLInputElement>(null);
 
   const API = useContext(APIContext);
@@ -115,17 +120,28 @@ export const TorrentContextMenu: React.FC<TorrentContextMenuProps> = ({
       .catch(() => {});
   }, [API, setCategories]);
 
-  // Fetch current limits when speed/seed limit forms open
+  // Fetch current speed limits when the menu opens, to show them on the menu item
+  const singleTargetId = singleTarget?.id;
   useEffect(() => {
-    if (showSpeedLimits && singleTarget) {
-      API.getTorrentLimits(singleTarget.id)
-        .then((limits) => {
-          setDlRate(limits.download_rate?.toString() ?? "");
-          setUlRate(limits.upload_rate?.toString() ?? "");
-        })
-        .catch(() => {});
+    if (singleTargetId == null) return;
+    let cancelled = false;
+    API.getTorrentLimits(singleTargetId)
+      .then((limits) => {
+        if (!cancelled) setCurrentLimits(limits);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [singleTargetId, API]);
+
+  // Prefill the speed limit form with the current values when it opens
+  useEffect(() => {
+    if (showSpeedLimits && currentLimits) {
+      setDlRate(currentLimits.download_rate?.toString() ?? "");
+      setUlRate(currentLimits.upload_rate?.toString() ?? "");
     }
-  }, [showSpeedLimits, singleTarget, API]);
+  }, [showSpeedLimits, currentLimits]);
 
   useEffect(() => {
     if (showSeedLimits && singleTarget) {
@@ -629,7 +645,13 @@ export const TorrentContextMenu: React.FC<TorrentContextMenuProps> = ({
               disabled={actionInProgress}
             >
               <FaTachometerAlt className={`${iconCls} text-secondary`} />
-              Set Speed Limits...
+              <span className="flex-1">Set Speed Limits...</span>
+              {currentLimits && (
+                <span className="text-xs text-tertiary tabular-nums">
+                  ↓ {formatRateLimit(currentLimits.download_rate)} · ↑{" "}
+                  {formatRateLimit(currentLimits.upload_rate)}
+                </span>
+              )}
             </button>
             {showSpeedLimits && (
               <div className="px-3 py-1.5 flex flex-col gap-1.5">
@@ -664,7 +686,16 @@ export const TorrentContextMenu: React.FC<TorrentContextMenuProps> = ({
               disabled={actionInProgress}
             >
               <FaSeedling className={`${iconCls} text-secondary`} />
-              Set Seed Limits...
+              <span className="flex-1">Set Seed Limits...</span>
+              <span className="text-xs text-tertiary tabular-nums">
+                {singleTarget.stats?.seed_ratio_limit != null
+                  ? singleTarget.stats.seed_ratio_limit.toFixed(2)
+                  : "\u221e"}{" "}
+                ·{" "}
+                {singleTarget.stats?.seed_time_limit_secs != null
+                  ? formatSecondsToTime(singleTarget.stats.seed_time_limit_secs)
+                  : "\u221e"}
+              </span>
             </button>
             {showSeedLimits && (
               <div className="px-3 py-1.5 flex flex-col gap-1.5">

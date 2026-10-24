@@ -10,6 +10,8 @@ export type ColumnId =
   | "downloadedBytes"
   | "downSpeed"
   | "upSpeed"
+  | "downLimit"
+  | "upLimit"
   | "uploadedBytes"
   | "eta"
   | "peers"
@@ -35,6 +37,8 @@ const DEFAULT_CONFIGURABLE_ORDER: ColumnId[] = [
   "downloadedBytes",
   "downSpeed",
   "upSpeed",
+  "downLimit",
+  "upLimit",
   "uploadedBytes",
   "eta",
   "peers",
@@ -151,6 +155,26 @@ export const COLUMN_DEFS: ColumnDef[] = [
     minWidth: 60,
     align: "center",
     defaultVisible: true,
+    configurable: true,
+    sortable: true,
+  },
+  {
+    id: "downLimit",
+    label: "Down Limit",
+    defaultWidth: 90,
+    minWidth: 60,
+    align: "center",
+    defaultVisible: false,
+    configurable: true,
+    sortable: true,
+  },
+  {
+    id: "upLimit",
+    label: "Up Limit",
+    defaultWidth: 90,
+    minWidth: 60,
+    align: "center",
+    defaultVisible: false,
     configurable: true,
     sortable: true,
   },
