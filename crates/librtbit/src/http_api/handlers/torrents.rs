@@ -286,6 +286,76 @@ pub async fn h_torrent_action_pause(
         .map(axum::Json)
 }
 
+async fn h_torrent_queue_move(
+    state: ApiState,
+    idx: TorrentIdOrHash,
+    mv: crate::session::QueueMove,
+) -> Result<impl IntoResponse> {
+    let id = state.api.mgr_handle(idx)?.id();
+    state.api.session().move_in_queue(&[id], mv).await;
+    Ok(axum::Json(crate::api::EmptyJsonResponse {}))
+}
+
+#[cfg_attr(feature = "swagger", utoipa::path(
+    post,
+    path = "/torrents/{id}/queue/top",
+    params(("id" = String, Path, description = "Torrent ID or info hash")),
+    responses(
+        (status = 200, description = "Torrent moved to the top of the queue", body = EmptyJsonResponse)
+    )
+))]
+pub async fn h_torrent_queue_top(
+    State(state): State<ApiState>,
+    Path(idx): Path<TorrentIdOrHash>,
+) -> Result<impl IntoResponse> {
+    h_torrent_queue_move(state, idx, crate::session::QueueMove::Top).await
+}
+
+#[cfg_attr(feature = "swagger", utoipa::path(
+    post,
+    path = "/torrents/{id}/queue/up",
+    params(("id" = String, Path, description = "Torrent ID or info hash")),
+    responses(
+        (status = 200, description = "Torrent moved up one place in the queue", body = EmptyJsonResponse)
+    )
+))]
+pub async fn h_torrent_queue_up(
+    State(state): State<ApiState>,
+    Path(idx): Path<TorrentIdOrHash>,
+) -> Result<impl IntoResponse> {
+    h_torrent_queue_move(state, idx, crate::session::QueueMove::Up).await
+}
+
+#[cfg_attr(feature = "swagger", utoipa::path(
+    post,
+    path = "/torrents/{id}/queue/down",
+    params(("id" = String, Path, description = "Torrent ID or info hash")),
+    responses(
+        (status = 200, description = "Torrent moved down one place in the queue", body = EmptyJsonResponse)
+    )
+))]
+pub async fn h_torrent_queue_down(
+    State(state): State<ApiState>,
+    Path(idx): Path<TorrentIdOrHash>,
+) -> Result<impl IntoResponse> {
+    h_torrent_queue_move(state, idx, crate::session::QueueMove::Down).await
+}
+
+#[cfg_attr(feature = "swagger", utoipa::path(
+    post,
+    path = "/torrents/{id}/queue/bottom",
+    params(("id" = String, Path, description = "Torrent ID or info hash")),
+    responses(
+        (status = 200, description = "Torrent moved to the bottom of the queue", body = EmptyJsonResponse)
+    )
+))]
+pub async fn h_torrent_queue_bottom(
+    State(state): State<ApiState>,
+    Path(idx): Path<TorrentIdOrHash>,
+) -> Result<impl IntoResponse> {
+    h_torrent_queue_move(state, idx, crate::session::QueueMove::Bottom).await
+}
+
 #[cfg_attr(feature = "swagger", utoipa::path(
     post,
     path = "/torrents/{id}/start",
@@ -294,52 +364,6 @@ pub async fn h_torrent_action_pause(
         (status = 200, description = "Torrent started", body = EmptyJsonResponse)
     )
 ))]
-#[cfg_attr(feature = "swagger", utoipa::path(
-    post,
-    path = "/torrents/{id}/queue/{action}",
-    params(("id" = String, Path, description = "Torrent ID or info hash")),
-    responses(
-        (status = 200, description = "Torrent moved in the queue", body = EmptyJsonResponse)
-    )
-))]
-async fn h_torrent_queue_move(
-    state: ApiState,
-    idx: TorrentIdOrHash,
-    mv: crate::session::scheduler::QueueMove,
-) -> Result<impl IntoResponse> {
-    let id = state.api.mgr_handle(idx)?.id();
-    state.api.session().move_in_queue(&[id], mv).await;
-    Ok(axum::Json(crate::api::EmptyJsonResponse {}))
-}
-
-pub async fn h_torrent_queue_top(
-    State(state): State<ApiState>,
-    Path(idx): Path<TorrentIdOrHash>,
-) -> Result<impl IntoResponse> {
-    h_torrent_queue_move(state, idx, crate::session::scheduler::QueueMove::Top).await
-}
-
-pub async fn h_torrent_queue_up(
-    State(state): State<ApiState>,
-    Path(idx): Path<TorrentIdOrHash>,
-) -> Result<impl IntoResponse> {
-    h_torrent_queue_move(state, idx, crate::session::scheduler::QueueMove::Up).await
-}
-
-pub async fn h_torrent_queue_down(
-    State(state): State<ApiState>,
-    Path(idx): Path<TorrentIdOrHash>,
-) -> Result<impl IntoResponse> {
-    h_torrent_queue_move(state, idx, crate::session::scheduler::QueueMove::Down).await
-}
-
-pub async fn h_torrent_queue_bottom(
-    State(state): State<ApiState>,
-    Path(idx): Path<TorrentIdOrHash>,
-) -> Result<impl IntoResponse> {
-    h_torrent_queue_move(state, idx, crate::session::scheduler::QueueMove::Bottom).await
-}
-
 pub async fn h_torrent_action_start(
     State(state): State<ApiState>,
     Path(idx): Path<TorrentIdOrHash>,
