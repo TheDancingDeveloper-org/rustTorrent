@@ -1511,6 +1511,8 @@ async fn stats_printer(session: Arc<Session>) -> Result<(), &'static str> {
     loop {
         session.with_torrents(|torrents| {
                 let mut last_phase = last_phase.borrow_mut();
+                // Rebuilt each tick so removed torrents drop out of the map.
+                let mut prev_phase = std::mem::take(&mut *last_phase);
                 for (idx, torrent) in torrents {
                     let stats = torrent.stats();
                     let phase = if matches!(stats.state, TorrentStatsState::Initializing) {
@@ -1520,7 +1522,8 @@ async fn stats_printer(session: Arc<Session>) -> Result<(), &'static str> {
                     } else {
                         "active"
                     };
-                    if last_phase.insert(idx, phase) != Some(phase) {
+                    last_phase.insert(idx, phase);
+                    if prev_phase.remove(&idx) != Some(phase) {
                         info!("[{}] {}", idx, phase);
                     }
                     if let TorrentStatsState::Initializing = stats.state {
