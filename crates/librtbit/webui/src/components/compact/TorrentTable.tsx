@@ -9,6 +9,7 @@ import {
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { TorrentLimits, TorrentListItem } from "../../api-types";
 import { TorrentTableRow } from "./TorrentTableRow";
+import { useTrackerHealthStore } from "../../stores/trackerHealthStore";
 import { useUIStore } from "../../stores/uiStore";
 import { useColumnStore, ColumnDef, ColumnId } from "../../stores/columnStore";
 import { Spinner } from "../Spinner";
@@ -185,6 +186,7 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
   const statusFilter = useUIStore((state) => state.statusFilter);
   const categoryFilter = useUIStore((state) => state.categoryFilter);
   const trackerFilter = useUIStore((state) => state.trackerFilter);
+  const trackerHealth = useTrackerHealthStore((state) => state.health);
   const setSearchQuery = useUIStore((state) => state.setSearchQuery);
   const setStatusFilter = useUIStore((state) => state.setStatusFilter);
   const setCategoryFilter = useUIStore((state) => state.setCategoryFilter);
@@ -278,6 +280,7 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
           statusFilter,
           categoryFilter,
           trackerFilter,
+          trackerHealth,
         ),
       )
       .sort((a, b) => {
@@ -295,6 +298,7 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
     statusFilter,
     categoryFilter,
     trackerFilter,
+    trackerHealth,
     sortColumn,
     sortDirection,
     torrentLimits,

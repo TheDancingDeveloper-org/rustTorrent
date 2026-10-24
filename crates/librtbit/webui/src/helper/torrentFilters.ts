@@ -1,7 +1,7 @@
 // Shared torrent filtering and sorting utilities
 
 import type { TorrentListItem } from "../api-types";
-import { useTrackerHealthStore } from "../stores/trackerHealthStore";
+import type { TrackerHealth } from "../stores/trackerHealthStore";
 import { StatusFilter, matchesStatus } from "./statusFilter";
 
 export type { StatusFilter } from "./statusFilter";
@@ -113,16 +113,17 @@ export const TRACKER_FILTER_ERROR = ":error";
 export const TRACKER_FILTER_WARNING = ":warning";
 
 // Check if torrent matches tracker filter (a tracker host, "" = trackerless,
-// or one of the health groups above)
+// or one of the health groups above). Callers pass tracker health so that
+// memoised lists re-filter when it changes.
 export function matchesTracker(
   t: TorrentListItem,
   trackerFilter: string | null,
+  health: Record<number, TrackerHealth> = {},
 ): boolean {
   if (trackerFilter === null) return true;
-  if (trackerFilter === TRACKER_FILTER_ERROR)
-    return useTrackerHealthStore.getState().health[t.id] === "error";
+  if (trackerFilter === TRACKER_FILTER_ERROR) return health[t.id] === "error";
   if (trackerFilter === TRACKER_FILTER_WARNING)
-    return useTrackerHealthStore.getState().health[t.id] === "warning";
+    return health[t.id] === "warning";
   const hosts = torrentTrackerHosts(t);
   if (trackerFilter === "") return hosts.length === 0;
   return hosts.includes(trackerFilter);
@@ -145,11 +146,12 @@ export function isTorrentVisible(
   statusFilter: StatusFilter,
   categoryFilter?: string | null,
   trackerFilter?: string | null,
+  trackerHealth?: Record<number, TrackerHealth>,
 ): boolean {
   return (
     matchesSearch(t.name, searchQuery) &&
     matchesStatus(t, statusFilter) &&
     matchesCategory(t, categoryFilter ?? null) &&
-    matchesTracker(t, trackerFilter ?? null)
+    matchesTracker(t, trackerFilter ?? null, trackerHealth)
   );
 }
