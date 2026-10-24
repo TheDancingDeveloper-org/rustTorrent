@@ -22,7 +22,9 @@ export type ColumnId =
   | "sequential"
   | "availability"
   | "added_on"
-  | "tracker";
+  | "tracker"
+  | "amount_left"
+  | "save_path";
 
 // IDs of configurable columns in their default order
 const DEFAULT_CONFIGURABLE_ORDER: ColumnId[] = [
@@ -46,6 +48,8 @@ const DEFAULT_CONFIGURABLE_ORDER: ColumnId[] = [
   "availability",
   "added_on",
   "tracker",
+  "amount_left",
+  "save_path",
 ];
 
 export interface ColumnDef {
@@ -216,7 +220,7 @@ export const COLUMN_DEFS: ColumnDef[] = [
     defaultWidth: 120,
     minWidth: 60,
     align: "center",
-    defaultVisible: false,
+    defaultVisible: true,
     configurable: true,
     sortable: true,
   },
@@ -256,7 +260,7 @@ export const COLUMN_DEFS: ColumnDef[] = [
     defaultWidth: 70,
     minWidth: 50,
     align: "center",
-    defaultVisible: false,
+    defaultVisible: true,
     configurable: true,
     sortable: true,
   },
@@ -274,6 +278,26 @@ export const COLUMN_DEFS: ColumnDef[] = [
     id: "tracker",
     label: "Tracker",
     defaultWidth: 150,
+    minWidth: 80,
+    align: "center",
+    defaultVisible: true,
+    configurable: true,
+    sortable: true,
+  },
+  {
+    id: "amount_left",
+    label: "Remaining",
+    defaultWidth: 90,
+    minWidth: 60,
+    align: "center",
+    defaultVisible: false,
+    configurable: true,
+    sortable: true,
+  },
+  {
+    id: "save_path",
+    label: "Save Path",
+    defaultWidth: 200,
     minWidth: 80,
     align: "center",
     defaultVisible: false,
