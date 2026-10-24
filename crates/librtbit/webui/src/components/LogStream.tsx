@@ -138,8 +138,10 @@ const streamLogs = (
 
       for (let newLineIdx: number; (newLineIdx = buffer.indexOf(10)) !== -1; ) {
         const lineBytes = buffer.slice(0, newLineIdx);
-        const line = new TextDecoder().decode(lineBytes);
-        addLine(line);
+        const line = new TextDecoder().decode(lineBytes).trim();
+        if (line.length > 0) {
+          addLine(line);
+        }
         buffer = buffer.slice(newLineIdx + 1);
       }
     }

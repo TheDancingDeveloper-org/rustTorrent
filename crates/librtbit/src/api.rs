@@ -36,7 +36,7 @@ use crate::{
 #[cfg(feature = "tracing-subscriber-utils")]
 use crate::tracing_subscriber_config_utils::LineBroadcast;
 #[cfg(feature = "tracing-subscriber-utils")]
-use futures::Stream;
+use futures::{Stream, StreamExt, stream};
 #[cfg(feature = "tracing-subscriber-utils")]
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 
@@ -463,11 +463,12 @@ impl Api {
         + Sync
         + 'static,
     > {
-        Ok(self
+        let (history, receiver) = self
             .line_broadcast
             .as_ref()
-            .map(|sender| BroadcastStream::new(sender.subscribe()))
-            .context("line_rx wasn't set")?)
+            .map(LineBroadcast::subscribe)
+            .context("line_rx wasn't set")?;
+        Ok(stream::iter(history.into_iter().map(Ok)).chain(BroadcastStream::new(receiver)))
     }
 
     pub async fn api_add_torrent(
