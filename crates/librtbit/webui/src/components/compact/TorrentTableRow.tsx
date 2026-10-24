@@ -452,6 +452,27 @@ const TorrentTableRowUnmemoized: React.FC<TorrentTableRowProps> = ({
           </td>
         );
       }
+      case "amount_left":
+        return (
+          <td
+            role="gridcell"
+            key="amount_left"
+            className={`${baseCls} ${alignClass} text-secondary`}
+          >
+            {formatBytes(Math.max(0, totalBytes - progressBytes))}
+          </td>
+        );
+      case "save_path":
+        return (
+          <td
+            role="gridcell"
+            key="save_path"
+            className={`${baseCls} ${alignClass} text-secondary`}
+            title={torrent.output_folder}
+          >
+            <div className="truncate">{torrent.output_folder || "\u2014"}</div>
+          </td>
+        );
       default:
         return <td role="gridcell" key={col.id} className={baseCls} />;
     }

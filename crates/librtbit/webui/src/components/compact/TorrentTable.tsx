@@ -37,6 +37,8 @@ const TABLE_SORT_COLUMNS = [
   "availability",
   "added_on",
   "tracker",
+  "amount_left",
+  "save_path",
 ] as const;
 
 export type TableSortColumn = (typeof TABLE_SORT_COLUMNS)[number];
@@ -116,6 +118,13 @@ function getTableSortValue(
       return t.added_on ?? 0;
     case "tracker":
       return torrentTrackerHosts(t)[0] ?? "";
+    case "amount_left":
+      return Math.max(
+        0,
+        (t.stats?.total_bytes ?? 0) - (t.stats?.progress_bytes ?? 0),
+      );
+    case "save_path":
+      return t.output_folder ?? "";
   }
 }
 
