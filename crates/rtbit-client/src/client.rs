@@ -294,6 +294,20 @@ impl Client {
         self.authed_post_json("torrents/seed_limits", body).await
     }
 
+    /// `GET /rss/feeds` and `GET /rss/items`. Rules are not read in v1.
+    pub async fn rss(&mut self) -> Result<crate::types::RssSnapshot, Error> {
+        Ok(crate::types::RssSnapshot {
+            feeds: self.authed_get("rss/feeds").await?,
+            items: self.authed_get("rss/items").await?,
+        })
+    }
+
+    /// `POST /rss/items/{id}/download`. The daemon adds the item's URL as a torrent.
+    pub async fn download_rss_item(&mut self, id: &str) -> Result<(), Error> {
+        let path = format!("rss/items/{}/download", urlencoding_minimal(id));
+        self.authed_post_json(&path, &serde_json::json!({})).await
+    }
+
     /// `POST /torrents/{id}/trackers`. Merges the announce URLs.
     pub async fn add_trackers(&mut self, id: u64, trackers: &[String]) -> Result<(), Error> {
         self.authed_post_json(
