@@ -1,0 +1,24 @@
+[package]
+name = "rtbit-client"
+version = "0.2.0-beta.2"
+authors = ["AusAgentSmith <admin@rusttorrent.dev>"]
+edition = "2024"
+description = "HTTP client for the rustTorrent daemon API."
+license = "Apache-2.0"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+http = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+url = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+wiremock = "0.6"

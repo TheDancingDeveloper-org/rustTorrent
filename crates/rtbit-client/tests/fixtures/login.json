@@ -1,0 +1,8 @@
+{
+  "access_token": "access-1",
+  "refresh_token": "refresh-1",
+  "token_type": "Bearer",
+  "expires_in": 900,
+  "role": "admin",
+  "extra_field": true
+}
