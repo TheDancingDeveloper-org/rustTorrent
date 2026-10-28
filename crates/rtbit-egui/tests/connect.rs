@@ -5,8 +5,11 @@ use std::sync::Mutex;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use rtbit_client::Error;
-use rtbit_egui::{App, Connection, LoginAttempt, Screen};
+use rtbit_client::{
+    Error, PeerCounts, SessionCounters, SessionStats, Speed, Torrent, TorrentList, TorrentState,
+    TorrentStats,
+};
+use rtbit_egui::{App, Connection, LoginAttempt, Screen, Snapshot};
 
 #[derive(Clone, Copy)]
 enum Script {
@@ -25,6 +28,62 @@ impl LoginAttempt for Scripted {
             Script::Ok => Ok(()),
             Script::Unauthorised => Err(Error::Unauthorised),
         }
+    }
+
+    fn snapshot(&self, _url: &str, _username: &str, _password: &str) -> Result<Snapshot, Error> {
+        Ok(sample_snapshot())
+    }
+}
+
+fn sample_snapshot() -> Snapshot {
+    let torrent = Torrent {
+        id: Some(7),
+        info_hash: "abc".into(),
+        name: Some("Example torrent".into()),
+        output_folder: "/data".into(),
+        total_pieces: 4,
+        category: Some("movies".into()),
+        tags: None,
+        trackers: Some(vec!["http://tracker.example/announce".into()]),
+        stats: Some(TorrentStats {
+            state: Some(TorrentState::Live),
+            progress_bytes: 1024,
+            total_bytes: 2048,
+            finished: false,
+            live: None,
+        }),
+    };
+    Snapshot {
+        torrents: TorrentList {
+            torrents: vec![torrent],
+            total: 1,
+        },
+        stats: SessionStats {
+            counters: SessionCounters {
+                fetched_bytes: 0,
+                uploaded_bytes: 0,
+                blocked_incoming: 0,
+                blocked_outgoing: 0,
+            },
+            peers: PeerCounts {
+                queued: 0,
+                connecting: 0,
+                live: 1,
+                seen: 1,
+                dead: 0,
+                not_needed: 0,
+            },
+            connections: rtbit_client::Connections::default(),
+            download_speed: Speed {
+                mbps: 1.0,
+                human_readable: String::new(),
+            },
+            upload_speed: Speed {
+                mbps: 0.0,
+                human_readable: String::new(),
+            },
+            uptime_seconds: 3,
+        },
     }
 }
 
@@ -101,4 +160,45 @@ fn theme_installs_once() {
     };
     let harness = harness(login);
     assert_eq!(harness.state().screen(), Screen::Connect);
+}
+
+#[test]
+fn main_screen_lists_a_row_and_the_speed_labels() {
+    let login = Scripted {
+        result: std::sync::Arc::new(Mutex::new(Script::Ok)),
+    };
+    let mut harness = harness(login);
+    harness
+        .query_all(egui_kittest::kittest::by().predicate(|node| {
+            node.label().as_deref() == Some("Connect") && node.role() == Role::Button
+        }))
+        .next()
+        .expect("connect button")
+        .click();
+    for _ in 0..50 {
+        harness.run_steps(1);
+        if shows(&harness, "Example torrent") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(harness.state().screen(), Screen::Main);
+    assert!(
+        shows(&harness, "live"),
+        "the daemon state word is the label"
+    );
+    assert!(shows(&harness, "Status"));
+    assert!(shows(&harness, "All"));
+}
+
+#[test]
+fn empty_list_says_there_are_no_torrents() {
+    let login = Scripted {
+        result: std::sync::Arc::new(Mutex::new(Script::Ok)),
+    };
+    let mut harness = harness(login);
+    // A snapshot with no rows: replace by driving the screen state directly.
+    harness.state_mut().note_empty_for_test();
+    harness.run_steps(2);
+    assert!(shows(&harness, "No torrents."));
 }

@@ -11,6 +11,7 @@ mod types;
 pub use client::Client;
 pub use error::Error;
 pub use types::{
-    ConnectionFamily, ConnectionKindStats, Connections, PeerCounts, Role, SessionCounters,
-    SessionStats, Speed, TokenPair, Torrent, TorrentList,
+    ConnectionFamily, ConnectionKindStats, Connections, LiveSpeeds, PeerCounts, Role,
+    SessionCounters, SessionStats, Speed, TokenPair, Torrent, TorrentList, TorrentState,
+    TorrentStats,
 };

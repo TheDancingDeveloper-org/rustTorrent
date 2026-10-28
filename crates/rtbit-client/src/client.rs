@@ -65,6 +65,11 @@ impl Client {
         self.authed_get("torrents").await
     }
 
+    /// `GET /torrents?with_stats=true`. The list carries per-torrent state and speeds.
+    pub async fn torrents_with_stats(&mut self) -> Result<TorrentList, Error> {
+        self.authed_get("torrents?with_stats=true").await
+    }
+
     /// `GET /stats`.
     pub async fn stats(&mut self) -> Result<SessionStats, Error> {
         self.authed_get("stats").await
