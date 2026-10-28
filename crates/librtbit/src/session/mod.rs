@@ -2,7 +2,7 @@ mod helpers;
 mod network;
 mod on_complete;
 mod peer_sources;
-mod scheduler;
+pub(crate) mod scheduler;
 mod types;
 
 pub use on_complete::{CompletedTorrent, OnCompleteHook};
@@ -190,6 +190,8 @@ pub struct Session {
     max_active_downloads: AtomicUsize,
     max_active_seeds: AtomicUsize,
     min_free_disk_space: std::sync::atomic::AtomicU64,
+    /// Test stand-in for free-space measurement. `None` means the OS.
+    free_space_provider: RwLock<Option<scheduler::FreeSpaceFn>>,
     use_part_files: std::sync::atomic::AtomicBool,
     /// Global seed limits for torrents that have none of their own.
     seed_limits: RwLock<crate::session::ShareLimits>,
@@ -576,6 +578,7 @@ impl Session {
                 max_active_downloads: AtomicUsize::new(max_active_downloads),
                 max_active_seeds: AtomicUsize::new(max_active_seeds),
                 min_free_disk_space: std::sync::atomic::AtomicU64::new(0),
+                free_space_provider: RwLock::new(None),
                 use_part_files: std::sync::atomic::AtomicBool::new(use_part_files),
                 seed_limits: RwLock::new(seed_limits),
                 alt_speed: Default::default(),

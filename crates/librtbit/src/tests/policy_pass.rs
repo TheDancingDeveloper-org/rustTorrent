@@ -206,8 +206,11 @@ async fn disk_hold_survives_restart_and_releases() -> anyhow::Result<()> {
     let download = add_download(&session, torrent, &root.path().join("dl")).await?;
     let id = download.id();
 
-    // Any real filesystem has less than u64::MAX bytes free, so this holds.
-    session.set_min_free_disk_space(Some(u64::MAX));
+    // The stand-in reports almost no free space, so the guard holds the download
+    // no matter how much the runner actually has free.
+    let nearly_empty: crate::session::scheduler::FreeSpaceFn = |_| Some(0);
+    session.set_free_space_provider(Some(nearly_empty));
+    session.set_min_free_disk_space(Some(1_000));
     session.policy_pass().await;
     assert!(download.is_paused());
     assert!(download.shared().held_for_disk.load(Ordering::Relaxed));
@@ -222,8 +225,10 @@ async fn disk_hold_survives_restart_and_releases() -> anyhow::Result<()> {
         "the hold must survive the restart"
     );
 
-    // A threshold of 1 byte is always cleared, so the guard releases the download.
-    session.set_min_free_disk_space(Some(1));
+    // Free space is now above twice the threshold, so the guard releases it.
+    let recovered: crate::session::scheduler::FreeSpaceFn = |_| Some(2_000);
+    session.set_free_space_provider(Some(recovered));
+    session.set_min_free_disk_space(Some(1_000));
     session.policy_pass().await;
     assert!(
         !restored.is_paused(),

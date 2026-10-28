@@ -278,6 +278,18 @@ pub(crate) fn disk_guard_action(free: u64, min_free: u64, held: bool) -> DiskAct
 /// exist yet. Returns `None` where it cannot be measured.
 #[cfg(unix)]
 pub(crate) fn free_disk_space(path: &Path) -> Option<u64> {
+    os_free_disk_space(path)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn free_disk_space(_path: &Path) -> Option<u64> {
+    None
+}
+
+/// OS measurement behind [`free_disk_space`]. Production uses this; tests inject
+/// a stand-in so a pass does not depend on the runner's real free space.
+#[cfg(unix)]
+fn os_free_disk_space(path: &Path) -> Option<u64> {
     let mut probe = path;
     while !probe.exists() {
         probe = probe.parent()?;
@@ -286,10 +298,8 @@ pub(crate) fn free_disk_space(path: &Path) -> Option<u64> {
     Some(stat.blocks_available() as u64 * stat.fragment_size() as u64)
 }
 
-#[cfg(not(unix))]
-pub(crate) fn free_disk_space(_path: &Path) -> Option<u64> {
-    None
-}
+/// Stand-in free-space reading for tests. `None` means "use the OS".
+pub(crate) type FreeSpaceFn = fn(&Path) -> Option<u64>;
 
 fn unix_now() -> u64 {
     SystemTime::now()
@@ -419,6 +429,21 @@ impl Session {
             .store(bytes.unwrap_or(0), Ordering::Relaxed);
     }
 
+    /// Free space the low-disk guard sees. A test stand-in wins; otherwise the OS.
+    fn free_space(&self, path: &Path) -> Option<u64> {
+        if let Some(provider) = *self.free_space_provider.read() {
+            return provider(path);
+        }
+        free_disk_space(path)
+    }
+
+    /// Inject a free-space stand-in. `None` restores the OS measurement.
+    /// Tests only: production never calls this.
+    #[cfg(test)]
+    pub(crate) fn set_free_space_provider(&self, provider: Option<FreeSpaceFn>) {
+        *self.free_space_provider.write() = provider;
+    }
+
     pub(crate) fn spawn_policy_scheduler(self: &Arc<Self>) {
         let weak = Arc::downgrade(self);
         self.spawn(
@@ -543,7 +568,7 @@ impl Session {
 
         if let Some(min_free) = self.min_free_disk_space() {
             for (handle, held) in &disk_candidates {
-                let Some(free) = free_disk_space(&handle.output_folder()) else {
+                let Some(free) = self.free_space(&handle.output_folder()) else {
                     continue;
                 };
                 match disk_guard_action(free, min_free, *held) {
