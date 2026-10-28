@@ -373,6 +373,21 @@ async fn share_limits_and_uploads_survive_restart() -> anyhow::Result<()> {
     let session = create_session(root.path(), Some(persist.path())).await?;
     let restored = handle_by_id(&session, id)?;
     timeout(Duration::from_secs(10), restored.wait_until_initialized()).await??;
+    // Seeding time counts from the original completion, which this seed's
+    // watcher stamps with wall-clock "now" as soon as it initializes. That
+    // stamp is minutes old by the time the second session's policy pass runs,
+    // so a one-hour cap would already be spent. Put the completion in the
+    // recent past so the test does not depend on how long the restart took.
+    // The clock itself is not reset on resume.
+    let recent = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .saturating_sub(60);
+    restored
+        .shared()
+        .completion_on
+        .store(recent, Ordering::Relaxed);
     assert_eq!(
         session.share_limits(&restored),
         limits,
