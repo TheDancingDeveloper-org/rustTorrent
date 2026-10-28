@@ -6,12 +6,14 @@ use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use rtbit_client::{
-    AuthStatus, Error, PeerCounts, PeerList, PieceProgress, SessionCounters, SessionStats, Speed,
+    AdvancedConfig, AltSpeedConfig, AltSpeedSchedule, AltSpeedStatus, AuthStatus, DownloadsConfig,
+    Error, FoldersConfig, IpFilterConfig, NetworkConfig, PeerCounts, PeerList, PieceProgress,
+    ProxyConfig, RateLimits, SeedLimits, SessionCounters, SessionStats, SettingsSnapshot, Speed,
     Torrent, TorrentFile, TorrentList, TorrentState, TorrentStats, TrackerList,
 };
 use rtbit_egui::{
     AddRequest, AddSource, App, Connection, DetailSnapshot, LoginAttempt, MemoryStore, RowAction,
-    Screen, Snapshot, TokenStore,
+    Screen, SettingsChanges, SettingsTab, Snapshot, TokenStore,
 };
 
 #[derive(Clone, Copy)]
@@ -37,6 +39,7 @@ struct Scripted {
     setups: std::sync::Arc<Mutex<u32>>,
     /// What `rotated_refresh` reports. Tests set this to simulate a 401 rotation.
     rotated: std::sync::Arc<Mutex<Option<String>>>,
+    settings_saves: std::sync::Arc<Mutex<Vec<SettingsChanges>>>,
 }
 
 impl LoginAttempt for Scripted {
@@ -101,6 +104,18 @@ impl LoginAttempt for Scripted {
         Ok(())
     }
 
+    fn load_settings(&self) -> Result<SettingsSnapshot, Error> {
+        Ok(sample_settings())
+    }
+
+    fn save_settings(&self, changes: &SettingsChanges) -> Result<(), Error> {
+        self.settings_saves
+            .lock()
+            .expect("saves")
+            .push(changes.clone());
+        Ok(())
+    }
+
     fn detail(&self, id: u64) -> Result<DetailSnapshot, Error> {
         let _ = id;
         Ok(DetailSnapshot {
@@ -123,6 +138,7 @@ fn scripted(result: Script) -> Scripted {
         setup_script: SetupScript::Closed,
         setups: std::sync::Arc::new(Mutex::new(0)),
         rotated: std::sync::Arc::new(Mutex::new(None)),
+        settings_saves: std::sync::Arc::new(Mutex::new(Vec::new())),
     }
 }
 
@@ -721,4 +737,95 @@ fn a_rotated_refresh_token_is_written_back() {
         stored.load("http://127.0.0.1:3030").unwrap().as_deref(),
         Some("refresh-rotated")
     );
+}
+
+fn sample_settings() -> SettingsSnapshot {
+    SettingsSnapshot {
+        downloads: DownloadsConfig {
+            incomplete_file_suffix: false,
+        },
+        advanced: AdvancedConfig::default(),
+        network: NetworkConfig {
+            dht_enabled: true,
+            pex_enabled: true,
+            listen_port: Some(6881),
+            http_api_listen: "127.0.0.1:3030".into(),
+            ..NetworkConfig::default()
+        },
+        proxy: ProxyConfig {
+            proxy_url: Some("socks5://user:***@127.0.0.1:1080".into()),
+        },
+        ip_filter: IpFilterConfig {
+            filter: String::new(),
+        },
+        folders: FoldersConfig {
+            download_folder: "/data/in".into(),
+            completed_folder: None,
+        },
+        limits: RateLimits::default(),
+        alt: AltSpeedStatus {
+            enabled: false,
+            config: AltSpeedConfig::default(),
+            schedule: None,
+        },
+        schedule: AltSpeedSchedule::default(),
+        seed_limits: SeedLimits {
+            ratio_limit: None,
+            time_limit_secs: None,
+        },
+    }
+}
+
+#[test]
+fn settings_opens_and_a_save_posts_only_the_changed_ratio() {
+    let script = scripted(Script::Ok);
+    let saves = script.settings_saves.clone();
+    let mut harness = mem_harness(script, MemoryStore::default());
+    click_mem(&mut harness, "Connect");
+    for _ in 0..50 {
+        harness.run_steps(1);
+        if harness.state().screen() == Screen::Main {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(harness.state().screen(), Screen::Main);
+    click_mem(&mut harness, "Settings");
+    for _ in 0..50 {
+        harness.run_steps(1);
+        if shows_mem(&harness, "Append .part to incomplete files") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(shows_mem(&harness, "General"));
+    assert!(shows_mem(&harness, "Connection"));
+    click_mem(&mut harness, "Seeding");
+    harness.run_steps(2);
+    assert!(shows_mem(&harness, "Ratio limit"));
+    fill(&mut harness, "Ratio limit", "1.5");
+    click_mem(&mut harness, "Save");
+    for _ in 0..50 {
+        harness.run_steps(1);
+        if !saves.lock().expect("saves").is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let saved = saves.lock().expect("saves").clone();
+    assert_eq!(saved.len(), 1);
+    assert!(saved[0].downloads.is_none());
+    assert!(
+        saved[0].proxy.is_none(),
+        "a masked proxy must not be posted"
+    );
+    assert!(saved[0].folders.is_none());
+    assert_eq!(
+        saved[0].seed_limits,
+        Some(SeedLimits {
+            ratio_limit: Some(1.5),
+            time_limit_secs: None,
+        })
+    );
+    let _ = SettingsTab::Seeding;
 }

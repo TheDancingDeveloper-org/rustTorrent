@@ -11,8 +11,9 @@ mod types;
 pub use client::Client;
 pub use error::Error;
 pub use types::{
-    AuthStatus, ConnectionFamily, ConnectionKindStats, Connections, LiveSpeeds, PeerCounts,
-    PeerList, PeerView, PieceProgress, Role, SessionCounters, SessionStats, Speed, TokenPair,
-    Torrent, TorrentFile, TorrentList, TorrentState, TorrentStats, TrackerList, TrackerState,
-    TrackerStatus,
+    AdvancedConfig, AltSpeedConfig, AltSpeedSchedule, AltSpeedStatus, AuthStatus, ConnectionFamily,
+    ConnectionKindStats, Connections, DownloadsConfig, FoldersConfig, IpFilterConfig, LiveSpeeds,
+    NetworkConfig, PeerCounts, PeerList, PeerView, PieceProgress, ProxyConfig, RateLimits, Role,
+    SeedLimits, SessionCounters, SessionStats, SettingsSnapshot, Speed, TokenPair, Torrent,
+    TorrentFile, TorrentList, TorrentState, TorrentStats, TrackerList, TrackerState, TrackerStatus,
 };

@@ -2,6 +2,8 @@
 
 mod detail;
 mod main_screen;
+mod settings;
 
 pub use detail::{DetailAction, DetailTab, DetailView, draw_detail};
 pub use main_screen::{AddDraft, AddRequest, AddSource, RowAction, RowActions, draw_main};
+pub use settings::{SettingsChanges, SettingsDraft, SettingsTab, draw_settings};

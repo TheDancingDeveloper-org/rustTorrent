@@ -211,6 +211,89 @@ impl Client {
         .await
     }
 
+    /// Read every route the settings screen shows.
+    pub async fn settings(&mut self) -> Result<crate::types::SettingsSnapshot, Error> {
+        use crate::types::SettingsSnapshot;
+        Ok(SettingsSnapshot {
+            downloads: self.authed_get("session/downloads").await?,
+            advanced: self.authed_get("session/advanced").await?,
+            network: self.authed_get("session/network").await?,
+            proxy: self.authed_get("session/proxy").await?,
+            ip_filter: self.authed_get("session/ip-filter").await?,
+            folders: self.authed_get("session/folders").await?,
+            limits: self.authed_get("torrents/limits").await?,
+            alt: self.authed_get("speed/alt").await?,
+            schedule: self.authed_get("speed/schedule").await?,
+            seed_limits: self.authed_get("torrents/seed_limits").await?,
+        })
+    }
+
+    /// `POST /session/downloads`.
+    pub async fn set_downloads(
+        &mut self,
+        body: &crate::types::DownloadsConfig,
+    ) -> Result<(), Error> {
+        self.authed_post_json("session/downloads", body).await
+    }
+
+    /// `POST /session/advanced`. The daemon refuses 0 and values over its caps.
+    pub async fn set_advanced(&mut self, body: &crate::types::AdvancedConfig) -> Result<(), Error> {
+        self.authed_post_json("session/advanced", body).await
+    }
+
+    /// `POST /session/proxy`. A password in the URL is stored; the daemon never echoes it.
+    pub async fn set_proxy(&mut self, body: &crate::types::ProxyConfig) -> Result<(), Error> {
+        self.authed_post_json("session/proxy", body).await
+    }
+
+    /// `POST /session/ip-filter`. The daemon caps the text and rejects a bad line.
+    pub async fn set_ip_filter(
+        &mut self,
+        body: &crate::types::IpFilterConfig,
+    ) -> Result<(), Error> {
+        self.authed_post_json("session/ip-filter", body).await
+    }
+
+    /// `POST /session/folders`.
+    pub async fn set_folders(&mut self, body: &crate::types::FoldersConfig) -> Result<(), Error> {
+        self.authed_post_json("session/folders", body).await
+    }
+
+    /// `POST /torrents/limits`.
+    pub async fn set_limits(&mut self, body: &crate::types::RateLimits) -> Result<(), Error> {
+        self.authed_post_json("torrents/limits", body).await
+    }
+
+    /// `POST /speed/alt`.
+    pub async fn set_alt_enabled(&mut self, enabled: bool) -> Result<(), Error> {
+        #[derive(Serialize)]
+        struct Body {
+            enabled: bool,
+        }
+        self.authed_post_json("speed/alt", &Body { enabled }).await
+    }
+
+    /// `POST /speed/alt/config`.
+    pub async fn set_alt_config(
+        &mut self,
+        body: &crate::types::AltSpeedConfig,
+    ) -> Result<(), Error> {
+        self.authed_post_json("speed/alt/config", body).await
+    }
+
+    /// `POST /speed/schedule`.
+    pub async fn set_schedule(
+        &mut self,
+        body: &crate::types::AltSpeedSchedule,
+    ) -> Result<(), Error> {
+        self.authed_post_json("speed/schedule", body).await
+    }
+
+    /// `POST /torrents/seed_limits`. `None` turns that limit off.
+    pub async fn set_seed_limits(&mut self, body: &crate::types::SeedLimits) -> Result<(), Error> {
+        self.authed_post_json("torrents/seed_limits", body).await
+    }
+
     /// `POST /torrents/{id}/trackers`. Merges the announce URLs.
     pub async fn add_trackers(&mut self, id: u64, trackers: &[String]) -> Result<(), Error> {
         self.authed_post_json(

@@ -10,12 +10,13 @@ use fluent2_egui::office::{TitleBar, WindowAction, window_command};
 use fluent2_egui::theme::{Theme, install};
 use fluent2_egui::tokens::FLUENT;
 use rtbit_client::{
-    AuthStatus, Client, Error, PeerList, PieceProgress, SessionStats, Torrent, TorrentList,
-    TrackerList,
+    AuthStatus, Client, Error, PeerList, PieceProgress, SessionStats, SettingsSnapshot, Torrent,
+    TorrentList, TrackerList,
 };
 
 use crate::screens::{
     AddDraft, AddRequest, AddSource, DetailAction, DetailTab, DetailView, RowAction,
+    SettingsChanges, SettingsDraft, SettingsTab,
 };
 
 use crate::keychain::{OsKeychain, TokenStore};
@@ -34,6 +35,8 @@ pub enum Screen {
     Setup,
     /// Placeholder until the torrent grid lands.
     Main,
+    /// Read/write preferences: General, Connection, Speed, Folders, Seeding.
+    Settings,
 }
 
 /// What the status bar says about the daemon.
@@ -139,6 +142,17 @@ pub trait LoginAttempt: Send {
     fn detail_act(&self, id: u64, action: &DetailAction) -> Result<(), Error> {
         let _ = (id, action);
         Err(Error::Unreachable("no detail action".into()))
+    }
+
+    /// Read the five settings tabs.
+    fn load_settings(&self) -> Result<SettingsSnapshot, Error> {
+        Err(Error::Unreachable("no settings".into()))
+    }
+
+    /// Post the sections the user changed. The daemon validates caps and the filter.
+    fn save_settings(&self, changes: &SettingsChanges) -> Result<(), Error> {
+        let _ = changes;
+        Err(Error::Unreachable("no settings".into()))
     }
 }
 
@@ -330,6 +344,49 @@ impl LoginAttempt for DaemonLogin {
             })
         })
     }
+
+    fn load_settings(&self) -> Result<SettingsSnapshot, Error> {
+        on_session(|session| session.runtime.block_on(session.client.settings()))
+    }
+
+    fn save_settings(&self, changes: &SettingsChanges) -> Result<(), Error> {
+        let changes = changes.clone();
+        on_session(move |session| {
+            session.runtime.block_on(async {
+                if let Some(body) = &changes.downloads {
+                    session.client.set_downloads(body).await?;
+                }
+                if let Some(body) = &changes.advanced {
+                    session.client.set_advanced(body).await?;
+                }
+                if let Some(body) = &changes.proxy {
+                    session.client.set_proxy(body).await?;
+                }
+                if let Some(body) = &changes.ip_filter {
+                    session.client.set_ip_filter(body).await?;
+                }
+                if let Some(body) = &changes.folders {
+                    session.client.set_folders(body).await?;
+                }
+                if let Some(body) = &changes.limits {
+                    session.client.set_limits(body).await?;
+                }
+                if let Some(enabled) = changes.alt_enabled {
+                    session.client.set_alt_enabled(enabled).await?;
+                }
+                if let Some(body) = &changes.alt_config {
+                    session.client.set_alt_config(body).await?;
+                }
+                if let Some(body) = &changes.schedule {
+                    session.client.set_schedule(body).await?;
+                }
+                if let Some(body) = &changes.seed_limits {
+                    session.client.set_seed_limits(body).await?;
+                }
+                Ok(())
+            })
+        })
+    }
 }
 
 fn on_session<T>(call: impl FnOnce(&mut Session) -> Result<T, Error>) -> Result<T, Error> {
@@ -401,6 +458,11 @@ pub struct App<L: LoginAttempt = DaemonLogin, S: TokenStore = OsKeychain> {
     /// Torrent the in-flight detail poll is for. A new selection drops it.
     detail_for: Option<u64>,
     detail_flight: Option<Receiver<Result<(), String>>>,
+    settings_tab: SettingsTab,
+    settings_draft: SettingsDraft,
+    settings_load: Option<Receiver<Result<SettingsSnapshot, String>>>,
+    settings_save: Option<Receiver<Result<(), String>>>,
+    settings_error: String,
 }
 
 impl Default for App<DaemonLogin> {
@@ -458,6 +520,11 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             detail_poll_at: None,
             detail_for: None,
             detail_flight: None,
+            settings_tab: SettingsTab::General,
+            settings_draft: SettingsDraft::default(),
+            settings_load: None,
+            settings_save: None,
+            settings_error: String::new(),
         }
     }
 }
@@ -503,6 +570,11 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             detail_poll_at: None,
             detail_for: None,
             detail_flight: None,
+            settings_tab: SettingsTab::General,
+            settings_draft: SettingsDraft::default(),
+            settings_load: None,
+            settings_save: None,
+            settings_error: String::new(),
         }
     }
 }
@@ -707,6 +779,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
                 Screen::Connect => self.connect_screen(ui),
                 Screen::Setup => self.setup_screen(ui),
                 Screen::Main => self.main_screen(ui),
+                Screen::Settings => self.settings_screen(ui),
             },
         );
 
@@ -885,6 +958,9 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
         self.take_action();
         ui.horizontal(|ui| {
             ui.label("Session");
+            if ui.button("Settings").clicked() && self.screen == Screen::Main {
+                self.open_settings();
+            }
             if ui.button("Sign out").clicked() {
                 self.logout();
             }
@@ -1147,6 +1223,101 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
                 }
             }
         }
+    }
+
+    fn open_settings(&mut self) {
+        if self.settings_load.is_some() {
+            self.screen = Screen::Settings;
+            return;
+        }
+        self.screen = Screen::Settings;
+        self.settings_error.clear();
+        let login = self.login.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let outcome = login.load_settings().map_err(|err| login_message(&err));
+            let _ = tx.send(outcome);
+        });
+        self.settings_load = Some(rx);
+    }
+
+    fn settings_screen(&mut self, ui: &mut egui::Ui) {
+        self.take_settings();
+        ui.horizontal(|ui| {
+            if ui.button("Back").clicked() {
+                self.screen = Screen::Main;
+            }
+        });
+        let save = crate::screens::draw_settings(
+            ui,
+            &mut self.settings_tab,
+            &mut self.settings_draft,
+            self.settings_save.is_some() || self.settings_load.is_some(),
+            &self.settings_error,
+        );
+        if save {
+            self.submit_settings();
+        }
+    }
+
+    fn take_settings(&mut self) {
+        if let Some(rx) = &self.settings_load {
+            match rx.try_recv() {
+                Ok(Ok(snap)) => {
+                    self.settings_draft = SettingsDraft::from_snapshot(&snap);
+                    self.settings_load = None;
+                    self.settings_error.clear();
+                }
+                Ok(Err(message)) => {
+                    self.settings_error = message;
+                    self.settings_load = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.settings_load = None,
+            }
+        }
+        if let Some(rx) = &self.settings_save {
+            match rx.try_recv() {
+                Ok(Ok(())) => {
+                    self.settings_save = None;
+                    self.settings_error.clear();
+                    self.open_settings();
+                }
+                Ok(Err(message)) => {
+                    self.settings_error = message;
+                    self.settings_save = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.settings_save = None,
+            }
+        }
+    }
+
+    fn submit_settings(&mut self) {
+        if self.settings_save.is_some() {
+            return;
+        }
+        let changes = match self.settings_draft.changes() {
+            Ok(changes) if changes.is_empty() => {
+                self.settings_error.clear();
+                return;
+            }
+            Ok(changes) => changes,
+            Err(message) => {
+                self.settings_error = message;
+                return;
+            }
+        };
+        let login = self.login.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let outcome = login
+                .save_settings(&changes)
+                .map_err(|err| login_message(&err));
+            let _ = tx.send(outcome);
+        });
+        self.settings_save = Some(rx);
+        self.settings_error.clear();
     }
 }
 
