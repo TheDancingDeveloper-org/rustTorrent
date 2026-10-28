@@ -17,6 +17,7 @@ use crate::screens::{
     AddDraft, AddRequest, AddSource, DetailAction, DetailTab, DetailView, RowAction,
 };
 
+use crate::keychain::{OsKeychain, TokenStore};
 use crate::screens::{draw_detail, draw_main};
 use crate::state::{ANY, ListCache, StatusFilter};
 
@@ -66,7 +67,18 @@ pub struct Snapshot {
 /// must not log in again; the client refreshes its own token on a 401.
 pub trait LoginAttempt: Send {
     /// Try the credentials and keep the session. The password must not be written to a log.
-    fn login(&self, url: &str, username: &str, password: &str) -> Result<(), Error>;
+    /// Returns the refresh token so the shell can put it in the keychain.
+    fn login(&self, url: &str, username: &str, password: &str) -> Result<Option<String>, Error>;
+
+    /// Continue a previous session from a refresh token. `Err` means the token
+    /// is no longer accepted, and the shell asks for the password again.
+    fn resume(&self, url: &str, refresh_token: &str) -> Result<Option<String>, Error> {
+        let _ = (url, refresh_token);
+        Err(Error::Unauthorised)
+    }
+
+    /// Drop the live session. The shell clears the keychain itself.
+    fn logout(&self) {}
 
     /// The current list and session speeds, on the session `login` opened.
     fn snapshot(&self) -> Result<Snapshot, Error> {
@@ -124,16 +136,34 @@ fn sessions() -> &'static std::sync::Mutex<Option<Session>> {
 }
 
 impl LoginAttempt for DaemonLogin {
-    fn login(&self, url: &str, username: &str, password: &str) -> Result<(), Error> {
+    fn login(&self, url: &str, username: &str, password: &str) -> Result<Option<String>, Error> {
         let runtime = runtime()?;
         let client = runtime.block_on(async {
             let mut client = Client::new(url)?;
             client.login(username, password).await?;
             Ok::<Client, Error>(client)
         })?;
+        let refresh = client.refresh_token().map(str::to_owned);
         *sessions().lock().unwrap_or_else(|err| err.into_inner()) =
             Some(Session { runtime, client });
-        Ok(())
+        Ok(refresh)
+    }
+
+    fn resume(&self, url: &str, refresh_token: &str) -> Result<Option<String>, Error> {
+        let runtime = runtime()?;
+        let client = runtime.block_on(async {
+            let mut client = Client::new(url)?;
+            client.resume(refresh_token).await?;
+            Ok::<Client, Error>(client)
+        })?;
+        let refresh = client.refresh_token().map(str::to_owned);
+        *sessions().lock().unwrap_or_else(|err| err.into_inner()) =
+            Some(Session { runtime, client });
+        Ok(refresh)
+    }
+
+    fn logout(&self) {
+        *sessions().lock().unwrap_or_else(|err| err.into_inner()) = None;
     }
 
     fn snapshot(&self) -> Result<Snapshot, Error> {
@@ -249,11 +279,14 @@ fn runtime() -> Result<tokio::runtime::Runtime, Error> {
 }
 
 struct PendingLogin {
-    rx: Receiver<Result<(), String>>,
+    rx: Receiver<Result<Option<String>, String>>,
+    /// `true` when this worker is a reconnect, so a failure stays on Connect
+    /// without a scary first-run error if the token was simply missing.
+    reconnect: bool,
 }
 
 /// The shell: chrome, the current screen, and one in-flight login.
-pub struct App<L: LoginAttempt = DaemonLogin> {
+pub struct App<L: LoginAttempt = DaemonLogin, S: TokenStore = OsKeychain> {
     screen: Screen,
     connection: Connection,
     url: String,
@@ -262,7 +295,10 @@ pub struct App<L: LoginAttempt = DaemonLogin> {
     /// Shown under the form after a failed attempt. Empty when there is none.
     error: String,
     login: L,
+    keychain: S,
     pending: Option<PendingLogin>,
+    /// One reconnect attempt per launch. A failure leaves the connect screen.
+    reconnect_tried: bool,
     theme_ready: bool,
     cache: ListCache,
     status_filter: StatusFilter,
@@ -305,10 +341,11 @@ impl App<DaemonLogin> {
     }
 }
 
-impl<L: LoginAttempt + Clone + 'static> App<L> {
-    /// `login` is cloned onto the worker thread, so it must not hold the UI.
+impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
+    /// Same shell with a chosen token store. Tests use the memory store so
+    /// they never touch the OS keychain.
     #[must_use]
-    pub fn with_login(login: L) -> Self {
+    pub fn with_store(login: L, keychain: S) -> Self {
         Self {
             screen: Screen::Connect,
             connection: Connection::Disconnected,
@@ -317,7 +354,9 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             password: String::new(),
             error: String::new(),
             login,
+            keychain,
             pending: None,
+            reconnect_tried: false,
             theme_ready: false,
             cache: ListCache::default(),
             status_filter: StatusFilter::default(),
@@ -341,7 +380,49 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             detail_flight: None,
         }
     }
+}
 
+impl<L: LoginAttempt + Clone + 'static> App<L> {
+    /// `login` is cloned onto the worker thread, so it must not hold the UI.
+    #[must_use]
+    pub fn with_login(login: L) -> App<L, OsKeychain> {
+        Self {
+            screen: Screen::Connect,
+            connection: Connection::Disconnected,
+            url: "http://127.0.0.1:3030".to_owned(),
+            username: String::new(),
+            password: String::new(),
+            error: String::new(),
+            login,
+            keychain: OsKeychain,
+            pending: None,
+            reconnect_tried: false,
+            theme_ready: false,
+            cache: ListCache::default(),
+            status_filter: StatusFilter::default(),
+            category: ANY.to_owned(),
+            tracker: ANY.to_owned(),
+            grid: DataGridState::default(),
+            poll: None,
+            poll_at: None,
+            selected: None,
+            confirm_delete: false,
+            add_open: false,
+            add_draft: AddDraft::default(),
+            action: None,
+            add_flight: None,
+            detail: DetailView::default(),
+            detail_tab: DetailTab::Files,
+            tracker_url: String::new(),
+            detail_poll: None,
+            detail_poll_at: None,
+            detail_for: None,
+            detail_flight: None,
+        }
+    }
+}
+
+impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
     #[must_use]
     pub fn screen(&self) -> Screen {
         self.screen
@@ -383,13 +464,54 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
         let (tx, rx) = mpsc::channel();
         self.connection = Connection::Connecting;
         self.error.clear();
-        self.pending = Some(PendingLogin { rx });
+        self.pending = Some(PendingLogin {
+            rx,
+            reconnect: false,
+        });
         std::thread::spawn(move || {
             let outcome = login
                 .login(&url, &username, &password)
                 .map_err(|err| login_message(&err));
             let _ = tx.send(outcome);
         });
+    }
+
+    /// One try, on the first frame, to continue from the keychain. No token,
+    /// or a keychain that cannot be opened, leaves the connect screen.
+    fn reconnect(&mut self) {
+        if self.reconnect_tried || self.pending.is_some() || self.screen != Screen::Connect {
+            return;
+        }
+        self.reconnect_tried = true;
+        let loaded = self.keychain.load(&self.url);
+        let Some(Some(refresh)) = loaded else { return };
+        let login = self.login.clone();
+        let url = self.url.clone();
+        let (tx, rx) = mpsc::channel();
+        self.connection = Connection::Connecting;
+        self.pending = Some(PendingLogin {
+            rx,
+            reconnect: true,
+        });
+        std::thread::spawn(move || {
+            let outcome = login
+                .resume(&url, &refresh)
+                .map_err(|err| login_message(&err));
+            let _ = tx.send(outcome);
+        });
+    }
+
+    /// Leave the session and drop the stored refresh token.
+    pub fn logout(&mut self) {
+        self.login.logout();
+        let _ = self.keychain.clear(&self.url);
+        self.screen = Screen::Connect;
+        self.connection = Connection::Disconnected;
+        self.password.clear();
+        self.selected = None;
+        self.cache.torrents.clear();
+        self.poll = None;
+        self.detail = DetailView::default();
     }
 
     /// Take a finished login, if the worker has sent one.
@@ -399,19 +521,33 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             .as_ref()
             .and_then(|pending| pending.rx.try_recv().ok());
         if let Some(outcome) = finished {
+            let reconnect = self
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.reconnect);
             self.pending = None;
             match outcome {
-                Ok(()) => {
+                Ok(refresh) => {
+                    if let Some(token) = refresh.as_deref() {
+                        // A keychain that refuses the write does not fail the
+                        // session. The token simply will not survive a relaunch.
+                        let _ = self.keychain.store(&self.url, token);
+                    }
                     self.connection = Connection::Connected;
                     self.screen = Screen::Main;
                     self.error.clear();
-                    // The first list is due immediately; later polls wait POLL_EVERY.
+                    self.password.clear();
                     self.poll_at = None;
                 }
                 Err(message) => {
                     self.connection = Connection::Error;
                     self.screen = Screen::Connect;
-                    self.error = message;
+                    if reconnect {
+                        let _ = self.keychain.clear(&self.url);
+                        self.error = "Saved session expired. Sign in again.".to_owned();
+                    } else {
+                        self.error = message;
+                    }
                 }
             }
         }
@@ -423,6 +559,7 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             install(ui.ctx(), &Theme::dark(FLUENT));
             self.theme_ready = true;
         }
+        self.reconnect();
         self.poll_login();
         self.poll_list();
         self.poll_detail();
@@ -505,6 +642,12 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
 
     fn main_screen(&mut self, ui: &mut egui::Ui) {
         self.take_action();
+        ui.horizontal(|ui| {
+            ui.label("Session");
+            if ui.button("Sign out").clicked() {
+                self.logout();
+            }
+        });
         let chosen = draw_main(
             ui,
             &self.cache,
