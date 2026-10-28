@@ -229,7 +229,7 @@ impl TorrentStateLive {
                 continue;
             }
 
-            if session.blocklist.has(addr.ip()) {
+            if session.blocklist.read().has(addr.ip()) {
                 session
                     .stats
                     .counters

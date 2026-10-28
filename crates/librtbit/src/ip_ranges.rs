@@ -149,6 +149,60 @@ enum IpRange {
     V6(Range<Ipv6Addr>),
 }
 
+/// Hard cap on an IP filter body. Larger input is refused before it is parsed.
+pub const MAX_IP_FILTER_BYTES: usize = 1024 * 1024;
+
+/// One line of an IP filter that could not be parsed.
+#[derive(Debug)]
+pub struct IpFilterError {
+    pub line_number: usize,
+    pub message: String,
+}
+
+impl std::fmt::Display for IpFilterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "line {}: {}", self.line_number, self.message)
+    }
+}
+
+impl std::error::Error for IpFilterError {}
+
+/// Parse an IP filter (P2P format: `name:start-end`, `#` comments, blank lines).
+/// Invalid lines are an error naming the line number. Input over
+/// [`MAX_IP_FILTER_BYTES`] is refused.
+pub fn parse_ip_filter(text: &str) -> Result<IpRanges, IpFilterError> {
+    if text.len() > MAX_IP_FILTER_BYTES {
+        return Err(IpFilterError {
+            line_number: 0,
+            message: format!(
+                "IP filter is {} bytes, over the {} byte cap",
+                text.len(),
+                MAX_IP_FILTER_BYTES
+            ),
+        });
+    }
+    let mut v4 = Vec::new();
+    let mut v6 = Vec::new();
+    for (idx, raw) in text.lines().enumerate() {
+        let line_number = idx + 1;
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        match parse_ip_range(line) {
+            Some(IpRange::V4(r)) => v4.push(r),
+            Some(IpRange::V6(r)) => v6.push(r),
+            None => {
+                return Err(IpFilterError {
+                    line_number,
+                    message: format!("invalid IP filter entry: {line}"),
+                });
+            }
+        }
+    }
+    Ok(IpRanges::new(v4, v6))
+}
+
 fn parse_ip_range(line: &str) -> Option<IpRange> {
     let line = line.trim();
     if line.starts_with('#') || line.is_empty() {
@@ -267,6 +321,31 @@ mod tests {
         // Test IPv6 addresses
         assert!(list.has("2001:db8::1".parse().unwrap()));
         assert!(!list.has("2001:db9::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn filter_matches_ranges_and_rejects_invalid_lines() {
+        let list =
+            parse_ip_filter("# comment\n\nlocal:10.0.0.1-10.0.0.10\nv6:2001:db8::1-2001:db8::10\n")
+                .expect("filter");
+        assert!(list.has("10.0.0.5".parse().unwrap()));
+        assert!(!list.has("10.0.0.11".parse().unwrap()));
+        assert!(list.has("2001:db8::2".parse().unwrap()));
+        assert!(!list.has("8.8.8.8".parse().unwrap()));
+
+        let err = match parse_ip_filter("good:1.1.1.1-1.1.1.2\nnot a range\n") {
+            Err(e) => e,
+            Ok(_) => panic!("invalid"),
+        };
+        assert_eq!(err.line_number, 2);
+        assert!(err.to_string().contains("invalid IP filter entry"));
+
+        let huge = "x".repeat(MAX_IP_FILTER_BYTES + 1);
+        let err = match parse_ip_filter(&huge) {
+            Err(e) => e,
+            Ok(_) => panic!("over cap"),
+        };
+        assert!(err.to_string().contains("cap"));
     }
 
     #[ignore]

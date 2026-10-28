@@ -64,7 +64,7 @@ impl Session {
             .unwrap_or_else(|| Duration::from_secs(10));
 
         let incoming_ip = addr.ip();
-        if self.blocklist.has(incoming_ip) {
+        if self.blocklist.read().has(incoming_ip) {
             self.stats
                 .counters
                 .blocked_incoming

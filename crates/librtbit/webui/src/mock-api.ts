@@ -9,6 +9,8 @@ import {
   CategoryInfo,
   DhtStats,
   AdvancedConfig,
+  ProxyConfig,
+  IpFilterConfig,
   LimitsConfig,
   ListTorrentsResponse,
   PeerStatsSnapshot,
@@ -1058,6 +1060,10 @@ export const MockAPI: RtbitAPI & { getVersion: () => Promise<string> } = {
     };
   },
   setAdvanced: async (_config: AdvancedConfig): Promise<void> => {},
+  getProxy: async (): Promise<ProxyConfig> => ({ proxy_url: null }),
+  setProxy: async (_config: ProxyConfig): Promise<void> => {},
+  getIpFilter: async (): Promise<IpFilterConfig> => ({ filter: "" }),
+  setIpFilter: async (_config: IpFilterConfig): Promise<void> => {},
 
   // Per-torrent controls
   setTorrentSeedLimits: async (

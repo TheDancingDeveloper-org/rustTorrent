@@ -7,6 +7,8 @@ import {
   CategoryInfo,
   DhtStats,
   AdvancedConfig,
+  ProxyConfig,
+  IpFilterConfig,
   FoldersConfig,
   DownloadsConfig,
   NetworkConfig,
@@ -149,6 +151,18 @@ export const APIContext = createContext<RtbitAPI>({
     throw new Error("Function not implemented.");
   },
   setAdvanced: function (_config: AdvancedConfig): Promise<void> {
+    throw new Error("Function not implemented.");
+  },
+  getProxy: function (): Promise<ProxyConfig> {
+    throw new Error("Function not implemented.");
+  },
+  setProxy: function (_config: ProxyConfig): Promise<void> {
+    throw new Error("Function not implemented.");
+  },
+  getIpFilter: function (): Promise<IpFilterConfig> {
+    throw new Error("Function not implemented.");
+  },
+  setIpFilter: function (_config: IpFilterConfig): Promise<void> {
     throw new Error("Function not implemented.");
   },
   setTorrentSeedLimits: function (
