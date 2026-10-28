@@ -1,0 +1,1 @@
+{"peers":{"1.2.3.4:6881":{"counters":{"fetched_bytes":20,"uploaded_bytes":5,"incoming_connections":0,"total_time_connecting_ms":0,"connection_attempts":0,"connections":1,"errors":0,"fetched_chunks":0,"downloaded_and_checked_pieces":0,"total_piece_download_ms":0,"times_stolen_from_me":0,"times_i_stole":0},"state":"live","conn_kind":null}}}

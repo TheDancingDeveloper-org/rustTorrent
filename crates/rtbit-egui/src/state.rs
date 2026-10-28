@@ -139,6 +139,7 @@ mod tests {
             category: category.map(str::to_owned),
             tags: None,
             trackers: Some(vec!["http://tracker.example:80/announce".into()]),
+            files: None,
             stats: state.map(|state| TorrentStats {
                 state: Some(state),
                 ..TorrentStats::default()
