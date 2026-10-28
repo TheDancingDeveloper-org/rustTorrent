@@ -6,7 +6,9 @@ use tracing::{info, warn};
 
 use super::config::RssFeedConfig;
 use super::db::RssDatabase;
+use super::fetch::{self, MAX_FEED_BYTES};
 use super::models::RssItem;
+use super::rules::{self, RuleDecision};
 use crate::api::Api;
 use crate::session::AddTorrent;
 
@@ -88,16 +90,31 @@ impl RssMonitor {
     }
 
     async fn read_feed_body(client: &reqwest::Client, url: &str) -> anyhow::Result<Vec<u8>> {
+        // file:// is only a test seam. A feed URL has already been refused
+        // unless it is http(s), so this branch never runs for a stored feed.
         if url.starts_with("file://") {
             let path = file_url_to_path(url)?;
-            return tokio::fs::read(&path).await.map_err(|e| {
+            let bytes = tokio::fs::read(&path).await.map_err(|e| {
                 anyhow::anyhow!("error reading RSS feed file {}: {e}", path.display())
-            });
+            })?;
+            return Ok(fetch::cap_feed_body(&bytes));
+        }
+
+        let parsed = reqwest::Url::parse(url)?;
+        if let Some(host) = parsed.host_str()
+            && host.parse::<std::net::IpAddr>().is_err()
+        {
+            let addresses = tokio::net::lookup_host((host, parsed.port().unwrap_or(80)))
+                .await
+                .map_err(|e| anyhow::anyhow!("could not resolve feed host {host}: {e}"))?
+                .map(|addr| addr.ip())
+                .collect::<Vec<_>>();
+            fetch::assert_public_addresses(&addresses).map_err(|e| anyhow::anyhow!("{e}"))?;
         }
 
         let response = client.get(url).send().await?;
         let body = response.bytes().await?;
-        Ok(body.to_vec())
+        Ok(fetch::cap_feed_body(&body))
     }
 
     async fn check_feed(
@@ -107,14 +124,20 @@ impl RssMonitor {
     ) -> anyhow::Result<()> {
         info!(feed = %feed.name, url = %feed.url, "Checking RSS feed");
 
+        fetch::check_feed_url(&feed.url).map_err(|e| anyhow::anyhow!("{e}"))?;
         let body = Self::read_feed_body(client, &feed.url).await?;
+        if body.len() > MAX_FEED_BYTES {
+            warn!(feed = %feed.name, bytes = body.len(), "RSS feed body exceeds the size cap");
+        }
+        let body = fetch::cap_feed_body(&body);
         let parsed = feed_rs::parser::parse(&body[..])?;
 
-        // Compile filter regex if provided
+        // Compile the feed filter if one is set. An oversized or invalid
+        // pattern filters everything out rather than running unbounded.
         let filter = feed
             .filter_regex
             .as_ref()
-            .and_then(|r| regex::Regex::new(r).ok());
+            .and_then(|r| rules::BoundedPattern::compile(r).ok());
 
         // Load download rules for this feed
         let rules = {
@@ -194,22 +217,21 @@ impl RssMonitor {
                 continue;
             }
 
-            // 2. Check download rules
-            let matched_rule = rules.iter().find(|r| {
-                regex::Regex::new(&r.match_regex)
-                    .map(|re| re.is_match(&title))
-                    .unwrap_or(false)
-            });
+            // 2. Check per-feed rules, skipping episodes already downloaded.
+            let tracker = {
+                let db = self.db.lock();
+                db.episodes_load().unwrap_or_default()
+            };
+            let decision = rules::decide(&rules, &title, &tracker);
 
-            let (should_download, category) = if let Some(rule) = matched_rule {
-                (
-                    true,
-                    rule.category.clone().or_else(|| feed.category.clone()),
-                )
-            } else if feed.auto_download && feed.filter_regex.is_none() {
-                (true, feed.category.clone())
-            } else {
-                (false, None)
+            let (should_download, category) = match decision {
+                RuleDecision::Download { category } => {
+                    (true, category.or_else(|| feed.category.clone()))
+                }
+                RuleDecision::Skip if feed.auto_download && feed.filter_regex.is_none() => {
+                    (true, feed.category.clone())
+                }
+                RuleDecision::Skip => (false, None),
             };
 
             if !should_download {
@@ -222,6 +244,9 @@ impl RssMonitor {
                 Ok(()) => {
                     let db = self.db.lock();
                     let _ = db.rss_item_mark_downloaded(&entry_id, category.as_deref());
+                    if let Some(episode) = rules::parse_episode(&title) {
+                        let _ = db.episode_record(&rules::series_key(&title), episode);
+                    }
                     info!(title = %title, "RSS torrent added successfully");
                 }
                 Err(e) => {

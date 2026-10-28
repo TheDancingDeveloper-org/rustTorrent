@@ -94,6 +94,22 @@ impl RssDatabase {
             )?;
         }
 
+        if version < 3 {
+            info!("Applying RSS database migration v3");
+            self.conn.execute_batch(
+                "
+                CREATE TABLE IF NOT EXISTS rss_episodes (
+                    series TEXT NOT NULL,
+                    season INTEGER NOT NULL,
+                    episode INTEGER NOT NULL,
+                    PRIMARY KEY (series, season, episode)
+                );
+
+                UPDATE schema_version SET version = 3;
+                ",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -362,6 +378,43 @@ impl RssDatabase {
     pub fn rss_rule_delete(&self, id: &str) -> anyhow::Result<()> {
         self.conn
             .execute("DELETE FROM rss_rules WHERE id=?1", params![id])?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Episode tracking
+    // -----------------------------------------------------------------------
+
+    /// Episodes already downloaded, keyed by the series name.
+    pub fn episodes_load(&self) -> anyhow::Result<super::rules::EpisodeTracker> {
+        let mut tracker = super::rules::EpisodeTracker::new();
+        let mut stmt = self
+            .conn
+            .prepare("SELECT series, season, episode FROM rss_episodes")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                u32::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
+                u32::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
+            ))
+        })?;
+        for row in rows {
+            let (series, season, episode) = row?;
+            tracker.record(&series, super::rules::Episode { season, episode });
+        }
+        Ok(tracker)
+    }
+
+    /// Record one downloaded episode. A repeat is stored once.
+    pub fn episode_record(
+        &self,
+        series: &str,
+        episode: super::rules::Episode,
+    ) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO rss_episodes (series, season, episode) VALUES (?1, ?2, ?3)",
+            params![series, episode.season as i64, episode.episode as i64],
+        )?;
         Ok(())
     }
 }

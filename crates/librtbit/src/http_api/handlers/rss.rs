@@ -9,8 +9,37 @@ use super::ApiState;
 use crate::{
     ApiError,
     api::Result,
-    rss::{config::RssFeedConfig, models::RssRule},
+    rss::{
+        config::RssFeedConfig,
+        fetch::{self, FeedUrlError},
+        models::RssRule,
+        rules::{self, PatternError},
+    },
 };
+
+fn feed_url_error(err: FeedUrlError) -> ApiError {
+    ApiError::from((
+        axum::http::StatusCode::BAD_REQUEST,
+        anyhow::anyhow!("invalid feed URL: {err}"),
+    ))
+}
+
+fn pattern_error(err: PatternError) -> ApiError {
+    ApiError::from((
+        axum::http::StatusCode::BAD_REQUEST,
+        anyhow::anyhow!("invalid filter pattern: {err}"),
+    ))
+}
+
+/// Refuse a feed whose URL is not http(s) or names a private address, and a
+/// filter pattern that is empty, oversized or will not compile.
+fn validate_feed(feed: &RssFeedConfig) -> Result<()> {
+    fetch::check_feed_url(&feed.url).map_err(feed_url_error)?;
+    if let Some(pattern) = &feed.filter_regex {
+        rules::BoundedPattern::compile(pattern).map_err(pattern_error)?;
+    }
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -51,6 +80,7 @@ pub async fn h_rss_feed_add(
             feed.name
         )));
     }
+    validate_feed(&feed)?;
     db.feed_upsert(&feed).map_err(ApiError::from)?;
     Ok(Json(serde_json::json!({"status": true})))
 }
@@ -67,6 +97,7 @@ pub async fn h_rss_feed_update(
     if feed.name != name {
         db.feed_delete(&name).map_err(ApiError::from)?;
     }
+    validate_feed(&feed)?;
     db.feed_upsert(&feed).map_err(ApiError::from)?;
     Ok(Json(serde_json::json!({"status": true})))
 }
@@ -177,8 +208,7 @@ pub async fn h_rss_rule_add(
     Json(body): Json<RssRuleBody>,
 ) -> Result<impl IntoResponse> {
     // Validate the regex
-    regex::Regex::new(&body.match_regex)
-        .map_err(|e| ApiError::from(anyhow::anyhow!("Invalid regex: {}", e)))?;
+    rules::BoundedPattern::compile(&body.match_regex).map_err(pattern_error)?;
 
     let rule = RssRule {
         id: uuid::Uuid::new_v4().to_string(),
@@ -200,8 +230,7 @@ pub async fn h_rss_rule_update(
     Path(id): Path<String>,
     Json(body): Json<RssRuleBody>,
 ) -> Result<impl IntoResponse> {
-    regex::Regex::new(&body.match_regex)
-        .map_err(|e| ApiError::from(anyhow::anyhow!("Invalid regex: {}", e)))?;
+    rules::BoundedPattern::compile(&body.match_regex).map_err(pattern_error)?;
 
     let rule = RssRule {
         id,
