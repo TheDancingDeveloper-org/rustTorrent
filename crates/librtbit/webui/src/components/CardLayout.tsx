@@ -18,8 +18,6 @@ import {
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { TorrentContextMenu, ContextMenuState } from "./TorrentContextMenu";
 
-const DEFAULT_SORT_COLUMN: TorrentSortColumn = "id";
-const DEFAULT_SORT_DIRECTION: SortDirection = "desc";
 const LONG_PRESS_MS = 500;
 const LONG_PRESS_SLOP_PX = 10;
 
@@ -35,11 +33,13 @@ export const CardLayout = (props: {
   // Keyboard shortcuts (Ctrl+A, Ctrl+F, Escape)
   useKeyboardShortcuts();
   const [localSearch, setLocalSearch] = useState(searchQuery);
-  const [sortColumn, setSortColumn] =
-    useState<TorrentSortColumn>(DEFAULT_SORT_COLUMN);
-  const [sortDirection, setSortDirection] = useState<SortDirection>(
-    DEFAULT_SORT_DIRECTION,
-  );
+  const storedSortColumn = useUIStore((state) => state.sortColumn);
+  const sortDirection = useUIStore((state) => state.sortDirection);
+  const setSort = useUIStore((state) => state.setSort);
+  const sortColumn: TorrentSortColumn =
+    storedSortColumn in SORT_COLUMN_LABELS
+      ? (storedSortColumn as TorrentSortColumn)
+      : "id";
   const [torrentContextMenu, setTorrentContextMenu] =
     useState<ContextMenuState | null>(null);
 
@@ -65,8 +65,7 @@ export const CardLayout = (props: {
       TorrentSortColumn,
       SortDirection,
     ];
-    setSortColumn(col);
-    setSortDirection(dir);
+    setSort(col, dir);
   };
 
   const normalizedQuery = searchQuery.toLowerCase().trim();

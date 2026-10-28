@@ -1,20 +1,37 @@
 import { create } from "zustand";
-import {
-  TorrentSortColumn,
-  SortDirection,
-  StatusFilter,
-  STATUS_FILTERS,
-} from "../helper/torrentFilters";
+import { StatusFilter } from "../helper/torrentFilters";
 import { CategoryInfo } from "../api-types";
 import {
   loadViewPref,
   saveViewPref,
-  oneOf,
   isBoolean,
-  isStringOrNull,
 } from "../helper/viewPrefs";
+import {
+  DEFAULT_VIEW_QUERY,
+  parseViewQuery,
+  writeViewQuery,
+  type ViewQuery,
+} from "../helper/viewQuery";
 
 const LARGE_SCREEN_BREAKPOINT = 1024;
+
+const initialView: ViewQuery =
+  typeof window === "undefined"
+    ? DEFAULT_VIEW_QUERY
+    : parseViewQuery(window.location.search);
+
+function publishView(patch: Partial<ViewQuery>): void {
+  const state = useUIStore.getState();
+  writeViewQuery({
+    search: state.searchQuery,
+    status: state.statusFilter,
+    category: state.categoryFilter,
+    tracker: state.trackerFilter,
+    sortColumn: state.sortColumn,
+    sortDirection: state.sortDirection,
+    ...patch,
+  });
+}
 
 function getDefaultViewMode(): "full" | "compact" {
   return window.innerWidth >= LARGE_SCREEN_BREAKPOINT ? "compact" : "full";
@@ -55,6 +72,10 @@ export interface UIStore {
   setTrackerFilter: (tracker: string | null) => void;
   setCategoryFilter: (category: string | null) => void;
 
+  sortColumn: ViewQuery["sortColumn"];
+  sortDirection: ViewQuery["sortDirection"];
+  setSort: (column: ViewQuery["sortColumn"], direction: ViewQuery["sortDirection"]) => void;
+
   // Category management
   categories: Record<string, CategoryInfo>;
   setCategories: (categories: Record<string, CategoryInfo>) => void;
@@ -91,16 +112,16 @@ export const useUIStore = create<UIStore>((set, get) => ({
     set({ viewMode: newMode });
   },
 
-  searchQuery: "",
-  setSearchQuery: (query) => set({ searchQuery: query }),
+  searchQuery: initialView.search,
+  setSearchQuery: (query) => {
+    publishView({ search: query });
+    set({ searchQuery: query });
+  },
 
-  statusFilter: loadViewPref<StatusFilter>(
-    "statusFilter",
-    "all",
-    oneOf(STATUS_FILTERS),
-  ),
+  statusFilter: initialView.status,
   setStatusFilter: (filter) => {
     saveViewPref("statusFilter", filter);
+    publishView({ status: filter });
     set({ statusFilter: filter });
   },
 
@@ -223,8 +244,8 @@ export const useUIStore = create<UIStore>((set, get) => ({
 
   sidebarCollapsed: loadViewPref("sidebarCollapsed", false, isBoolean),
   sidebarOpen: false,
-  trackerFilter: loadViewPref("trackerFilter", null, isStringOrNull),
-  categoryFilter: loadViewPref("categoryFilter", null, isStringOrNull),
+  trackerFilter: initialView.tracker,
+  categoryFilter: initialView.category,
   toggleSidebar: () =>
     set((state) => {
       const sidebarCollapsed = !state.sidebarCollapsed;
@@ -234,11 +255,20 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
   setTrackerFilter: (tracker) => {
     saveViewPref("trackerFilter", tracker);
+    publishView({ tracker });
     set({ trackerFilter: tracker });
   },
   setCategoryFilter: (category) => {
     saveViewPref("categoryFilter", category);
+    publishView({ category });
     set({ categoryFilter: category });
+  },
+
+  sortColumn: initialView.sortColumn,
+  sortDirection: initialView.sortDirection,
+  setSort: (column, direction) => {
+    publishView({ sortColumn: column, sortDirection: direction });
+    set({ sortColumn: column, sortDirection: direction });
   },
 
   categories: {},
