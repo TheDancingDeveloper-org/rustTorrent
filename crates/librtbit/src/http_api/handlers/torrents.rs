@@ -868,14 +868,11 @@ pub async fn h_get_seed_limits(State(state): State<ApiState>) -> impl IntoRespon
 pub async fn h_set_seed_limits(
     State(state): State<ApiState>,
     axum::Json(body): axum::Json<SeedLimitsBody>,
-) -> Result<impl IntoResponse> {
-    state
-        .api
-        .session()
-        .set_seed_limits(body.into())
-        .await
-        .context("error saving seed limits")?;
-    Ok(axum::Json(serde_json::json!({})))
+) -> axum::response::Response {
+    if let Err(err) = state.api.session().set_seed_limits(body.into()).await {
+        return ApiError::from(err.context("error saving seed limits")).into_response();
+    }
+    axum::Json(serde_json::json!({})).into_response()
 }
 
 pub async fn h_get_torrent_seed_limits(
