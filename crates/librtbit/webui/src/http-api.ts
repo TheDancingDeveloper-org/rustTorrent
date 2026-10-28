@@ -7,6 +7,7 @@ import {
   CategoryInfo,
   DhtStats,
   ErrorDetails,
+  AdvancedConfig,
   FoldersConfig,
   DownloadsConfig,
   NetworkConfig,
@@ -476,6 +477,12 @@ export const API: RtbitAPI & { getVersion: () => Promise<string> } = {
   },
   getLimits: (): Promise<LimitsConfig> => {
     return makeRequest("GET", "/torrents/limits");
+  },
+  getAdvanced: (): Promise<AdvancedConfig> => {
+    return makeRequest("GET", "/session/advanced");
+  },
+  setAdvanced: (config: AdvancedConfig): Promise<void> => {
+    return makeRequest("POST", "/session/advanced", config, true);
   },
   setLimits: (limits: LimitsConfig): Promise<void> => {
     return makeRequest("POST", "/torrents/limits", limits, true);

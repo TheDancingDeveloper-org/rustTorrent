@@ -10,6 +10,7 @@ import { BehaviourTab } from "./BehaviourTab";
 import { RSSTab } from "./RSSTab";
 import { FoldersTab } from "./FoldersTab";
 import { DownloadsTab } from "./DownloadsTab";
+import { AdvancedTab } from "./AdvancedTab";
 import { SETTINGS } from "./settingsRegistry";
 import { APIContext } from "../../context";
 import { LimitsConfig, ErrorDetails } from "../../api-types";
@@ -187,6 +188,11 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
           id: "http-api",
           label: "HTTP API",
           content: <HttpApiTab />,
+        },
+        {
+          id: "advanced",
+          label: "Advanced",
+          content: <AdvancedTab />,
         },
         {
           id: "rss",

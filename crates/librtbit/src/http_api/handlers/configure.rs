@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use axum::{Json, extract::Query, extract::State, response::IntoResponse};
 use http::StatusCode;
@@ -104,6 +104,60 @@ pub async fn h_set_downloads(
         .persist_session_settings()
         .await
         .map_err(ApiError::from)?;
+    Ok(Json(EmptyJsonResponse {}))
+}
+
+// --- Advanced library knobs ---
+
+/// Hard caps for the Advanced tab. A value above its cap is refused.
+pub const MAX_CONNECT_TIMEOUT_SECS: u64 = 300;
+pub const MAX_READ_WRITE_TIMEOUT_SECS: u64 = 600;
+pub const MAX_KEEP_ALIVE_SECS: u64 = 600;
+
+/// Session-wide peer connection timeouts, in seconds. `None` means the engine default.
+#[derive(Serialize, Deserialize)]
+pub struct AdvancedConfig {
+    pub connect_timeout_secs: Option<u64>,
+    pub read_write_timeout_secs: Option<u64>,
+    pub keep_alive_secs: Option<u64>,
+}
+
+fn secs_of(d: Option<Duration>) -> Option<u64> {
+    d.map(|d| d.as_secs())
+}
+
+fn reject(msg: &'static str) -> crate::ApiError {
+    ApiError::from((StatusCode::BAD_REQUEST, msg))
+}
+
+fn capped(value: Option<u64>, cap: u64) -> Result<Option<Duration>> {
+    match value {
+        None => Ok(None),
+        Some(0) => Err(reject("timeout must be at least 1 second")),
+        Some(v) if v > cap => Err(reject("timeout exceeds its cap")),
+        Some(v) => Ok(Some(Duration::from_secs(v))),
+    }
+}
+
+pub async fn h_get_advanced(State(state): State<ApiState>) -> Result<impl IntoResponse> {
+    let opts = state.api.session().peer_opts();
+    Ok(Json(AdvancedConfig {
+        connect_timeout_secs: secs_of(opts.connect_timeout),
+        read_write_timeout_secs: secs_of(opts.read_write_timeout),
+        keep_alive_secs: secs_of(opts.keep_alive_interval),
+    }))
+}
+
+pub async fn h_set_advanced(
+    State(state): State<ApiState>,
+    Json(config): Json<AdvancedConfig>,
+) -> Result<impl IntoResponse> {
+    let opts = crate::PeerConnectionOptions {
+        connect_timeout: capped(config.connect_timeout_secs, MAX_CONNECT_TIMEOUT_SECS)?,
+        read_write_timeout: capped(config.read_write_timeout_secs, MAX_READ_WRITE_TIMEOUT_SECS)?,
+        keep_alive_interval: capped(config.keep_alive_secs, MAX_KEEP_ALIVE_SECS)?,
+    };
+    state.api.session().set_peer_opts(opts);
     Ok(Json(EmptyJsonResponse {}))
 }
 
@@ -404,6 +458,36 @@ mod tests {
         let roots = canonical_roots(&[&downloads]);
 
         assert!(resolve_browse_path(Some(downloads.join("escape")), &roots).is_err());
+    }
+
+    #[test]
+    fn advanced_caps_reject_zero_and_over_cap_and_keep_empty() {
+        assert!(capped(None, MAX_CONNECT_TIMEOUT_SECS).unwrap().is_none());
+        assert_eq!(
+            capped(Some(30), MAX_CONNECT_TIMEOUT_SECS)
+                .unwrap()
+                .unwrap()
+                .as_secs(),
+            30
+        );
+        assert!(capped(Some(0), MAX_CONNECT_TIMEOUT_SECS).is_err());
+        assert!(capped(Some(MAX_CONNECT_TIMEOUT_SECS + 1), MAX_CONNECT_TIMEOUT_SECS).is_err());
+        assert!(
+            capped(
+                Some(MAX_READ_WRITE_TIMEOUT_SECS + 1),
+                MAX_READ_WRITE_TIMEOUT_SECS
+            )
+            .is_err()
+        );
+        assert!(capped(Some(MAX_KEEP_ALIVE_SECS + 1), MAX_KEEP_ALIVE_SECS).is_err());
+        // The bound is the refusal: the largest allowed value is kept.
+        assert_eq!(
+            capped(Some(MAX_CONNECT_TIMEOUT_SECS), MAX_CONNECT_TIMEOUT_SECS)
+                .unwrap()
+                .unwrap()
+                .as_secs(),
+            MAX_CONNECT_TIMEOUT_SECS
+        );
     }
 
     #[test]

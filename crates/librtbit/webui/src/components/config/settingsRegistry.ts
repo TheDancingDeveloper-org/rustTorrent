@@ -12,7 +12,8 @@ export type SettingsTabId =
   | "dht"
   | "security"
   | "http-api"
-  | "rss";
+  | "rss"
+  | "advanced";
 
 export interface SettingDefinition {
   id: string;
@@ -164,6 +165,18 @@ export const SETTINGS: readonly SettingDefinition[] = [
   },
 
   { id: "feed-history-limit", tab: "rss", label: "Feed History Limit" },
+
+  { id: "connect-timeout", tab: "advanced", label: "Connect timeout (seconds)" },
+  {
+    id: "read-write-timeout",
+    tab: "advanced",
+    label: "Read/write timeout (seconds)",
+  },
+  {
+    id: "keep-alive-interval",
+    tab: "advanced",
+    label: "Keep-alive interval (seconds)",
+  },
 ];
 
 /** The registry label for a setting. Throws on an unknown id, so a typo fails loudly. */
