@@ -1,10 +1,10 @@
 // @ts-nocheck
 // Guards the settings, modal and auth theming (UI fix WP-G): theme tokens
 // instead of raw palette colours, visible focus rings, body colour for plain
-// data, and the dead AdvancedTab staying deleted.
+// data. AdvancedTab is in use again (timeouts), so it follows the same rules.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const path = (p) => fileURLToPath(new URL(p, import.meta.url));
@@ -52,6 +52,3 @@ test("RSS settings headings sit under the tab heading level", () => {
   assert.doesNotMatch(read("../components/config/RSSTab.tsx"), /<h4\b/);
 });
 
-test("the unused AdvancedTab stays deleted", () => {
-  assert.equal(existsSync(path("../components/config/AdvancedTab.tsx")), false);
-});

@@ -40,9 +40,13 @@ test("restart markers are exactly the listen port, bind addresses, DHT, data dir
     [
       "data-directory",
       "dht-enabled",
+      "encryption-mode",
       "http-api-bind-address",
       "listen-ip",
       "listen-port",
+      "lsd-enabled",
+      "pex-enabled",
+      "upnp-port-forward",
     ].sort(),
   );
 });

@@ -39,7 +39,7 @@ const SecsField: React.FC<{
         onChange={(e) => onChange(e.target.value)}
       />
       {invalid && (
-        <div className="text-sm text-red-500 -mt-1 mb-2">
+        <div className="text-sm text-error -mt-1 mb-2">
           Enter a whole number from 1 to {cap}, or leave empty for the engine
           default.
         </div>
@@ -134,7 +134,7 @@ export const AdvancedTab: React.FC = () => {
         {saved && (
           <span className="ml-2 text-sm text-secondary">Saved.</span>
         )}
-        {error && <div className="text-sm text-red-500 mt-2">{error}</div>}
+        {error && <div className="text-sm text-error mt-2">{error}</div>}
       </Fieldset>
     </div>
   );
