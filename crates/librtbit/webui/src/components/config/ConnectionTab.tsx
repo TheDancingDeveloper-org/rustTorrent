@@ -1,9 +1,11 @@
-import React from "react";
+import React, { useContext, useEffect, useState } from "react";
 import { useStatsStore } from "../../stores/statsStore";
+import { APIContext } from "../../context";
 import { RestartNotes } from "./SettingNotes";
 import {
   ConnectionStatSingle,
   ConnectionStatsPerFamily,
+  NetworkConfig,
 } from "../../api-types";
 
 const headerCell = "pb-1 px-2";
@@ -47,9 +49,19 @@ const ProtocolRows = ({
   </>
 );
 
+const yesNo = (value: boolean) => (value ? "On" : "Off");
+
 export const ConnectionTab: React.FC = () => {
   const stats = useStatsStore((state) => state.stats);
   const conns = stats.connections;
+  const API = useContext(APIContext);
+  const [network, setNetwork] = useState<NetworkConfig | null>(null);
+
+  useEffect(() => {
+    API.getNetworkConfig()
+      .then(setNetwork)
+      .catch(() => setNetwork(null));
+  }, [API]);
 
   return (
     <div className="py-2">
@@ -72,34 +84,32 @@ export const ConnectionTab: React.FC = () => {
           <ProtocolRows protocol="SOCKS" stats={conns.socks} />
         </tbody>
       </table>
-      <div className="mt-6 mb-3">
-        <label className="font-medium mb-3 block pb-1 border-b border-divider">
-          Encryption
-        </label>
-        <div className="mt-2">
-          <select
-            className="block border border-divider rounded bg-transparent py-1.5 px-2 focus-ring focus:border-primary sm:leading-6 text-text"
-            disabled
-            value="enabled"
-          >
-            <option value="disabled">Disabled</option>
-            <option value="enabled">Enabled (prefer encrypted)</option>
-            <option value="forced">Forced (require encrypted)</option>
-          </select>
-          <div className="text-sm text-secondary mt-2 space-y-1">
-            <p>
-              <strong>Disabled:</strong> No encryption, all connections are
-              plaintext.
-            </p>
-            <p>
-              <strong>Enabled:</strong> Prefer encrypted connections but allow
-              plaintext fallback.
-            </p>
-            <p>
-              <strong>Forced:</strong> Only allow encrypted connections; reject
-              unencrypted peers.
-            </p>
-          </div>
+      <div className="mt-6 space-y-2 text-sm">
+        <div className="flex items-center gap-2">
+          <span className="w-52 text-secondary">Listen address</span>
+          <span className="text-text font-medium">
+            {network
+              ? `${network.listen_ip ?? "not listening"}:${network.listen_port ?? ""}`
+              : "unavailable"}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-52 text-secondary">UPnP port forward</span>
+          <span className="text-text font-medium">
+            {network ? yesNo(network.upnp_port_forward) : "unavailable"}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-52 text-secondary">Peer exchange</span>
+          <span className="text-text font-medium">
+            {network ? (network.pex_enabled ? "On (not configurable)" : "Off") : "unavailable"}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-52 text-secondary">Encryption</span>
+          <span className="text-text font-medium">
+            {network?.encryption ?? "Not supported by this engine"}
+          </span>
         </div>
       </div>
 
@@ -107,8 +117,9 @@ export const ConnectionTab: React.FC = () => {
         <RestartNotes tab="connections" />
       </div>
       <div className="mt-4 text-secondary text-xs">
-        Connection settings (listen port, TCP/uTP, UPnP, SOCKS proxy, encryption
-        mode) are configured via CLI arguments at startup.
+        These values are informational. Changing the peer port, bind address,
+        UPnP port forward or encryption needs a restart, and a restart is how
+        they are set. The web UI bind address is not editable here.
       </div>
     </div>
   );

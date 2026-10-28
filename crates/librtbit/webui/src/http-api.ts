@@ -9,6 +9,7 @@ import {
   ErrorDetails,
   FoldersConfig,
   DownloadsConfig,
+  NetworkConfig,
   IndexarrIdentityStatus,
   IndexarrRecentResponse,
   IndexarrSearchResponse,
@@ -602,6 +603,9 @@ export const API: RtbitAPI & { getVersion: () => Promise<string> } = {
   },
   setDownloadsConfig: (config: DownloadsConfig): Promise<void> => {
     return makeRequest("POST", "/session/downloads", config, true);
+  },
+  getNetworkConfig: (): Promise<NetworkConfig> => {
+    return makeRequest("GET", "/session/network");
   },
   browseDirectory: (path?: string): Promise<BrowseResponse> => {
     const params = new URLSearchParams();
