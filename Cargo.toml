@@ -15,6 +15,7 @@ members = [
     "crates/librtbit-upnp-serve",
     "crates/rtbit",
     "desktop/src-tauri",
+    "desktop/menu",
 ]
 exclude = ["benchv2", "fuzz"]
 

@@ -93,7 +93,7 @@ pub fn setup(app: &AppHandle) -> anyhow::Result<()> {
     TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .tooltip("rtbit")
-        .on_menu_event(|tray, event| on_menu_event(tray.app_handle(), event.id().as_ref()))
+        .on_menu_event(|tray, event| on_menu_id(tray.app_handle(), event.id().as_ref()))
         .on_tray_icon_event(|tray, event| {
             if matches!(event, TrayIconEvent::Click { .. }) {
                 show_main_window(tray.app_handle());
@@ -113,7 +113,7 @@ pub fn setup(app: &AppHandle) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn on_menu_event(app: &AppHandle, id: &str) {
+pub fn on_menu_id(app: &AppHandle, id: &str) {
     match id {
         "show" => show_main_window(app),
         "add" => pick_torrent_files(app),

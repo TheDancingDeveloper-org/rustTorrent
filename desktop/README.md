@@ -38,6 +38,7 @@ cargo install tauri-cli
 
 * **Opening torrents.** Opening a `.torrent` file or a `magnet:` link, from a file manager or a browser, adds it to the running app. A second launch hands its arguments to the first and exits, so there is one engine and one port.
 * **Tray.** Show, Add `.torrent` file, Pause/Resume All, Open in Browser, Start at login, Check for Updates and Quit. Closing the window hides it to the tray. Quitting with transfers active asks first.
+* **Menu bar.** File, Torrent and View, using the same actions as the tray.
 * **Start at login.** A toggle in the tray menu. The autostart entry starts the app hidden (`--autostart`).
 * **Engine failure.** If the engine cannot start, a native error dialog shows the cause, the config path and the likely port conflict.
 
