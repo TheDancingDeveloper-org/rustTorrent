@@ -32,7 +32,7 @@ test("an empty query matches nothing", () => {
   assert.deepEqual(matchSettings(SETTINGS, tabs, "   "), []);
 });
 
-test("restart markers are exactly the listen port, bind addresses, DHT, data directory", () => {
+test("restart markers are exactly the listen port, bind addresses, DHT, data directory and proxy", () => {
   assert.deepEqual(
     restartRequiredSettings()
       .map((s) => s.id)
@@ -46,6 +46,7 @@ test("restart markers are exactly the listen port, bind addresses, DHT, data dir
       "listen-port",
       "lsd-enabled",
       "pex-enabled",
+      "proxy-url",
       "upnp-port-forward",
     ].sort(),
   );

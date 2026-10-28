@@ -52,10 +52,11 @@ export const ProxyFilterTab: React.FC = () => {
     <div className="py-2">
       <Fieldset label="Outgoing proxy">
         <p className="text-sm text-secondary mb-2">
-          SOCKS5 or HTTP proxy for peer and tracker connections. A password is
-          stored with the session and shown here masked. Leave empty to connect
-          directly. Changing the proxy for trackers takes effect on the next
-          start; peer connections use it immediately.
+          SOCKS5 or HTTP proxy. A password is stored with the session and
+          shown here masked. Leave empty to connect directly. Peer connections
+          use a new proxy immediately. Trackers, DHT and local peer discovery
+          keep the previous address until you restart, so a proxy change is
+          marked restart-required.
         </p>
         <FormInput
           setting="proxy-url"
@@ -90,7 +91,7 @@ export const ProxyFilterTab: React.FC = () => {
           {saving ? "Saving…" : "Save connection settings"}
         </button>
         {saved && <span className="ml-2 text-sm text-secondary">Saved.</span>}
-        {error && <div className="text-sm text-red-500 mt-2">{error}</div>}
+        {error && <div className="text-sm text-error mt-2">{error}</div>}
       </Fieldset>
     </div>
   );
