@@ -11,6 +11,7 @@ import { RSSTab } from "./RSSTab";
 import { FoldersTab } from "./FoldersTab";
 import { DownloadsTab } from "./DownloadsTab";
 import { AdvancedTab } from "./AdvancedTab";
+import { ProxyFilterTab } from "./ProxyFilterTab";
 import { SETTINGS } from "./settingsRegistry";
 import { APIContext } from "../../context";
 import { LimitsConfig, ErrorDetails } from "../../api-types";
@@ -188,6 +189,11 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
           id: "http-api",
           label: "HTTP API",
           content: <HttpApiTab />,
+        },
+        {
+          id: "connection",
+          label: "Connection",
+          content: <ProxyFilterTab />,
         },
         {
           id: "advanced",

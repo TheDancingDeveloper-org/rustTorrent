@@ -57,7 +57,8 @@ use crate::{
     storage::{
         BoxStorageFactory, StorageFactoryExt, TorrentStorage, filesystem::FilesystemStorageFactory,
     },
-    stream_connect::{SocksProxyConfig, StreamConnector, StreamConnectorArgs},
+    stream_connect::ProxyConfig,
+    stream_connect::{StreamConnector, StreamConnectorArgs},
     tag::TagManager,
     torrent_state::{
         ManagedTorrentHandle, ManagedTorrentLocked, ManagedTorrentOptions, ManagedTorrentState,
@@ -158,7 +159,11 @@ pub struct Session {
     pub(crate) peer_limit_atomic: AtomicUsize,
     pub(crate) concurrent_init_limit_atomic: AtomicUsize,
 
-    pub blocklist: IpRanges,
+    pub blocklist: parking_lot::RwLock<IpRanges>,
+    /// Last text submitted to the IP filter. Not a secret.
+    ip_filter_text: parking_lot::RwLock<String>,
+    /// Full proxy URL, credentials included. Never log or return this.
+    proxy_url: parking_lot::RwLock<Option<String>>,
     pub allowlist: Option<IpRanges>,
     /// IPs banned at runtime (WebUI `transfer/banPeers`); not persisted.
     banned_peers: RwLock<HashSet<IpAddr>>,
@@ -355,19 +360,20 @@ impl Session {
                 .await
                 .context("error initializing session persistence store")?;
 
-            let proxy_url = opts.connect.as_ref().and_then(|s| s.proxy_url.as_ref());
-            let proxy_config = match proxy_url {
-                Some(pu) => Some(
-                    SocksProxyConfig::parse(pu)
-                        .with_context(|| format!("error parsing proxy url {pu}"))?,
-                ),
+            let proxy_url = opts.connect.as_ref().and_then(|s| s.proxy_url.clone());
+            let proxy_config = match proxy_url.as_deref() {
+                Some(pu) => {
+                    let parsed = ProxyConfig::parse(pu).context("error parsing proxy url")?;
+                    info!(proxy = %parsed.redacted(), "outgoing proxy configured");
+                    Some(parsed)
+                }
                 None => None,
             };
 
             let reqwest_client = {
-                let builder = if let Some(proxy_url) = proxy_url {
+                let builder = if let Some(proxy_url) = proxy_url.as_deref() {
                     let proxy = reqwest::Proxy::all(proxy_url)
-                        .context("error creating socks5 proxy for HTTP")?;
+                        .context("error creating proxy for HTTP")?;
                     reqwest::Client::builder().proxy(proxy)
                 } else {
                     #[allow(unused_mut)]
@@ -385,7 +391,7 @@ impl Session {
             let stream_connector = Arc::new(
                 StreamConnector::new(StreamConnectorArgs {
                     enable_tcp: opts.connect.as_ref().map(|c| c.enable_tcp).unwrap_or(true),
-                    socks_proxy_config: proxy_config,
+                    proxy_config: proxy_config.clone(),
                     utp_socket: listen_result.as_ref().and_then(|l| l.utp_socket.clone()),
                     bind_device: bind_device.clone(),
                     ipv4_only: opts.ipv4_only,
@@ -548,7 +554,9 @@ impl Session {
 
                 #[cfg(feature = "disable-upload")]
                 _disable_upload: opts.disable_upload,
-                blocklist,
+                blocklist: parking_lot::RwLock::new(blocklist),
+                ip_filter_text: parking_lot::RwLock::new(String::new()),
+                proxy_url: parking_lot::RwLock::new(proxy_url),
                 allowlist,
                 banned_peers: Default::default(),
                 lsd,
@@ -712,6 +720,43 @@ impl Session {
 
     /// Spawn a task in the context of the session.
     #[track_caller]
+
+    /// Redacted proxy URL (`user:***@host`) or none. Never the password.
+    pub fn proxy_url_redacted(&self) -> Option<String> {
+        let guard = self.proxy_url.read();
+        let raw = guard.as_deref()?;
+        ProxyConfig::parse(raw).ok().map(|p| p.redacted())
+    }
+
+    /// Replace the outgoing proxy. `None` clears it. The stored URL is not logged.
+    pub fn set_proxy_url(&self, url: Option<String>) -> anyhow::Result<Option<String>> {
+        let redacted = match url.as_deref() {
+            Some(raw) => {
+                let parsed = ProxyConfig::parse(raw)?;
+                self.connector.set_proxy(Some(parsed.clone()));
+                Some(parsed.redacted())
+            }
+            None => {
+                self.connector.set_proxy(None);
+                None
+            }
+        };
+        *self.proxy_url.write() = url;
+        Ok(redacted)
+    }
+
+    pub fn ip_filter_text(&self) -> String {
+        self.ip_filter_text.read().clone()
+    }
+
+    /// Replace the live IP filter. Over-cap and invalid lines are refused.
+    pub fn set_ip_filter(&self, text: &str) -> Result<(), crate::ip_ranges::IpFilterError> {
+        let ranges = crate::ip_ranges::parse_ip_filter(text)?;
+        *self.blocklist.write() = ranges;
+        *self.ip_filter_text.write() = text.to_owned();
+        Ok(())
+    }
+
     pub fn spawn(
         &self,
         span: tracing::Span,

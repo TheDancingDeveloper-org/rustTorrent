@@ -492,6 +492,16 @@ export interface AdvancedConfig {
 }
 
 /** Startup-only peer and discovery settings. `encryption` is null: unsupported. */
+
+export interface ProxyConfig {
+  proxy_url: string | null;
+}
+
+export interface IpFilterConfig {
+  filter: string;
+}
+
+
 export interface NetworkConfig {
   listen_ip: string | null;
   listen_port: number | null;
@@ -579,6 +589,10 @@ export interface RtbitAPI {
   getSeedLimits: () => Promise<SeedLimitsConfig>;
   getAdvanced: () => Promise<AdvancedConfig>;
   setAdvanced: (config: AdvancedConfig) => Promise<void>;
+  getProxy: () => Promise<ProxyConfig>;
+  setProxy: (config: ProxyConfig) => Promise<void>;
+  getIpFilter: () => Promise<IpFilterConfig>;
+  setIpFilter: (config: IpFilterConfig) => Promise<void>;
   setSeedLimits: (limits: SeedLimitsConfig) => Promise<void>;
 
   // Per-torrent controls

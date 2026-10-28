@@ -8,6 +8,8 @@ import {
   DhtStats,
   ErrorDetails,
   AdvancedConfig,
+  ProxyConfig,
+  IpFilterConfig,
   FoldersConfig,
   DownloadsConfig,
   NetworkConfig,
@@ -483,6 +485,18 @@ export const API: RtbitAPI & { getVersion: () => Promise<string> } = {
   },
   setAdvanced: (config: AdvancedConfig): Promise<void> => {
     return makeRequest("POST", "/session/advanced", config, true);
+  },
+  getProxy: (): Promise<ProxyConfig> => {
+    return makeRequest("GET", "/session/proxy");
+  },
+  setProxy: (config: ProxyConfig): Promise<void> => {
+    return makeRequest("POST", "/session/proxy", config, true);
+  },
+  getIpFilter: (): Promise<IpFilterConfig> => {
+    return makeRequest("GET", "/session/ip-filter");
+  },
+  setIpFilter: (config: IpFilterConfig): Promise<void> => {
+    return makeRequest("POST", "/session/ip-filter", config, true);
   },
   setLimits: (limits: LimitsConfig): Promise<void> => {
     return makeRequest("POST", "/torrents/limits", limits, true);

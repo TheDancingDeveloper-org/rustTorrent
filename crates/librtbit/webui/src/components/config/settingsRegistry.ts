@@ -13,7 +13,8 @@ export type SettingsTabId =
   | "security"
   | "http-api"
   | "rss"
-  | "advanced";
+  | "advanced"
+  | "connection";
 
 export interface SettingDefinition {
   id: string;
@@ -166,6 +167,8 @@ export const SETTINGS: readonly SettingDefinition[] = [
 
   { id: "feed-history-limit", tab: "rss", label: "Feed History Limit" },
 
+  { id: "proxy-url", tab: "connection", label: "Proxy URL" },
+  { id: "ip-filter", tab: "connection", label: "IP filter" },
   { id: "connect-timeout", tab: "advanced", label: "Connect timeout (seconds)" },
   {
     id: "read-write-timeout",

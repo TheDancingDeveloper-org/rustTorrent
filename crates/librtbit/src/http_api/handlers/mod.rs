@@ -141,6 +141,8 @@ pub fn make_api_router(state: ApiState) -> Router {
         .route("/session/folders", get(configure::h_get_folders))
         .route("/session/downloads", get(configure::h_get_downloads))
         .route("/session/advanced", get(configure::h_get_advanced))
+        .route("/session/proxy", get(configure::h_get_proxy))
+        .route("/session/ip-filter", get(configure::h_get_ip_filter))
         .route("/session/network", get(configure::h_get_network))
         .route("/fs/browse", get(configure::h_browse_directory));
 
@@ -238,6 +240,8 @@ pub fn make_api_router(state: ApiState) -> Router {
             .route("/session/folders", post(configure::h_set_folders))
             .route("/session/downloads", post(configure::h_set_downloads))
             .route("/session/advanced", post(configure::h_set_advanced))
+            .route("/session/proxy", post(configure::h_set_proxy))
+            .route("/session/ip-filter", post(configure::h_set_ip_filter))
             .route("/session/network", post(configure::h_set_network))
             .route("/speed/alt", post(speed::h_toggle_alt_speed))
             .route("/speed/alt/config", post(speed::h_set_alt_speed_config))

@@ -365,6 +365,62 @@ pub async fn h_browse_directory(
     }))
 }
 
+// --- Proxy and IP filter (live) ---
+
+#[derive(Serialize, Deserialize)]
+pub struct ProxyConfigBody {
+    /// `socks5://` or `http://` URL. A password in a POST is stored, never echoed.
+    /// GET returns the same URL with the password replaced by `***`, or null.
+    pub proxy_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct IpFilterBody {
+    pub filter: String,
+}
+
+pub async fn h_get_proxy(State(state): State<ApiState>) -> Result<impl IntoResponse> {
+    Ok(Json(ProxyConfigBody {
+        proxy_url: state.api.session().proxy_url_redacted(),
+    }))
+}
+
+pub async fn h_set_proxy(
+    State(state): State<ApiState>,
+    Json(body): Json<ProxyConfigBody>,
+) -> Result<impl IntoResponse> {
+    let raw = body
+        .proxy_url
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+    state
+        .api
+        .session()
+        .set_proxy_url(raw)
+        .map_err(|_| ApiError::from((StatusCode::BAD_REQUEST, "invalid proxy URL")))?;
+    Ok(Json(EmptyJsonResponse {}))
+}
+
+pub async fn h_get_ip_filter(State(state): State<ApiState>) -> Result<impl IntoResponse> {
+    Ok(Json(IpFilterBody {
+        filter: state.api.session().ip_filter_text(),
+    }))
+}
+
+pub async fn h_set_ip_filter(
+    State(state): State<ApiState>,
+    Json(body): Json<IpFilterBody>,
+) -> axum::response::Response {
+    match state.api.session().set_ip_filter(&body.filter) {
+        Ok(()) => Json(EmptyJsonResponse {}).into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
