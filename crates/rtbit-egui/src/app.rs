@@ -11,6 +11,8 @@ use fluent2_egui::theme::{Theme, install};
 use fluent2_egui::tokens::FLUENT;
 use rtbit_client::{Client, Error, SessionStats, TorrentList};
 
+use crate::screens::RowAction;
+
 use crate::screens::draw_main;
 use crate::state::{ANY, ListCache, StatusFilter};
 
@@ -55,15 +57,22 @@ pub struct Snapshot {
 
 /// How a connect click reaches the daemon. Tests substitute a value that
 /// never opens a socket. `snapshot` is what the 2-second poll calls.
+///
+/// A session is opened once by `login` and then reused. `snapshot` and `act`
+/// must not log in again; the client refreshes its own token on a 401.
 pub trait LoginAttempt: Send {
-    /// Try the credentials. The password must not be written to a log.
+    /// Try the credentials and keep the session. The password must not be written to a log.
     fn login(&self, url: &str, username: &str, password: &str) -> Result<(), Error>;
 
-    /// The current list and session speeds. Tests return a scripted value.
-    /// The default logs in again and reads the list; the password is not logged.
-    fn snapshot(&self, url: &str, username: &str, password: &str) -> Result<Snapshot, Error> {
-        let _ = (url, username, password);
+    /// The current list and session speeds, on the session `login` opened.
+    fn snapshot(&self) -> Result<Snapshot, Error> {
         Err(Error::Unreachable("no snapshot".into()))
+    }
+
+    /// Start, pause or delete one torrent on the session `login` opened.
+    fn act(&self, id: u64, action: RowAction) -> Result<(), Error> {
+        let _ = (id, action);
+        Err(Error::Unreachable("no action".into()))
     }
 }
 
@@ -71,23 +80,57 @@ pub trait LoginAttempt: Send {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DaemonLogin;
 
+/// One runtime and one logged-in client, shared by the poll and the row actions.
+struct Session {
+    runtime: tokio::runtime::Runtime,
+    client: Client,
+}
+
+fn sessions() -> &'static std::sync::Mutex<Option<Session>> {
+    static SESSION: std::sync::OnceLock<std::sync::Mutex<Option<Session>>> =
+        std::sync::OnceLock::new();
+    SESSION.get_or_init(|| std::sync::Mutex::new(None))
+}
+
 impl LoginAttempt for DaemonLogin {
     fn login(&self, url: &str, username: &str, password: &str) -> Result<(), Error> {
-        runtime()?.block_on(async {
+        let runtime = runtime()?;
+        let client = runtime.block_on(async {
             let mut client = Client::new(url)?;
-            client.login(username, password).await.map(|_| ())
+            client.login(username, password).await?;
+            Ok::<Client, Error>(client)
+        })?;
+        *sessions().lock().expect("session") = Some(Session { runtime, client });
+        Ok(())
+    }
+
+    fn snapshot(&self) -> Result<Snapshot, Error> {
+        on_session(|session| {
+            session.runtime.block_on(async {
+                let torrents = session.client.torrents_with_stats().await?;
+                let stats = session.client.stats().await?;
+                Ok(Snapshot { torrents, stats })
+            })
         })
     }
 
-    fn snapshot(&self, url: &str, username: &str, password: &str) -> Result<Snapshot, Error> {
-        runtime()?.block_on(async {
-            let mut client = Client::new(url)?;
-            client.login(username, password).await?;
-            let torrents = client.torrents_with_stats().await?;
-            let stats = client.stats().await?;
-            Ok(Snapshot { torrents, stats })
+    fn act(&self, id: u64, action: RowAction) -> Result<(), Error> {
+        on_session(|session| {
+            session.runtime.block_on(async {
+                match action {
+                    RowAction::Start => session.client.start_torrent(id).await,
+                    RowAction::Pause => session.client.pause_torrent(id).await,
+                    RowAction::Delete => session.client.delete_torrent(id).await,
+                }
+            })
         })
     }
+}
+
+fn on_session<T>(call: impl FnOnce(&mut Session) -> Result<T, Error>) -> Result<T, Error> {
+    let mut guard = sessions().lock().expect("session");
+    let session = guard.as_mut().ok_or(Error::Unauthorised)?;
+    call(session)
 }
 
 fn runtime() -> Result<tokio::runtime::Runtime, Error> {
@@ -120,6 +163,11 @@ pub struct App<L: LoginAttempt = DaemonLogin> {
     grid: DataGridState,
     poll: Option<Poll>,
     poll_at: Option<Instant>,
+    /// Torrent the command bar acts on. None until a row is selected.
+    selected: Option<u64>,
+    /// Delete waits for the confirm dialog.
+    confirm_delete: bool,
+    action: Option<ActionFlight>,
 }
 
 impl Default for App<DaemonLogin> {
@@ -156,6 +204,9 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             grid: DataGridState::default(),
             poll: None,
             poll_at: None,
+            selected: None,
+            confirm_delete: false,
+            action: None,
         }
     }
 
@@ -180,6 +231,11 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
         self.connection = Connection::Connected;
         self.cache.torrents.clear();
         self.poll_at = Some(std::time::Instant::now());
+    }
+
+    /// Test hook: select a torrent so the command bar has a row to act on.
+    pub fn select_for_test(&mut self, id: u64) {
+        self.selected = Some(id);
     }
 
     /// Start a login on a worker thread. A second click while one is in
@@ -315,14 +371,67 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
     }
 
     fn main_screen(&mut self, ui: &mut egui::Ui) {
-        draw_main(
+        self.take_action();
+        let chosen = draw_main(
             ui,
             &self.cache,
             &mut self.status_filter,
             &mut self.category,
             &mut self.tracker,
             &mut self.grid,
+            crate::screens::RowActions {
+                selected: self.selected,
+                confirm_delete: &mut self.confirm_delete,
+                busy: self.action.is_some(),
+            },
         );
+        if let Some(id) = chosen.selected {
+            self.selected = Some(id);
+        }
+        if let Some(action) = chosen.action {
+            self.dispatch(action);
+        }
+    }
+
+    /// Post one row action. Delete is only reached after the dialog confirms.
+    fn dispatch(&mut self, action: RowAction) {
+        if self.action.is_some() {
+            return;
+        }
+        let Some(id) = self.selected else { return };
+        let login = self.login.clone();
+        let (tx, rx) = mpsc::channel();
+        self.action = Some(ActionFlight { rx, action });
+        std::thread::spawn(move || {
+            let outcome = login.act(id, action).map_err(|err| login_message(&err));
+            let _ = tx.send(outcome);
+        });
+    }
+
+    fn take_action(&mut self) {
+        let finished = self
+            .action
+            .as_ref()
+            .and_then(|flight| flight.rx.try_recv().ok());
+        let Some((outcome, action)) =
+            finished.and_then(|outcome| self.action.take().map(|flight| (outcome, flight.action)))
+        else {
+            return;
+        };
+        match outcome {
+            Ok(()) => {
+                self.cache.error = None;
+                if action == RowAction::Delete {
+                    if let Some(id) = self.selected {
+                        self.cache.torrents.retain(|torrent| torrent.id != Some(id));
+                    }
+                    self.selected = None;
+                }
+                // The next frame polls, so the row shows the daemon's new state.
+                self.poll_at = None;
+            }
+            Err(message) => self.cache.error = Some(message),
+        }
     }
 
     /// Start a poll when the interval has elapsed and none is in flight.
@@ -336,15 +445,10 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             return;
         }
         let login = self.login.clone();
-        let url = self.url.clone();
-        let username = self.username.clone();
-        let password = self.password.clone();
         let (tx, rx) = mpsc::channel();
         self.poll = Some(Poll { rx });
         std::thread::spawn(move || {
-            let outcome = login
-                .snapshot(&url, &username, &password)
-                .map_err(|err| login_message(&err));
+            let outcome = login.snapshot().map_err(|err| login_message(&err));
             let _ = tx.send(outcome);
         });
     }
@@ -371,6 +475,11 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
 
 struct Poll {
     rx: Receiver<Result<Snapshot, String>>,
+}
+
+struct ActionFlight {
+    rx: Receiver<Result<(), String>>,
+    action: RowAction,
 }
 
 fn login_message(err: &Error) -> String {

@@ -7,10 +7,38 @@
 use fluent2_egui::controls::{Appearance, Button};
 use fluent2_egui::data::data_grid::{Align, Column, ColumnWidth};
 use fluent2_egui::data::{DataGrid, DataGridSize, DataGridState, RowId, SelectionMode};
+use fluent2_egui::office::command_bar::{CommandBar, CommandItem};
+use fluent2_egui::surfaces::{CloseReason, Dialog, DialogResult};
+use fluent2_icons::Icon;
 use rtbit_client::Torrent;
 
 use crate::format;
 use crate::state::{ANY, ListCache, StatusFilter};
+
+/// What the command bar asked for this frame.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MainAction {
+    pub selected: Option<u64>,
+    pub action: Option<RowAction>,
+}
+
+/// A row command the daemon understands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowAction {
+    Start,
+    Pause,
+    Delete,
+}
+
+/// Row selection and the delete confirmation, owned by the shell.
+pub struct RowActions<'a> {
+    /// Torrent the command bar acts on.
+    pub selected: Option<u64>,
+    /// Whether the delete dialog is open.
+    pub confirm_delete: &'a mut bool,
+    /// An action is already in flight, so the bar ignores clicks.
+    pub busy: bool,
+}
 
 /// Draw the sidebar and the grid into `ui`.
 pub fn draw_main(
@@ -20,9 +48,41 @@ pub fn draw_main(
     category: &mut String,
     tracker: &mut String,
     grid: &mut DataGridState,
-) {
+    rows: RowActions<'_>,
+) -> MainAction {
     keep_choice(category, &cache.categories());
     keep_choice(tracker, &cache.trackers());
+
+    let mut out = MainAction::default();
+    let items = [
+        CommandItem {
+            key: "start",
+            icon: Icon::ArrowClockwise,
+            label: "Start",
+            priority: 90,
+        },
+        CommandItem {
+            key: "pause",
+            icon: Icon::Dismiss,
+            label: "Pause",
+            priority: 80,
+        },
+        CommandItem {
+            key: "delete",
+            icon: Icon::Delete,
+            label: "Delete",
+            priority: 70,
+        },
+    ];
+    let bar = CommandBar::new("rtbit_actions", &items).show(ui);
+    if !rows.busy && rows.selected.is_some() {
+        match bar.activated {
+            Some("start") => out.action = Some(RowAction::Start),
+            Some("pause") => out.action = Some(RowAction::Pause),
+            Some("delete") => *rows.confirm_delete = true,
+            _ => {}
+        }
+    }
 
     egui::Panel::left("rtbit_sidebar")
         .resizable(false)
@@ -35,8 +95,27 @@ pub fn draw_main(
             ui.colored_label(egui::Color32::from_rgb(196, 43, 28), error);
             ui.add_space(4.0);
         }
-        grid_panel(ui, cache, *status, category, tracker, grid);
+        let picked = grid_panel(ui, cache, *status, category, tracker, grid);
+        if picked.is_some() {
+            out.selected = picked;
+        }
     });
+
+    if *rows.confirm_delete {
+        let result = Dialog::new("rtbit_delete")
+            .title("Delete torrent")
+            .actions(|actions| {
+                actions.primary("Delete");
+                actions.secondary("Cancel");
+            })
+            .show(ui.ctx(), rows.confirm_delete, |ui| {
+                ui.label("Delete this torrent and its files?");
+            });
+        if let DialogResult::Closed(CloseReason::Button("Delete")) = result {
+            out.action = Some(RowAction::Delete);
+        }
+    }
+    out
 }
 
 fn sidebar(
@@ -107,7 +186,7 @@ fn grid_panel(
     category: &str,
     tracker: &str,
     grid: &mut DataGridState,
-) {
+) -> Option<u64> {
     let rows = cache.filtered(status, category, tracker);
     if rows.is_empty() {
         ui.add_space(24.0);
@@ -117,8 +196,9 @@ fn grid_panel(
         } else {
             "No torrents match the filter."
         });
-        return;
+        return None;
     }
+    let mut pending: Option<u64> = None;
     let columns = [
         Column::new("name", "Name").width(ColumnWidth::Fraction(3.0)),
         Column::new("size", "Size")
@@ -140,8 +220,22 @@ fn grid_panel(
         .row_id(|index| RowId(rows[index].id.unwrap_or(index as u64)))
         .show(ui, grid, |cell, ui| {
             let torrent = rows[cell.row];
-            ui.label(cell_text(torrent, cell.column));
+            let text = cell_text(torrent, cell.column);
+            if cell.column == "name" {
+                if ui.selectable_label(cell.selected, text).clicked()
+                    && let Some(id) = torrent.id
+                {
+                    pending = Some(id);
+                }
+            } else {
+                ui.label(text);
+            }
         });
+    if let Some(id) = pending {
+        grid.selection.selected.clear();
+        grid.selection.selected.insert(RowId(id));
+    }
+    grid.selection.selected.iter().next().map(|row| row.0)
 }
 
 fn cell_text(torrent: &Torrent, column: &str) -> String {
