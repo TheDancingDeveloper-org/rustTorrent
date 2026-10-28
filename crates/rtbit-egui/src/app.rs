@@ -1008,21 +1008,34 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
                 self.logout();
             }
         });
-        let chosen = draw_main(
-            ui,
-            &self.cache,
-            &mut self.status_filter,
-            &mut self.category,
-            &mut self.tracker,
-            &mut self.grid,
-            crate::screens::RowActions {
-                selected: self.selected,
-                confirm_delete: &mut self.confirm_delete,
-                add_open: &mut self.add_open,
-                draft: &mut self.add_draft,
-                busy: self.action.is_some() || self.add_flight.is_some(),
-            },
-        );
+        // The grid's central panel takes everything left in the frame. Keep a
+        // strip under it for the detail pane, which would otherwise be laid
+        // out past the window.
+        let detail_height = 220.0;
+        let grid_height = (ui.available_height() - detail_height).max(120.0);
+        let chosen = ui
+            .allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), grid_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    draw_main(
+                        ui,
+                        &self.cache,
+                        &mut self.status_filter,
+                        &mut self.category,
+                        &mut self.tracker,
+                        &mut self.grid,
+                        crate::screens::RowActions {
+                            selected: self.selected,
+                            confirm_delete: &mut self.confirm_delete,
+                            add_open: &mut self.add_open,
+                            draft: &mut self.add_draft,
+                            busy: self.action.is_some() || self.add_flight.is_some(),
+                        },
+                    )
+                },
+            )
+            .inner;
         if let Some(id) = chosen.selected {
             self.selected = Some(id);
         }
@@ -1033,12 +1046,12 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             self.dispatch_add(request);
         }
         self.poll_add();
-        egui::Panel::bottom("rtbit_detail")
-            .resizable(false)
-            .exact_size(180.0)
-            .show(ui, |ui| {
-                self.draw_detail_pane(ui);
-            });
+        // A nested Panel::bottom lays out past the frame, so the tabs were
+        // drawn outside the window and could not be clicked. Take the strip
+        // from the space under the grid instead.
+        ui.add_space(8.0);
+        ui.separator();
+        self.draw_detail_pane(ui);
     }
 
     /// The pane sits under the grid so a selected row's files stay visible.

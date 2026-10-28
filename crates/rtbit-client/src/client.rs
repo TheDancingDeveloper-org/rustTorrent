@@ -498,15 +498,16 @@ fn add_path(
     path
 }
 
-/// Encode a query value. The client has no `urlencoding` dependency.
+/// Encode one path or query segment. `.` and `..` are percent-encoded so a
+/// segment cannot be a dot path. Space is `%20` (a `+` would be a literal plus
+/// once the segment is in a path). The client has no `urlencoding` dependency.
 fn urlencoding_minimal(value: &str) -> String {
     let mut out = String::new();
     for byte in value.bytes() {
         match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'~' => {
                 out.push(byte as char);
             }
-            b' ' => out.push('+'),
             _ => out.push_str(&format!("%{byte:02X}")),
         }
     }
@@ -531,7 +532,7 @@ fn normalize_base(raw: &str) -> Result<Url, Error> {
 async fn decode<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, Error> {
     let status = response.status();
     if !status.is_success() {
-        return Err(Error::from_status(status));
+        return Err(error_with_body(status, response).await);
     }
     response
         .json()
@@ -542,9 +543,17 @@ async fn decode<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, E
 async fn decode_empty(response: reqwest::Response) -> Result<(), Error> {
     let status = response.status();
     if !status.is_success() {
-        return Err(Error::from_status(status));
+        return Err(error_with_body(status, response).await);
     }
     Ok(())
+}
+
+async fn error_with_body(status: http::StatusCode, response: reqwest::Response) -> Error {
+    if status != http::StatusCode::BAD_REQUEST {
+        return Error::from_status(status);
+    }
+    let body = response.text().await.unwrap_or_default();
+    Error::from_status_body(status, &body)
 }
 
 #[derive(Serialize)]
@@ -560,7 +569,7 @@ struct TrackersBody<'a> {
 async fn decode_haves(response: reqwest::Response) -> Result<PieceProgress, Error> {
     let status = response.status();
     if !status.is_success() {
-        return Err(Error::from_status(status));
+        return Err(error_with_body(status, response).await);
     }
     let len = response
         .headers()
@@ -573,4 +582,18 @@ async fn decode_haves(response: reqwest::Response) -> Result<PieceProgress, Erro
         .await
         .map_err(|err| Error::Unreachable(err.to_string()))?;
     Ok(PieceProgress::from_bytes(&bytes, len))
+}
+
+#[cfg(test)]
+mod encoding {
+    use super::urlencoding_minimal;
+
+    #[test]
+    fn spaces_are_percent_twenty_and_dots_are_encoded() {
+        assert_eq!(urlencoding_minimal("a b"), "a%20b");
+        assert_eq!(urlencoding_minimal("."), "%2E");
+        assert_eq!(urlencoding_minimal(".."), "%2E%2E");
+        assert_eq!(urlencoding_minimal("keep-it_ok~"), "keep-it_ok~");
+        assert_eq!(urlencoding_minimal("a/b"), "a%2Fb");
+    }
 }

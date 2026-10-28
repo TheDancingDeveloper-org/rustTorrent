@@ -49,13 +49,18 @@ impl MessageBar {
     }
 }
 
-/// Words for a daemon error. Never includes a token or a response body.
+/// Words for a daemon error. Never includes a token or a raw response body.
+/// A 400 whose message is a plain validation sentence shows that sentence.
 pub fn map_error(err: &rtbit_client::Error) -> String {
     match err {
         rtbit_client::Error::Unreachable(_) => "The daemon is unreachable.".to_owned(),
         rtbit_client::Error::Unauthorised => "Sign-in was refused.".to_owned(),
         rtbit_client::Error::NotSetUp => "The daemon is not set up yet.".to_owned(),
-        rtbit_client::Error::Daemon { status } => {
+        rtbit_client::Error::Daemon {
+            status,
+            message: Some(message),
+        } if status.as_u16() == 400 && !message.is_empty() => message.clone(),
+        rtbit_client::Error::Daemon { status, .. } => {
             format!("The daemon returned an error ({status}).")
         }
     }
@@ -74,5 +79,27 @@ mod tests {
         assert!(!text.contains("eyJ"));
         assert!(!text.contains("token"));
         assert!(!text.contains(raw));
+    }
+
+    #[test]
+    fn a_plain_400_shows_the_validation_sentence() {
+        let text = map_error(&Error::Daemon {
+            status: rtbit_client::StatusCode::BAD_REQUEST,
+            message: Some("timeout exceeds its cap".into()),
+        });
+        assert_eq!(text, "timeout exceeds its cap");
+    }
+
+    #[test]
+    fn other_statuses_stay_generic() {
+        let text = map_error(&Error::Daemon {
+            status: rtbit_client::StatusCode::INTERNAL_SERVER_ERROR,
+            message: Some("timeout exceeds its cap".into()),
+        });
+        assert_eq!(
+            text,
+            "The daemon returned an error (500 Internal Server Error)."
+        );
+        assert!(!text.contains("timeout"));
     }
 }

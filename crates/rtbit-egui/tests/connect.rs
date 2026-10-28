@@ -144,8 +144,23 @@ impl LoginAttempt for Scripted {
         let _ = id;
         Ok(DetailSnapshot {
             torrent: detailed_torrent(),
-            trackers: TrackerList { trackers: vec![] },
-            peers: PeerList::default(),
+            trackers: TrackerList {
+                trackers: vec![rtbit_client::TrackerStatus {
+                    url: "http://tracker.example/announce".into(),
+                    state: rtbit_client::TrackerState::Working,
+                    seeders: Some(3),
+                    leechers: Some(1),
+                    last_error: None,
+                }],
+            },
+            peers: PeerList {
+                peers: vec![rtbit_client::PeerView {
+                    addr: "10.0.0.8:51413".into(),
+                    state: "live".into(),
+                    fetched_bytes: 1024,
+                    uploaded_bytes: 0,
+                }],
+            },
             pieces: PieceProgress {
                 have: vec![true, false],
             },
@@ -233,6 +248,18 @@ fn shows(harness: &Harness<'static, App<Scripted>>, text: &str) -> bool {
     harness
         .query_all(egui_kittest::kittest::by().predicate(move |node| {
             node.label().as_deref() == Some(text) || node.value().as_deref() == Some(text)
+        }))
+        .next()
+        .is_some()
+}
+
+/// True when any node's label or value contains `text`, so a row that joins
+/// several fields still counts.
+fn shows_containing(harness: &Harness<'static, App<Scripted>>, text: &str) -> bool {
+    harness
+        .query_all(egui_kittest::kittest::by().predicate(move |node| {
+            node.label().is_some_and(|label| label.contains(text))
+                || node.value().is_some_and(|value| value.contains(text))
         }))
         .next()
         .is_some()
@@ -901,4 +928,78 @@ fn an_unreachable_daemon_shows_a_mapped_message_without_the_detail() {
     assert!(!text.contains("secret-token"));
     assert!(shows_mem(&harness, "The daemon is unreachable."));
     assert!(shows_mem(&harness, "Dismiss"));
+}
+
+/// The detail pane's four tabs are reachable and each names its content.
+#[test]
+fn detail_tabs_name_files_trackers_peers_and_pieces() {
+    let login = scripted(Script::Ok);
+    let app = App::with_login(login);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1100.0, 1400.0))
+        .build_ui_state(|ui, app: &mut App<Scripted>| app.ui(ui), app);
+    harness.run_steps(2);
+    on_main(&mut harness);
+    harness.state_mut().select_for_test(7);
+    for _ in 0..30 {
+        harness.run_steps(1);
+        if shows(&harness, "movie.mkv") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(shows(&harness, "Files"));
+    assert!(shows(&harness, "movie.mkv"));
+    click_tab(&mut harness, "Trackers");
+    assert!(shows(&harness, "tracker.example"));
+    click_tab(&mut harness, "Peers");
+    assert!(shows_containing(&harness, "10.0.0.8:51413"));
+    click_tab(&mut harness, "Pieces");
+    assert!(shows(&harness, "1 of 2 pieces"));
+}
+
+fn click_tab(harness: &mut Harness<'static, App<Scripted>>, label: &str) {
+    // Tab nodes have no rectangle, and a tab list does not expose its tabs as
+    // children. Several lists exist. Click the same slice of each strip until
+    // the detail content for that tab appears.
+    const DETAIL: [&str; 4] = ["Files", "Trackers", "Peers", "Pieces"];
+    let index = DETAIL
+        .iter()
+        .position(|one| *one == label)
+        .expect("detail tab");
+    let expect = match label {
+        "Trackers" => "tracker.example",
+        "Peers" => "10.0.0.8",
+        "Pieces" => "1 of 2 pieces",
+        _ => "movie.mkv",
+    };
+    let rects: Vec<egui::Rect> = harness
+        .query_all(egui_kittest::kittest::by().predicate(|node| node.role() == Role::TabList))
+        .map(|node| node.rect())
+        .filter(|rect| rect.width() > 1.0 && rect.height() > 1.0)
+        .collect();
+    // The harness is 1400 tall so the 180px detail pane is on screen. A list
+    // whose center sits past that is clipped and its clicks never land.
+    let Some(rect) = rects.into_iter().find(|rect| rect.center().y < 1400.0) else {
+        panic!("detail tab list is outside the window");
+    };
+    let slice = rect.width() / DETAIL.len() as f32;
+    let pos = egui::pos2(rect.left() + slice * (index as f32 + 0.5), rect.center().y);
+    pointer_click(harness, pos);
+    if !shows_containing(harness, expect) {
+        panic!("clicking {label:?} at {pos:?} in {rect:?} never showed {expect:?}");
+    }
+}
+
+fn pointer_click(harness: &mut Harness<'static, App<Scripted>>, pos: egui::Pos2) {
+    harness.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+    }
+    harness.run_steps(2);
 }

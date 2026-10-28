@@ -44,7 +44,8 @@ impl SettingsTab {
 }
 
 /// Editable copy of the snapshot. Strings so a half-typed number is not lost.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// Debug masks a password typed into the proxy field.
+#[derive(Clone, Default, PartialEq)]
 pub struct SettingsDraft {
     pub incomplete_suffix: bool,
     pub connect_timeout: String,
@@ -80,6 +81,62 @@ pub struct SettingsDraft {
     pub seed_minutes: String,
     /// Loaded values, so a save posts only a section the user changed.
     baseline: Option<SettingsSnapshot>,
+}
+
+impl std::fmt::Debug for SettingsDraft {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SettingsDraft")
+            .field("incomplete_suffix", &self.incomplete_suffix)
+            .field("connect_timeout", &self.connect_timeout)
+            .field("read_write_timeout", &self.read_write_timeout)
+            .field("keep_alive", &self.keep_alive)
+            .field("listen_ip", &self.listen_ip)
+            .field("listen_port", &self.listen_port)
+            .field("dht", &self.dht)
+            .field("pex", &self.pex)
+            .field("lsd", &self.lsd)
+            .field("upnp", &self.upnp)
+            .field("http_listen", &self.http_listen)
+            .field("proxy_shown", &mask_proxy(&self.proxy_shown))
+            .field("proxy_edit", &mask_proxy(&self.proxy_edit))
+            .field("clear_proxy", &self.clear_proxy)
+            .field("ip_filter", &self.ip_filter)
+            .field("download_folder", &self.download_folder)
+            .field("completed_folder", &self.completed_folder)
+            .field("download_bps", &self.download_bps)
+            .field("upload_bps", &self.upload_bps)
+            .field("peer_limit", &self.peer_limit)
+            .field("init_limit", &self.init_limit)
+            .field("alt_enabled", &self.alt_enabled)
+            .field("alt_down", &self.alt_down)
+            .field("alt_up", &self.alt_up)
+            .field("schedule_enabled", &self.schedule_enabled)
+            .field("schedule_start", &self.schedule_start)
+            .field("schedule_end", &self.schedule_end)
+            .field("schedule_days", &self.schedule_days)
+            .field("ratio_limit", &self.ratio_limit)
+            .field("seed_minutes", &self.seed_minutes)
+            .finish()
+    }
+}
+
+/// `scheme://user:secret@host` becomes `scheme://user:***@host`.
+fn mask_proxy(url: &str) -> String {
+    let Some(scheme) = url.find("://") else {
+        return url.to_owned();
+    };
+    let after = scheme + 3;
+    let Some(at) = url[after..].find('@') else {
+        return url.to_owned();
+    };
+    let userinfo = &url[after..after + at];
+    let Some((user, secret)) = userinfo.split_once(':') else {
+        return url.to_owned();
+    };
+    if secret.is_empty() {
+        return url.to_owned();
+    }
+    format!("{}{user}:***{}", &url[..after], &url[after + at..])
 }
 
 impl SettingsDraft {
@@ -434,4 +491,21 @@ fn seeding(ui: &mut egui::Ui, draft: &mut SettingsDraft) {
 fn number(ui: &mut egui::Ui, label: &str, value: &mut String) {
     ui.add_space(4.0);
     ui.add(Input::new(value).label(label));
+}
+
+#[cfg(test)]
+mod draft_debug {
+    use super::SettingsDraft;
+
+    #[test]
+    fn debug_masks_the_proxy_password() {
+        let draft = SettingsDraft {
+            proxy_edit: "socks5://ada:s3cret-pass@127.0.0.1:1080".into(),
+            proxy_shown: "socks5://ada:***@127.0.0.1:1080".into(),
+            ..SettingsDraft::default()
+        };
+        let shown = format!("{draft:?}");
+        assert!(shown.contains("socks5://ada:***@127.0.0.1:1080"));
+        assert!(!shown.contains("s3cret-pass"));
+    }
 }

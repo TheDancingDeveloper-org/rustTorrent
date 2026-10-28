@@ -131,6 +131,20 @@ mod secret_debug {
         assert!(!shown.contains("access-secret"));
         assert!(!shown.contains("refresh-secret"));
     }
+
+    #[test]
+    fn debug_masks_a_proxy_password() {
+        let proxy = super::ProxyConfig {
+            proxy_url: Some("socks5://ada:s3cret-pass@127.0.0.1:1080".into()),
+        };
+        let shown = format!("{proxy:?}");
+        assert!(shown.contains("socks5://ada:***@127.0.0.1:1080"));
+        assert!(!shown.contains("s3cret-pass"));
+        let plain = super::ProxyConfig {
+            proxy_url: Some("http://127.0.0.1:8080".into()),
+        };
+        assert!(format!("{plain:?}").contains("http://127.0.0.1:8080"));
+    }
 }
 
 /// Wire value of a torrent's `stats.state`. These strings are what the daemon
@@ -449,9 +463,42 @@ pub struct NetworkConfig {
 }
 
 /// `GET /session/proxy`. The password, if any, is already masked by the daemon.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+/// Debug masks it again: a caller may have built this from a typed URL.
+#[derive(Clone, PartialEq, Deserialize, Serialize, Default)]
 pub struct ProxyConfig {
     pub proxy_url: Option<String>,
+}
+
+impl std::fmt::Debug for ProxyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProxyConfig")
+            .field("proxy_url", &self.proxy_url.as_deref().map(mask_proxy_url))
+            .finish()
+    }
+}
+
+/// Hide the userinfo password. `scheme://user:secret@host` shows as `scheme://user:***@host`.
+fn mask_proxy_url(url: &str) -> String {
+    let Some(scheme) = url.find("://") else {
+        return url.to_owned();
+    };
+    let after = scheme + 3;
+    let Some(at) = url[after..].find('@') else {
+        return url.to_owned();
+    };
+    let userinfo = &url[after..after + at];
+    let Some(colon) = userinfo.find(':') else {
+        return url.to_owned();
+    };
+    if userinfo[colon + 1..].is_empty() {
+        return url.to_owned();
+    }
+    format!(
+        "{}{}:***{}",
+        &url[..after],
+        &userinfo[..colon],
+        &url[after + at..]
+    )
 }
 
 /// `GET /session/ip-filter`.

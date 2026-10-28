@@ -10,6 +10,7 @@ mod types;
 
 pub use client::Client;
 pub use error::Error;
+pub use http::StatusCode;
 pub use types::{
     AdvancedConfig, AltSpeedConfig, AltSpeedSchedule, AltSpeedStatus, AuthStatus, ConnectionFamily,
     ConnectionKindStats, Connections, DownloadsConfig, FoldersConfig, IpFilterConfig, LiveSpeeds,
