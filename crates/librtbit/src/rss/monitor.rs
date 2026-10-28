@@ -6,7 +6,7 @@ use tracing::{info, warn};
 
 use super::config::RssFeedConfig;
 use super::db::RssDatabase;
-use super::fetch::{self, MAX_FEED_BYTES};
+use super::fetch;
 use super::models::RssItem;
 use super::rules::{self, RuleDecision};
 use crate::api::Api;
@@ -34,10 +34,7 @@ impl RssMonitor {
     pub async fn run(self) {
         info!("Starting RSS monitor");
 
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .expect("Failed to create HTTP client");
+        let client = pinned_client().expect("Failed to create HTTP client");
 
         loop {
             // Load feeds from the database each iteration so API changes are picked up
@@ -101,20 +98,8 @@ impl RssMonitor {
         }
 
         let parsed = reqwest::Url::parse(url)?;
-        if let Some(host) = parsed.host_str()
-            && host.parse::<std::net::IpAddr>().is_err()
-        {
-            let addresses = tokio::net::lookup_host((host, parsed.port().unwrap_or(80)))
-                .await
-                .map_err(|e| anyhow::anyhow!("could not resolve feed host {host}: {e}"))?
-                .map(|addr| addr.ip())
-                .collect::<Vec<_>>();
-            fetch::assert_public_addresses(&addresses).map_err(|e| anyhow::anyhow!("{e}"))?;
-        }
-
-        let response = client.get(url).send().await?;
-        let body = response.bytes().await?;
-        Ok(fetch::cap_feed_body(&body))
+        let response = send_following_checked_redirects(client, parsed).await?;
+        read_capped_body(response).await
     }
 
     async fn check_feed(
@@ -126,10 +111,6 @@ impl RssMonitor {
 
         fetch::check_feed_url(&feed.url).map_err(|e| anyhow::anyhow!("{e}"))?;
         let body = Self::read_feed_body(client, &feed.url).await?;
-        if body.len() > MAX_FEED_BYTES {
-            warn!(feed = %feed.name, bytes = body.len(), "RSS feed body exceeds the size cap");
-        }
-        let body = fetch::cap_feed_body(&body);
         let parsed = feed_rs::parser::parse(&body[..])?;
 
         // Compile the feed filter if one is set. An oversized or invalid
@@ -338,6 +319,115 @@ impl RssMonitor {
     }
 }
 
+const MAX_REDIRECTS: usize = 3;
+
+/// Shared client. Redirects are not followed here: each hop is checked and
+/// pinned by [`client_pinned_to_checked_address`] before the next request.
+fn pinned_client() -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+}
+
+/// Resolve `url`, refuse any non-public address, and return a client that
+/// connects to one of the addresses that passed the check. A later lookup
+/// cannot substitute a private address (DNS rebinding).
+async fn client_pinned_to_checked_address(
+    base: &reqwest::Client,
+    url: &reqwest::Url,
+) -> anyhow::Result<reqwest::Client> {
+    let _ = base;
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow::anyhow!("feed URL has no host"))?;
+    let port = url.port_or_known_default().unwrap_or(80);
+    let vetted = vetted_addresses(host, port).await?;
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none());
+    for addr in vetted {
+        builder = builder.resolve(host, std::net::SocketAddr::new(addr, port));
+    }
+    Ok(builder.build()?)
+}
+
+async fn vetted_addresses(host: &str, port: u16) -> anyhow::Result<Vec<std::net::IpAddr>> {
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        fetch::assert_public_addresses(&[ip]).map_err(|e| anyhow::anyhow!("{e}"))?;
+        return Ok(vec![ip]);
+    }
+    let addresses = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|e| anyhow::anyhow!("could not resolve feed host {host}: {e}"))?
+        .map(|addr| addr.ip())
+        .collect::<Vec<_>>();
+    fetch::assert_public_addresses(&addresses).map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(addresses)
+}
+
+/// Refuse a declared Content-Length over the cap, then stream the body and
+/// stop once the running total exceeds it. The whole response is never buffered
+/// first.
+async fn read_capped_body(response: reqwest::Response) -> anyhow::Result<Vec<u8>> {
+    // content_length() is the body size hint, which a chunked or hostile
+    // response can omit or understate. The declared header is checked on its own.
+    let declared = response
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+    if let Some(len) = declared
+        && len > fetch::MAX_FEED_BYTES as u64
+    {
+        return Err(anyhow::anyhow!(
+            "feed Content-Length {len} exceeds the {max} byte cap",
+            max = fetch::MAX_FEED_BYTES
+        ));
+    }
+    let mut body = Vec::new();
+    let mut response = response;
+    while let Some(chunk) = response.chunk().await? {
+        if body.len().saturating_add(chunk.len()) > fetch::MAX_FEED_BYTES {
+            return Err(anyhow::anyhow!(
+                "feed body exceeds the {max} byte cap",
+                max = fetch::MAX_FEED_BYTES
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+/// Follow at most [`MAX_REDIRECTS`] hops. Every hop is address-checked and
+/// pinned the same way as the first request.
+async fn send_following_checked_redirects(
+    client: &reqwest::Client,
+    url: reqwest::Url,
+) -> anyhow::Result<reqwest::Response> {
+    let mut current = url;
+    for _ in 0..=MAX_REDIRECTS {
+        let pinned = client_pinned_to_checked_address(client, &current).await?;
+        let response = pinned.get(current.clone()).send().await?;
+        if response.status().is_redirection() {
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| anyhow::anyhow!("redirect with no Location header"))?;
+            current = current
+                .join(location)
+                .map_err(|_| anyhow::anyhow!("redirect Location is not a URL"))?;
+            fetch::check_feed_url(current.as_str()).map_err(|e| anyhow::anyhow!("{e}"))?;
+            continue;
+        }
+        return Ok(response);
+    }
+    Err(anyhow::anyhow!(
+        "feed redirected more than {MAX_REDIRECTS} times"
+    ))
+}
+
 fn file_url_to_path(url: &str) -> anyhow::Result<PathBuf> {
     let parsed =
         url::Url::parse(url).map_err(|e| anyhow::anyhow!("invalid file URL {url:?}: {e}"))?;
@@ -366,5 +456,66 @@ mod tests {
         let body = RssMonitor::read_feed_body(&client, &url).await.unwrap();
 
         assert_eq!(body, b"<rss version=\"2.0\"></rss>");
+    }
+
+    #[test]
+    fn a_redirect_target_on_loopback_is_the_same_refusal_as_the_first_hop() {
+        // Every hop runs check_feed_url before it is resolved or connected.
+        // A 30x Location of a loopback (or any other forbidden) address is
+        // the error send_following_checked_redirects returns instead of
+        // issuing the next request.
+        for location in [
+            "http://127.0.0.1/secret",
+            "http://10.0.0.1/secret",
+            "http://0.1.2.3/secret",
+            "http://[::1]/secret",
+            "http://[64:ff9b::8.8.8.8]/secret",
+        ] {
+            assert_eq!(
+                fetch::check_feed_url(location),
+                Err(fetch::FeedUrlError::ForbiddenAddress),
+                "{location}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_oversized_content_length_is_refused_without_reading_the_body() {
+        let mut response = reqwest::Response::from(
+            http::Response::builder()
+                .status(200)
+                .body(reqwest::Body::from("not-read"))
+                .unwrap(),
+        );
+        response.headers_mut().insert(
+            http::header::CONTENT_LENGTH,
+            http::HeaderValue::from_str(&(fetch::MAX_FEED_BYTES as u64 + 1).to_string()).unwrap(),
+        );
+        let err = read_capped_body(response).await.unwrap_err();
+        assert!(err.to_string().contains("Content-Length"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_body_that_grows_past_the_cap_is_refused() {
+        let chunk = vec![b'a'; 64 * 1024];
+        let parts = std::iter::repeat_n(chunk, 40).map(Ok::<_, std::io::Error>);
+        let response = http::Response::builder()
+            .status(200)
+            .body(reqwest::Body::wrap_stream(futures::stream::iter(parts)))
+            .unwrap();
+        let response = reqwest::Response::from(response);
+        let err = read_capped_body(response).await.unwrap_err();
+        assert!(err.to_string().contains("exceeds"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_small_body_is_returned_whole() {
+        let response = http::Response::builder()
+            .status(200)
+            .body(reqwest::Body::from("<rss/>"))
+            .unwrap();
+        let response = reqwest::Response::from(response);
+        let body = read_capped_body(response).await.unwrap();
+        assert_eq!(body, b"<rss/>");
     }
 }
