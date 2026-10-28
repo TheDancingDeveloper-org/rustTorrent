@@ -718,9 +718,6 @@ impl Session {
         }
     }
 
-    /// Spawn a task in the context of the session.
-    #[track_caller]
-
     /// Redacted proxy URL (`user:***@host`) or none. Never the password.
     pub fn proxy_url_redacted(&self) -> Option<String> {
         let guard = self.proxy_url.read();

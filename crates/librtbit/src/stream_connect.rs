@@ -273,14 +273,6 @@ async fn http_connect(
 }
 
 impl SocksProxyConfig {
-    #[allow(dead_code)]
-    pub fn parse(url: &str) -> anyhow::Result<Self> {
-        match ProxyConfig::parse(url)? {
-            ProxyConfig::Socks5(cfg) => Ok(cfg),
-            ProxyConfig::Http { .. } => anyhow::bail!("proxy URL should have socks5 scheme"),
-        }
-    }
-
     async fn connect(
         &self,
         addr: SocketAddr,
