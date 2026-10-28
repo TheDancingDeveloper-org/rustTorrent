@@ -63,7 +63,6 @@ mod webui;
         handlers::dht::h_dht_stats,
         handlers::dht::h_dht_table,
         handlers::logging::h_set_rust_log,
-        handlers::logging::h_stream_logs,
         handlers::streaming::h_torrent_stream_file,
         handlers::playlist::h_torrent_playlist,
         handlers::playlist::h_global_playlist,

@@ -7,7 +7,6 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
-use argon2::password_hash::SaltString;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
@@ -1005,10 +1004,11 @@ impl CredentialStore {
 }
 
 fn hash_password(password: &str) -> io::Result<String> {
-    let salt_bytes: [u8; 16] = rand::random();
-    let salt = SaltString::encode_b64(&salt_bytes).map_err(|e| io::Error::other(e.to_string()))?;
+    // argon2 0.6's PasswordHasher hashes with a caller-supplied salt and generates the PHC
+    // string itself. Sixteen random bytes is the salt length the previous API encoded.
+    let salt: [u8; 16] = rand::random();
     Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
+        .hash_password_with_salt(password.as_bytes(), &salt)
         .map(|hash| hash.to_string())
         .map_err(|e| io::Error::other(e.to_string()))
 }
