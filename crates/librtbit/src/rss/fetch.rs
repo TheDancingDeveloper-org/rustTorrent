@@ -76,6 +76,7 @@ pub fn assert_public_addresses(addresses: &[IpAddr]) -> Result<(), FeedUrlError>
 pub fn is_forbidden_address(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
             v4.is_private()
                 || v4.is_loopback()
                 || v4.is_link_local()
@@ -83,21 +84,50 @@ pub fn is_forbidden_address(ip: IpAddr) -> bool {
                 || v4.is_documentation()
                 || v4.is_unspecified()
                 || v4.is_multicast()
+                // "This network" 0.0.0.0/8 (is_unspecified covers only 0.0.0.0).
+                || a == 0
                 // Carrier-grade NAT, 100.64.0.0/10.
-                || matches!(v4.octets(), [100, second, ..] if (64..128).contains(&second))
+                || (a == 100 && (64..128).contains(&b))
+                // Benchmarking 198.18.0.0/15.
+                || (a == 198 && (b == 18 || b == 19))
+                // Reserved for future use, 240.0.0.0/4.
+                || a >= 240
         }
         IpAddr::V6(v6) => {
+            let seg0 = v6.segments()[0];
             v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_multicast()
                 // Unique local fc00::/7 and link local fe80::/10.
-                || (v6.segments()[0] & 0xfe00) == 0xfc00
-                || (v6.segments()[0] & 0xffc0) == 0xfe80
+                || (seg0 & 0xfe00) == 0xfc00
+                || (seg0 & 0xffc0) == 0xfe80
+                // NAT64 well-known prefix 64:ff9b::/96.
+                || is_nat64(v6)
+                // IPv4-compatible ::a.b.c.d and 6to4 2002::/16.
+                || is_ipv4_compatible(v6)
+                || seg0 == 0x2002
                 || v6
                     .to_ipv4_mapped()
                     .is_some_and(|mapped| is_forbidden_address(IpAddr::V4(mapped)))
         }
     }
+}
+
+fn is_nat64(v6: std::net::Ipv6Addr) -> bool {
+    let s = v6.segments();
+    s[0] == 0x0064 && s[1] == 0xff9b && s[2] == 0 && s[3] == 0 && s[4] == 0 && s[5] == 0
+}
+
+/// Deprecated IPv4-compatible form `::a.b.c.d` (not `::` and not `::1`).
+fn is_ipv4_compatible(v6: std::net::Ipv6Addr) -> bool {
+    let s = v6.segments();
+    s[0] == 0
+        && s[1] == 0
+        && s[2] == 0
+        && s[3] == 0
+        && s[4] == 0
+        && s[5] == 0
+        && !(s[6] == 0 && (s[7] == 0 || s[7] == 1))
 }
 
 /// Keep at most [`MAX_FEED_BYTES`] of a feed body.
@@ -152,6 +182,29 @@ mod tests {
         assert!(assert_public_addresses(&[]).is_err());
     }
 
+    #[test]
+    fn refuses_reserved_benchmark_and_embedded_ranges() {
+        for url in [
+            "http://0.1.2.3/feed.xml",
+            "http://198.18.0.1/feed.xml",
+            "http://198.19.255.1/feed.xml",
+            "http://240.0.0.1/feed.xml",
+            "http://255.255.255.255/feed.xml",
+            "http://[64:ff9b::1.2.3.4]/feed.xml",
+            "http://[::192.0.2.1]/feed.xml",
+            "http://[2002:c000:201::]/feed.xml",
+        ] {
+            assert_eq!(
+                check_feed_url(url),
+                Err(FeedUrlError::ForbiddenAddress),
+                "{url}"
+            );
+        }
+        // A public address just outside the benchmarking block stays allowed.
+        assert!(check_feed_url("http://198.17.0.1/feed.xml").is_ok());
+        assert!(check_feed_url("http://198.20.0.1/feed.xml").is_ok());
+        assert!(check_feed_url("http://[2001:db8::1]/feed.xml").is_ok());
+    }
     #[test]
     fn caps_a_feed_body_at_the_limit() {
         let big = vec![b'a'; MAX_FEED_BYTES + 100];

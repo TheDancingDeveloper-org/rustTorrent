@@ -245,7 +245,14 @@ pub fn make_api_router(state: ApiState) -> Router {
             .route("/session/network", post(configure::h_set_network))
             .route("/speed/alt", post(speed::h_toggle_alt_speed))
             .route("/speed/alt/config", post(speed::h_set_alt_speed_config))
-            .route("/speed/schedule", post(speed::h_set_speed_schedule));
+            .route("/speed/schedule", post(speed::h_set_speed_schedule))
+            .route("/rss/feeds", post(rss::h_rss_feed_add))
+            .route("/rss/feeds/{name}", put(rss::h_rss_feed_update))
+            .route("/rss/feeds/{name}", delete(rss::h_rss_feed_delete))
+            .route("/rss/items/{id}/download", post(rss::h_rss_item_download))
+            .route("/rss/rules", post(rss::h_rss_rule_add))
+            .route("/rss/rules/{id}", put(rss::h_rss_rule_update))
+            .route("/rss/rules/{id}", delete(rss::h_rss_rule_delete));
     }
 
     // Indexarr integration proxy endpoints
@@ -275,18 +282,12 @@ pub fn make_api_router(state: ApiState) -> Router {
             post(indexarr::h_indexarr_sync_preferences_set),
         );
 
-    // RSS endpoints
+    // RSS reads stay available in read-only mode. Writes are registered above,
+    // inside the read-only gate.
     api_router = api_router
         .route("/rss/feeds", get(rss::h_rss_feeds_list))
-        .route("/rss/feeds", post(rss::h_rss_feed_add))
-        .route("/rss/feeds/{name}", put(rss::h_rss_feed_update))
-        .route("/rss/feeds/{name}", delete(rss::h_rss_feed_delete))
         .route("/rss/items", get(rss::h_rss_items_list))
-        .route("/rss/items/{id}/download", post(rss::h_rss_item_download))
         .route("/rss/rules", get(rss::h_rss_rules_list))
-        .route("/rss/rules", post(rss::h_rss_rule_add))
-        .route("/rss/rules/{id}", put(rss::h_rss_rule_update))
-        .route("/rss/rules/{id}", delete(rss::h_rss_rule_delete))
         .route("/rss/settings", get(rss::h_rss_settings_get));
 
     // Auth endpoints — status is always available; login/refresh/logout need token store;
