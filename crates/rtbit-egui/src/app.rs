@@ -433,6 +433,8 @@ pub struct App<L: LoginAttempt = DaemonLogin, S: TokenStore = OsKeychain> {
     confirm_password: String,
     /// Shown under the form after a failed attempt. Empty when there is none.
     error: String,
+    /// Dismissible stand-in under the command bar. One message at a time.
+    notice: crate::MessageBar,
     /// Refresh token last written to the keychain, so a rotation is stored once.
     stored_refresh: Option<String>,
     /// Status check in flight before the connect screen decides on setup.
@@ -509,6 +511,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             setup_token: String::new(),
             confirm_password: String::new(),
             error: String::new(),
+            notice: crate::MessageBar::default(),
             stored_refresh: None,
             status_flight: None,
             status_known: false,
@@ -563,6 +566,7 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             setup_token: String::new(),
             confirm_password: String::new(),
             error: String::new(),
+            notice: crate::MessageBar::default(),
             stored_refresh: None,
             status_flight: None,
             status_known: false,
@@ -618,6 +622,13 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
     #[must_use]
     pub fn error(&self) -> &str {
         &self.error
+    }
+
+    /// Record a message the user can read, on the screen and in the bar.
+    fn fail(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        self.notice.set(message.clone());
+        self.error = message;
     }
 
     /// Test hook: show the main screen with an empty list and no poll.
@@ -754,9 +765,9 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
                     self.screen = Screen::Connect;
                     if reconnect {
                         let _ = self.keychain.clear(&self.url);
-                        self.error = "Saved session expired. Sign in again.".to_owned();
+                        self.fail("Saved session expired. Sign in again.");
                     } else {
-                        self.error = message;
+                        self.fail(message);
                     }
                 }
             }
@@ -800,12 +811,15 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), body),
             egui::Layout::top_down(egui::Align::Min),
-            |ui| match self.screen {
-                Screen::Connect => self.connect_screen(ui),
-                Screen::Setup => self.setup_screen(ui),
-                Screen::Main => self.main_screen(ui),
-                Screen::Settings => self.settings_screen(ui),
-                Screen::Rss => self.rss_screen(ui),
+            |ui| {
+                self.notice.show(ui);
+                match self.screen {
+                    Screen::Connect => self.connect_screen(ui),
+                    Screen::Setup => self.setup_screen(ui),
+                    Screen::Main => self.main_screen(ui),
+                    Screen::Settings => self.settings_screen(ui),
+                    Screen::Rss => self.rss_screen(ui),
+                }
             },
         );
 
@@ -849,7 +863,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             Err(message) => {
                 // Unreachable daemon stays on Connect. Do not invent a setup screen.
                 self.connection = Connection::Error;
-                self.error = message;
+                self.fail(message);
             }
         }
     }
@@ -862,15 +876,15 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
         let token = self.setup_token.trim();
         let username = self.username.trim();
         if token.is_empty() || username.is_empty() || self.password.is_empty() {
-            self.error = "Setup token, username and password are required.".to_owned();
+            self.fail("Setup token, username and password are required.");
             return;
         }
         if self.password.chars().count() < 4 {
-            self.error = "Password must be at least 4 characters.".to_owned();
+            self.fail("Password must be at least 4 characters.");
             return;
         }
         if self.password != self.confirm_password {
-            self.error = "Passwords do not match.".to_owned();
+            self.fail("Passwords do not match.");
             return;
         }
         let login = self.login.clone();
@@ -1212,7 +1226,10 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
                 // The next frame polls, so the row shows the daemon's new state.
                 self.poll_at = None;
             }
-            Err(message) => self.cache.error = Some(message),
+            Err(message) => {
+                self.fail(message.clone());
+                self.cache.error = Some(message);
+            }
         }
     }
 
@@ -1248,6 +1265,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
                     self.connection = Connection::Connected;
                 }
                 Err(message) => {
+                    self.fail(message.clone());
                     self.cache.error = Some(message);
                 }
             }
@@ -1298,6 +1316,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
                     self.settings_error.clear();
                 }
                 Ok(Err(message)) => {
+                    self.fail(message.clone());
                     self.settings_error = message;
                     self.settings_load = None;
                 }
@@ -1313,6 +1332,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
                     self.open_settings();
                 }
                 Ok(Err(message)) => {
+                    self.fail(message.clone());
                     self.settings_error = message;
                     self.settings_save = None;
                 }
@@ -1333,6 +1353,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             }
             Ok(changes) => changes,
             Err(message) => {
+                self.fail(message.clone());
                 self.settings_error = message;
                 return;
             }
@@ -1385,6 +1406,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
                     self.rss_error.clear();
                 }
                 Ok(Err(message)) => {
+                    self.fail(message.clone());
                     self.rss_error = message;
                     self.rss_load = None;
                 }
@@ -1401,6 +1423,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
                     self.open_rss();
                 }
                 Ok(Err(message)) => {
+                    self.fail(message.clone());
                     self.rss_error = message;
                     self.rss_download = None;
                 }
@@ -1441,10 +1464,5 @@ struct ActionFlight {
 }
 
 fn login_message(err: &Error) -> String {
-    match err {
-        Error::Unreachable(detail) => format!("daemon unreachable: {detail}"),
-        Error::Unauthorised => "unauthorised".to_owned(),
-        Error::NotSetUp => "daemon is not set up".to_owned(),
-        Error::Daemon { status } => format!("daemon error {status}"),
-    }
+    crate::map_error(err)
 }

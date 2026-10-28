@@ -4,6 +4,7 @@ mod app;
 mod format;
 mod keychain;
 mod screens;
+mod standin;
 mod state;
 
 pub use app::{App, Connection, DetailSnapshot, LoginAttempt, Screen, Snapshot};
@@ -11,4 +12,5 @@ pub use keychain::{MemoryStore, OsKeychain, TokenStore};
 pub use screens::{
     AddRequest, AddSource, RowAction, RssView, SettingsChanges, SettingsDraft, SettingsTab,
 };
+pub use standin::message_bar::{MessageBar, map_error};
 pub use state::{ListCache, StatusFilter};
