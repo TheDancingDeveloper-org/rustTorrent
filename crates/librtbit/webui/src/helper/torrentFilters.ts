@@ -129,6 +129,18 @@ export function matchesTracker(
   return hosts.includes(trackerFilter);
 }
 
+// Check if torrent matches tag filter. null shows every torrent; "" shows
+// only torrents with no tags; a name shows torrents carrying that tag.
+export function matchesTag(
+  torrent: TorrentListItem,
+  tagFilter: string | null,
+): boolean {
+  if (tagFilter === null) return true;
+  const tags = torrent.tags ?? [];
+  if (tagFilter === "") return tags.length === 0;
+  return tags.includes(tagFilter);
+}
+
 // Check if torrent matches category filter
 export function matchesCategory(
   torrent: TorrentListItem,
@@ -147,11 +159,13 @@ export function isTorrentVisible(
   categoryFilter?: string | null,
   trackerFilter?: string | null,
   trackerHealth?: Record<number, TrackerHealth>,
+  tagFilter?: string | null,
 ): boolean {
   return (
     matchesSearch(t.name, searchQuery) &&
     matchesStatus(t, statusFilter) &&
     matchesCategory(t, categoryFilter ?? null) &&
-    matchesTracker(t, trackerFilter ?? null, trackerHealth)
+    matchesTracker(t, trackerFilter ?? null, trackerHealth) &&
+    matchesTag(t, tagFilter ?? null)
   );
 }

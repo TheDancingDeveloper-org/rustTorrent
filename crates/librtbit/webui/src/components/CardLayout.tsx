@@ -29,6 +29,9 @@ export const CardLayout = (props: {
   const setSearchQuery = useUIStore((state) => state.setSearchQuery);
   const statusFilter = useUIStore((state) => state.statusFilter);
   const setStatusFilter = useUIStore((state) => state.setStatusFilter);
+  const categoryFilter = useUIStore((state) => state.categoryFilter);
+  const trackerFilter = useUIStore((state) => state.trackerFilter);
+  const tagFilter = useUIStore((state) => state.tagFilter);
 
   // Keyboard shortcuts (Ctrl+A, Ctrl+F, Escape)
   useKeyboardShortcuts();
@@ -74,12 +77,25 @@ export const CardLayout = (props: {
   const filteredTorrents = useMemo(() => {
     if (!props.torrents) return null;
     return [...props.torrents]
-      .filter((t) => isTorrentVisible(t, normalizedQuery, statusFilter))
+      .filter((t) =>
+        isTorrentVisible(
+          t,
+          normalizedQuery,
+          statusFilter,
+          categoryFilter,
+          trackerFilter,
+          undefined,
+          tagFilter,
+        ),
+      )
       .sort((a, b) => compareTorrents(a, b, sortColumn, sortDirection));
   }, [
     props.torrents,
     normalizedQuery,
     statusFilter,
+    categoryFilter,
+    trackerFilter,
+    tagFilter,
     sortColumn,
     sortDirection,
   ]);

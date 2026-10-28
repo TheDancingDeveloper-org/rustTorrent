@@ -89,6 +89,8 @@ export interface ViewQuery {
   status: ViewStatus;
   category: string | null;
   tracker: string | null;
+  // null = all, "" = untagged, otherwise the tag name.
+  tag: string | null;
   sortColumn: ViewSortColumn;
   sortDirection: ViewSortDirection;
 }
@@ -98,6 +100,7 @@ export const DEFAULT_VIEW_QUERY: ViewQuery = {
   status: "all",
   category: null,
   tracker: null,
+  tag: null,
   sortColumn: "id",
   sortDirection: "desc",
 };
@@ -120,6 +123,7 @@ export function parseViewQuery(search: string): ViewQuery {
   const dir = readString(params, "dir");
   const category = params.get("category");
   const tracker = params.get("tracker");
+  const tag = params.get("tag");
   return {
     search: readString(params, "q"),
     status: STATUS_VALUES.includes(status)
@@ -127,6 +131,7 @@ export function parseViewQuery(search: string): ViewQuery {
       : DEFAULT_VIEW_QUERY.status,
     category: category === null || category === "" ? null : category,
     tracker: tracker === null || tracker === "" ? null : tracker,
+    tag,
     sortColumn: SORT_COLUMNS.includes(sort)
       ? (sort as ViewSortColumn)
       : DEFAULT_VIEW_QUERY.sortColumn,
@@ -141,6 +146,7 @@ export function formatViewQuery(view: ViewQuery): string {
   if (view.status !== DEFAULT_VIEW_QUERY.status) params.set("status", view.status);
   if (view.category !== null) params.set("category", view.category);
   if (view.tracker !== null) params.set("tracker", view.tracker);
+  if (view.tag !== null) params.set("tag", view.tag);
   if (view.sortColumn !== DEFAULT_VIEW_QUERY.sortColumn) {
     params.set("sort", view.sortColumn);
   }
@@ -156,6 +162,7 @@ export function viewsEqual(a: ViewQuery, b: ViewQuery): boolean {
     a.status === b.status &&
     a.category === b.category &&
     a.tracker === b.tracker &&
+    a.tag === b.tag &&
     a.sortColumn === b.sortColumn &&
     a.sortDirection === b.sortDirection
   );
