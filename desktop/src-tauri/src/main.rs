@@ -3,6 +3,7 @@
 
 mod config;
 mod launch;
+mod menubar;
 mod tray;
 #[cfg(feature = "self-update")]
 mod updates;
@@ -471,6 +472,11 @@ fn run_app() {
                 builder = builder.initialization_script(&script);
             }
             let window = builder.build()?;
+
+            // Native menu bar. The same ids the tray menu uses.
+            if let Err(e) = menubar::install(app.handle()) {
+                warn!("Failed to set up the menu bar: {e}");
+            }
 
             // Close hides to the tray instead of quitting. Quit is in the tray menu.
             let close_handle = window.clone();

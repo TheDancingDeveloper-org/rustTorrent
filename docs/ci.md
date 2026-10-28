@@ -33,6 +33,7 @@ See [TESTING.md](TESTING.md#webui-api-v2-compatibility-client-replay-and-differe
 | `crates/librtbit/webui/`, `desktop/src/` (the splash, tested by `e2e/desktop-splash.spec.ts`) | `webui`, `gui-e2e` |
 | `Cargo.toml`, `Cargo.lock`, `fuzz/`, `tests/`, `benchv2/`, any other `crates/*` path | `rust`, full workspace |
 | `website/` | `website` |
+| `desktop/menu/` | `rust` for `rtbit-desktop-menu` only (no webkit) |
 | anything else (docs, design, the rest of desktop) | nothing; the skipped jobs report success |
 
 The scope is deliberately conservative. `cargo` resolves `--features` against

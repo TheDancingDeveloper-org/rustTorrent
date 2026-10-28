@@ -72,6 +72,9 @@ jobs:
               crates/librtbit/webui/*) webui=true ;;
               # The desktop splash is tested by the web UI e2e suite.
               desktop/src/*) webui=true ;;
+              # The menu description has no window toolkit, so CI can test it.
+              # The Tauri binary stays excluded: the runner has no webkit.
+              desktop/menu/*) rust=true; add_package rtbit-desktop-menu ;;
               crates/librtbit/*) rust=true; add_package swarmforge ;;
               crates/rtbit/*) rust=true; add_package rtbit ;;
               website/*) website=true ;;

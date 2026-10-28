@@ -44,6 +44,7 @@ metrics-exporter-prometheus.workspace = true
 librqbit-dualstack-sockets.workspace = true
 reqwest = { workspace = true }
 open = "5"
+rtbit-desktop-menu = { path = "../menu" }
 
 [features]
 default = ["self-update"]
