@@ -216,3 +216,68 @@ async fn n_polls_log_in_once() {
     }
     server.verify().await;
 }
+
+#[tokio::test]
+async fn add_magnet_posts_the_query_and_the_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("login.json"), "application/json"),
+        )
+        .mount(&server)
+        .await;
+    let magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Example";
+    Mock::given(method("POST"))
+        .and(path("/torrents"))
+        .and(wiremock::matchers::query_param("is_url", "true"))
+        .and(wiremock::matchers::query_param("paused", "true"))
+        .and(wiremock::matchers::query_param(
+            "output_folder",
+            "/data/incoming",
+        ))
+        .and(wiremock::matchers::query_param("category", "movies"))
+        .and(wiremock::matchers::body_string(magnet))
+        .and(header("authorization", "Bearer access-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut client = Client::new(server.uri()).unwrap();
+    client.login("ada", "secret").await.unwrap();
+    client
+        .add_magnet(magnet, Some("/data/incoming"), Some("movies"), true)
+        .await
+        .unwrap();
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn add_torrent_file_posts_the_bytes_without_is_url() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("login.json"), "application/json"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/torrents"))
+        .and(wiremock::matchers::query_param_is_missing("is_url"))
+        .and(wiremock::matchers::body_bytes(b"d8:announce0:e".as_slice()))
+        .and(header("authorization", "Bearer access-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut client = Client::new(server.uri()).unwrap();
+    client.login("ada", "secret").await.unwrap();
+    client
+        .add_torrent_file(b"d8:announce0:e", None, None, false)
+        .await
+        .unwrap();
+    server.verify().await;
+}

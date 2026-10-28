@@ -11,7 +11,7 @@ use fluent2_egui::theme::{Theme, install};
 use fluent2_egui::tokens::FLUENT;
 use rtbit_client::{Client, Error, SessionStats, TorrentList};
 
-use crate::screens::RowAction;
+use crate::screens::{AddDraft, AddRequest, AddSource, RowAction};
 
 use crate::screens::draw_main;
 use crate::state::{ANY, ListCache, StatusFilter};
@@ -74,6 +74,12 @@ pub trait LoginAttempt: Send {
         let _ = (id, action);
         Err(Error::Unreachable("no action".into()))
     }
+
+    /// Add a magnet or a torrent file on the session `login` opened.
+    fn add(&self, request: &AddRequest) -> Result<(), Error> {
+        let _ = request;
+        Err(Error::Unreachable("no add".into()))
+    }
 }
 
 /// The real attempt: `rtbit-client` on a private current-thread runtime.
@@ -100,7 +106,8 @@ impl LoginAttempt for DaemonLogin {
             client.login(username, password).await?;
             Ok::<Client, Error>(client)
         })?;
-        *sessions().lock().expect("session") = Some(Session { runtime, client });
+        *sessions().lock().unwrap_or_else(|err| err.into_inner()) =
+            Some(Session { runtime, client });
         Ok(())
     }
 
@@ -125,10 +132,41 @@ impl LoginAttempt for DaemonLogin {
             })
         })
     }
+
+    fn add(&self, request: &AddRequest) -> Result<(), Error> {
+        let source = request.source.clone();
+        let save_path = request.save_path.clone();
+        let category = request.category.clone();
+        let start_paused = request.start_paused;
+        on_session(move |session| {
+            session.runtime.block_on(async {
+                let path = Some(save_path.as_str());
+                let category = if category.is_empty() {
+                    None
+                } else {
+                    Some(category.as_str())
+                };
+                match source {
+                    AddSource::Magnet(magnet) => {
+                        session
+                            .client
+                            .add_magnet(&magnet, path, category, start_paused)
+                            .await
+                    }
+                    AddSource::File { bytes, .. } => {
+                        session
+                            .client
+                            .add_torrent_file(&bytes, path, category, start_paused)
+                            .await
+                    }
+                }
+            })
+        })
+    }
 }
 
 fn on_session<T>(call: impl FnOnce(&mut Session) -> Result<T, Error>) -> Result<T, Error> {
-    let mut guard = sessions().lock().expect("session");
+    let mut guard = sessions().lock().unwrap_or_else(|err| err.into_inner());
     let session = guard.as_mut().ok_or(Error::Unauthorised)?;
     call(session)
 }
@@ -167,7 +205,12 @@ pub struct App<L: LoginAttempt = DaemonLogin> {
     selected: Option<u64>,
     /// Delete waits for the confirm dialog.
     confirm_delete: bool,
+    /// The add dialog.
+    add_open: bool,
+    add_draft: AddDraft,
     action: Option<ActionFlight>,
+    /// An add is in flight. The bar stays quiet until it finishes.
+    add_flight: Option<Receiver<Result<(), String>>>,
 }
 
 impl Default for App<DaemonLogin> {
@@ -206,7 +249,10 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             poll_at: None,
             selected: None,
             confirm_delete: false,
+            add_open: false,
+            add_draft: AddDraft::default(),
             action: None,
+            add_flight: None,
         }
     }
 
@@ -382,7 +428,9 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             crate::screens::RowActions {
                 selected: self.selected,
                 confirm_delete: &mut self.confirm_delete,
-                busy: self.action.is_some(),
+                add_open: &mut self.add_open,
+                draft: &mut self.add_draft,
+                busy: self.action.is_some() || self.add_flight.is_some(),
             },
         );
         if let Some(id) = chosen.selected {
@@ -390,6 +438,41 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
         }
         if let Some(action) = chosen.action {
             self.dispatch(action);
+        }
+        if let Some(request) = chosen.add {
+            self.dispatch_add(request);
+        }
+        self.poll_add();
+    }
+
+    /// Post one add. The dialog already checked the magnet and the path.
+    fn dispatch_add(&mut self, request: AddRequest) {
+        if self.add_flight.is_some() {
+            return;
+        }
+        let login = self.login.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = login.add(&request).map_err(|err| login_message(&err));
+            let _ = tx.send(result);
+        });
+        self.add_flight = Some(rx);
+        self.add_draft = AddDraft::default();
+    }
+
+    fn poll_add(&mut self) {
+        let Some(rx) = &self.add_flight else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(())) => self.add_flight = None,
+            Ok(Err(message)) => {
+                self.add_draft.error = message;
+                self.add_open = true;
+                self.add_flight = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.add_flight = None,
         }
     }
 

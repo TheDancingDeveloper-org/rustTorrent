@@ -6,5 +6,5 @@ mod screens;
 mod state;
 
 pub use app::{App, Connection, LoginAttempt, Screen, Snapshot};
-pub use screens::RowAction;
+pub use screens::{AddRequest, AddSource, RowAction};
 pub use state::{ListCache, StatusFilter};

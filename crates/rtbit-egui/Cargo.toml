@@ -10,6 +10,11 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# Native file dialog. Off by default so tests and headless CI never open one,
+# and so the build does not need a portal or GTK.
+file-dialog = ["dep:rfd"]
+
 [dependencies]
 eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
 egui = "0.36"
@@ -17,6 +22,7 @@ fluent2-egui = { git = "https://github.com/TheDancingDeveloper-org/fluent2-egui"
 fluent2-icons = { git = "https://github.com/TheDancingDeveloper-org/fluent2-egui", tag = "v0.2.0" }
 rtbit-client = { path = "../rtbit-client" }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
+rfd = { version = "0.16", optional = true, default-features = false, features = ["gtk3"] }
 
 [dev-dependencies]
 egui_kittest = "0.36"
