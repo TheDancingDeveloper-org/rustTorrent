@@ -398,7 +398,12 @@ pub async fn h_set_proxy(
         .session()
         .set_proxy_url(raw)
         .map_err(|_| ApiError::from((StatusCode::BAD_REQUEST, "invalid proxy URL")))?;
-    Ok(Json(EmptyJsonResponse {}))
+    // Peer TCP picks the proxy up live. Trackers, DHT, UDP trackers and LSD
+    // keep the previous address until the process restarts.
+    Ok(Json(serde_json::json!({
+        "restart_required": true,
+        "message": "Proxy saved. Restart to apply it to trackers, DHT and local discovery. Peer connections use it immediately."
+    })))
 }
 
 pub async fn h_get_ip_filter(State(state): State<ApiState>) -> Result<impl IntoResponse> {

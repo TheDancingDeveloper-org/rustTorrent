@@ -167,7 +167,14 @@ export const SETTINGS: readonly SettingDefinition[] = [
 
   { id: "feed-history-limit", tab: "rss", label: "Feed History Limit" },
 
-  { id: "proxy-url", tab: "connection", label: "Proxy URL" },
+  {
+    id: "proxy-url",
+    tab: "connection",
+    label: "Proxy URL",
+    restartRequired: true,
+    description:
+      "Restart to apply the proxy to trackers, DHT and local discovery. Peer connections use it immediately.",
+  },
   { id: "ip-filter", tab: "connection", label: "IP filter" },
   { id: "connect-timeout", tab: "advanced", label: "Connect timeout (seconds)" },
   {
