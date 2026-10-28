@@ -1,13 +1,21 @@
 //! Screen state and the connect form. Login runs off the UI thread.
 
 use std::sync::mpsc::{self, Receiver};
+use std::time::{Duration, Instant};
 
 use fluent2_egui::controls::{Appearance, Button, Input};
+use fluent2_egui::data::DataGridState;
 use fluent2_egui::office::status_bar::StatusBar;
 use fluent2_egui::office::{TitleBar, WindowAction, window_command};
 use fluent2_egui::theme::{Theme, install};
 use fluent2_egui::tokens::FLUENT;
-use rtbit_client::{Client, Error};
+use rtbit_client::{Client, Error, SessionStats, TorrentList};
+
+use crate::screens::draw_main;
+use crate::state::{ANY, ListCache, StatusFilter};
+
+/// How often the main screen asks the daemon for the list and the session speeds.
+const POLL_EVERY: Duration = Duration::from_secs(2);
 
 /// Which screen is showing. Later items add setup, detail, add and settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,11 +46,25 @@ impl Connection {
     }
 }
 
+/// One poll of the main screen: the torrent list (with stats) and session speeds.
+#[derive(Clone, Debug)]
+pub struct Snapshot {
+    pub torrents: TorrentList,
+    pub stats: SessionStats,
+}
+
 /// How a connect click reaches the daemon. Tests substitute a value that
-/// never opens a socket.
+/// never opens a socket. `snapshot` is what the 2-second poll calls.
 pub trait LoginAttempt: Send {
     /// Try the credentials. The password must not be written to a log.
     fn login(&self, url: &str, username: &str, password: &str) -> Result<(), Error>;
+
+    /// The current list and session speeds. Tests return a scripted value.
+    /// The default logs in again and reads the list; the password is not logged.
+    fn snapshot(&self, url: &str, username: &str, password: &str) -> Result<Snapshot, Error> {
+        let _ = (url, username, password);
+        Err(Error::Unreachable("no snapshot".into()))
+    }
 }
 
 /// The real attempt: `rtbit-client` on a private current-thread runtime.
@@ -51,15 +73,28 @@ pub struct DaemonLogin;
 
 impl LoginAttempt for DaemonLogin {
     fn login(&self, url: &str, username: &str, password: &str) -> Result<(), Error> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|err| Error::Unreachable(format!("could not start login: {err}")))?;
-        let mut client = Client::new(url)?;
-        runtime
-            .block_on(client.login(username, password))
-            .map(|_| ())
+        runtime()?.block_on(async {
+            let mut client = Client::new(url)?;
+            client.login(username, password).await.map(|_| ())
+        })
     }
+
+    fn snapshot(&self, url: &str, username: &str, password: &str) -> Result<Snapshot, Error> {
+        runtime()?.block_on(async {
+            let mut client = Client::new(url)?;
+            client.login(username, password).await?;
+            let torrents = client.torrents_with_stats().await?;
+            let stats = client.stats().await?;
+            Ok(Snapshot { torrents, stats })
+        })
+    }
+}
+
+fn runtime() -> Result<tokio::runtime::Runtime, Error> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| Error::Unreachable(format!("could not start the client: {err}")))
 }
 
 struct PendingLogin {
@@ -78,6 +113,13 @@ pub struct App<L: LoginAttempt = DaemonLogin> {
     login: L,
     pending: Option<PendingLogin>,
     theme_ready: bool,
+    cache: ListCache,
+    status_filter: StatusFilter,
+    category: String,
+    tracker: String,
+    grid: DataGridState,
+    poll: Option<Poll>,
+    poll_at: Option<Instant>,
 }
 
 impl Default for App<DaemonLogin> {
@@ -107,6 +149,13 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             login,
             pending: None,
             theme_ready: false,
+            cache: ListCache::default(),
+            status_filter: StatusFilter::default(),
+            category: ANY.to_owned(),
+            tracker: ANY.to_owned(),
+            grid: DataGridState::default(),
+            poll: None,
+            poll_at: None,
         }
     }
 
@@ -123,6 +172,14 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
     #[must_use]
     pub fn error(&self) -> &str {
         &self.error
+    }
+
+    /// Test hook: show the main screen with an empty list and no poll.
+    pub fn note_empty_for_test(&mut self) {
+        self.screen = Screen::Main;
+        self.connection = Connection::Connected;
+        self.cache.torrents.clear();
+        self.poll_at = Some(std::time::Instant::now());
     }
 
     /// Start a login on a worker thread. A second click while one is in
@@ -160,6 +217,8 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
                     self.connection = Connection::Connected;
                     self.screen = Screen::Main;
                     self.error.clear();
+                    // The first list is due immediately; later polls wait POLL_EVERY.
+                    self.poll_at = None;
                 }
                 Err(message) => {
                     self.connection = Connection::Error;
@@ -177,6 +236,7 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             self.theme_ready = true;
         }
         self.poll_login();
+        self.poll_list();
         self.chrome(ui);
     }
 
@@ -255,10 +315,62 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
     }
 
     fn main_screen(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(24.0);
-        ui.heading("Torrents");
-        ui.label("No torrent list yet.");
+        draw_main(
+            ui,
+            &self.cache,
+            &mut self.status_filter,
+            &mut self.category,
+            &mut self.tracker,
+            &mut self.grid,
+        );
     }
+
+    /// Start a poll when the interval has elapsed and none is in flight.
+    fn poll_list(&mut self) {
+        self.take_poll();
+        if self.screen != Screen::Main || self.poll.is_some() {
+            return;
+        }
+        let due = self.poll_at.is_none_or(|at| at.elapsed() >= POLL_EVERY);
+        if !due {
+            return;
+        }
+        let login = self.login.clone();
+        let url = self.url.clone();
+        let username = self.username.clone();
+        let password = self.password.clone();
+        let (tx, rx) = mpsc::channel();
+        self.poll = Some(Poll { rx });
+        std::thread::spawn(move || {
+            let outcome = login
+                .snapshot(&url, &username, &password)
+                .map_err(|err| login_message(&err));
+            let _ = tx.send(outcome);
+        });
+    }
+
+    fn take_poll(&mut self) {
+        let finished = self.poll.as_ref().and_then(|poll| poll.rx.try_recv().ok());
+        if let Some(outcome) = finished {
+            self.poll = None;
+            self.poll_at = Some(Instant::now());
+            match outcome {
+                Ok(snapshot) => {
+                    self.cache.torrents = snapshot.torrents.torrents;
+                    self.cache.stats = Some(snapshot.stats);
+                    self.cache.error = None;
+                    self.connection = Connection::Connected;
+                }
+                Err(message) => {
+                    self.cache.error = Some(message);
+                }
+            }
+        }
+    }
+}
+
+struct Poll {
+    rx: Receiver<Result<Snapshot, String>>,
 }
 
 fn login_message(err: &Error) -> String {

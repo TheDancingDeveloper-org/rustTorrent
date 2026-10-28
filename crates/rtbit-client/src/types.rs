@@ -31,6 +31,59 @@ pub(crate) struct RefreshBody<'a> {
     pub refresh_token: &'a str,
 }
 
+/// Wire value of a torrent's `stats.state`. These strings are what the daemon
+/// sends; the client does not rename them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TorrentState {
+    Initializing,
+    Live,
+    Paused,
+    Error,
+    /// A state string this client does not know yet.
+    #[serde(other)]
+    Other,
+}
+
+impl TorrentState {
+    /// The label the main screen shows. Known values stay the daemon's words.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Initializing => "initializing",
+            Self::Live => "live",
+            Self::Paused => "paused",
+            Self::Error => "error",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Per-torrent speeds inside `stats.live`. Mbps, as the daemon reports them.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+pub struct LiveSpeeds {
+    #[serde(default)]
+    pub download_speed: Speed,
+    #[serde(default)]
+    pub upload_speed: Speed,
+}
+
+/// The `stats` object on a torrent row. Absent when the list was fetched
+/// without `with_stats`.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+pub struct TorrentStats {
+    #[serde(default)]
+    pub state: Option<TorrentState>,
+    #[serde(default)]
+    pub progress_bytes: u64,
+    #[serde(default)]
+    pub total_bytes: u64,
+    #[serde(default)]
+    pub finished: bool,
+    #[serde(default)]
+    pub live: Option<LiveSpeeds>,
+}
+
 /// One row of `GET /torrents`. Extra daemon fields are ignored.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Torrent {
@@ -44,6 +97,11 @@ pub struct Torrent {
     pub category: Option<String>,
     #[serde(default)]
     pub tags: Option<Vec<String>>,
+    /// Announce URLs. Used only to build the tracker filter.
+    #[serde(default)]
+    pub trackers: Option<Vec<String>>,
+    #[serde(default)]
+    pub stats: Option<TorrentStats>,
 }
 
 /// `GET /torrents`.
@@ -53,7 +111,7 @@ pub struct TorrentList {
     pub total: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 pub struct Speed {
     pub mbps: f64,
     #[serde(default)]
