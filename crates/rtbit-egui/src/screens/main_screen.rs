@@ -4,7 +4,7 @@
 //! sidebar is an egui `SidePanel`. The grid is `data::DataGrid`, which
 //! virtualises, so this screen does not cap the list.
 
-use fluent2_egui::controls::{Appearance, Button};
+use fluent2_egui::controls::{Appearance, Button, Checkbox, Input};
 use fluent2_egui::data::data_grid::{Align, Column, ColumnWidth};
 use fluent2_egui::data::{DataGrid, DataGridSize, DataGridState, RowId, SelectionMode};
 use fluent2_egui::office::command_bar::{CommandBar, CommandItem};
@@ -15,11 +15,34 @@ use rtbit_client::Torrent;
 use crate::format;
 use crate::state::{ANY, ListCache, StatusFilter};
 
-/// What the command bar asked for this frame.
-#[derive(Clone, Copy, Debug, Default)]
+/// What the command bar or the add dialog asked for this frame.
+#[derive(Clone, Debug, Default)]
 pub struct MainAction {
     pub selected: Option<u64>,
     pub action: Option<RowAction>,
+    pub add: Option<AddRequest>,
+}
+
+/// A torrent the user wants the daemon to add.
+///
+/// Either a magnet link or the bytes of a `.torrent` file, plus the save path,
+/// an optional category and whether to start paused. The dialog has already
+/// checked the magnet and the path; the daemon checks them again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AddRequest {
+    pub source: AddSource,
+    pub save_path: String,
+    pub category: String,
+    pub start_paused: bool,
+}
+
+/// Where the torrent comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AddSource {
+    /// A magnet link, already checked as `magnet:?xt=urn:btih:`.
+    Magnet(String),
+    /// Bytes of a `.torrent` file the user picked.
+    File { name: String, bytes: Vec<u8> },
 }
 
 /// A row command the daemon understands.
@@ -30,14 +53,31 @@ pub enum RowAction {
     Delete,
 }
 
-/// Row selection and the delete confirmation, owned by the shell.
+/// Row selection, the delete confirmation and the add dialog, owned by the shell.
 pub struct RowActions<'a> {
     /// Torrent the command bar acts on.
     pub selected: Option<u64>,
     /// Whether the delete dialog is open.
     pub confirm_delete: &'a mut bool,
+    /// Whether the add dialog is open.
+    pub add_open: &'a mut bool,
+    /// Fields the add dialog edits.
+    pub draft: &'a mut AddDraft,
     /// An action is already in flight, so the bar ignores clicks.
     pub busy: bool,
+}
+
+/// Fields of the add dialog. The shell owns them so a rebuild keeps the text.
+#[derive(Clone, Debug, Default)]
+pub struct AddDraft {
+    pub magnet: String,
+    pub file_name: String,
+    pub file_bytes: Vec<u8>,
+    pub save_path: String,
+    pub category: String,
+    pub start_paused: bool,
+    /// Shown in the dialog when the magnet or the path is not usable.
+    pub error: String,
 }
 
 /// Draw the sidebar and the grid into `ui`.
@@ -55,6 +95,12 @@ pub fn draw_main(
 
     let mut out = MainAction::default();
     let items = [
+        CommandItem {
+            key: "add",
+            icon: Icon::Add,
+            label: "Add",
+            priority: 100,
+        },
         CommandItem {
             key: "start",
             icon: Icon::ArrowClockwise,
@@ -75,12 +121,17 @@ pub fn draw_main(
         },
     ];
     let bar = CommandBar::new("rtbit_actions", &items).show(ui);
-    if !rows.busy && rows.selected.is_some() {
-        match bar.activated {
-            Some("start") => out.action = Some(RowAction::Start),
-            Some("pause") => out.action = Some(RowAction::Pause),
-            Some("delete") => *rows.confirm_delete = true,
-            _ => {}
+    if !rows.busy {
+        if bar.activated == Some("add") {
+            *rows.add_open = true;
+        }
+        if rows.selected.is_some() {
+            match bar.activated {
+                Some("start") => out.action = Some(RowAction::Start),
+                Some("pause") => out.action = Some(RowAction::Pause),
+                Some("delete") => *rows.confirm_delete = true,
+                _ => {}
+            }
         }
     }
 
@@ -100,6 +151,10 @@ pub fn draw_main(
             out.selected = picked;
         }
     });
+
+    if let Some(request) = add_dialog(ui.ctx(), rows.add_open, rows.draft) {
+        out.add = Some(request);
+    }
 
     if *rows.confirm_delete {
         let result = Dialog::new("rtbit_delete")
@@ -267,5 +322,204 @@ fn cell_text(torrent: &Torrent, column: &str) -> String {
 fn keep_choice(current: &mut String, options: &[String]) {
     if current != ANY && !options.iter().any(|option| option == current) {
         *current = ANY.to_owned();
+    }
+}
+
+/// The add dialog. Returns a request only when Add is pressed and the
+/// magnet (or file) and the save path pass the client checks.
+fn add_dialog(ctx: &egui::Context, open: &mut bool, draft: &mut AddDraft) -> Option<AddRequest> {
+    if !*open {
+        return None;
+    }
+    let mut request = None;
+    // The harness types and then presses Enter in the same frame, so the field
+    // still holds the previous value when the dialog reads the key. Hold the
+    // confirmation for one frame so validation sees the text that was typed.
+    let confirm = ctx
+        .data(|data| data.get_temp::<bool>(egui::Id::new("rtbit_add_confirm")))
+        .unwrap_or(false);
+    if confirm {
+        ctx.data_mut(|data| data.remove::<bool>(egui::Id::new("rtbit_add_confirm")));
+        request = match validate_add(draft) {
+            Ok(built) => Some(built),
+            Err(message) => {
+                draft.error = message;
+                *open = true;
+                None
+            }
+        };
+    }
+    // "Add torrent", not "Add": the command bar already has an Add button, and a
+    // click at this centred dialog's button lands on the bar behind it.
+    let result = Dialog::new("rtbit_add")
+        .title("Add torrent")
+        .actions(|actions| {
+            actions.primary("Add torrent");
+            actions.secondary("Cancel");
+        })
+        .show(ctx, open, |ui| {
+            ui.add(Input::new(&mut draft.magnet).label("Magnet link"));
+            ui.add_space(8.0);
+            let file_label = if draft.file_name.is_empty() {
+                "No file chosen".to_owned()
+            } else {
+                draft.file_name.clone()
+            };
+            ui.horizontal(|ui| {
+                if ui
+                    .add(Button::new("Choose .torrent").appearance(Appearance::Secondary))
+                    .clicked()
+                    && let Some(picked) = pick_torrent_file()
+                {
+                    draft.file_name = picked.0;
+                    draft.file_bytes = picked.1;
+                }
+                ui.label(file_label);
+            });
+            ui.add_space(8.0);
+            ui.add(Input::new(&mut draft.save_path).label("Save path"));
+            ui.add_space(8.0);
+            ui.add(Input::new(&mut draft.category).label("Category"));
+            ui.add_space(8.0);
+            ui.add(Checkbox::bool(&mut draft.start_paused, "Start paused"));
+            if !draft.error.is_empty() {
+                ui.add_space(8.0);
+                ui.colored_label(egui::Color32::from_rgb(196, 43, 28), &draft.error);
+            }
+        });
+    match result {
+        DialogResult::Closed(CloseReason::Button("Add torrent")) => {
+            ctx.data_mut(|data| data.insert_temp(egui::Id::new("rtbit_add_confirm"), true));
+            *open = true;
+        }
+        DialogResult::Closed(_) => {
+            *draft = AddDraft::default();
+        }
+        DialogResult::Open(_) => {}
+    }
+    request
+}
+
+/// Client-side checks. The daemon still rejects a bad magnet or a bad path.
+pub fn validate_add(draft: &AddDraft) -> Result<AddRequest, String> {
+    let save_path = draft.save_path.trim().to_owned();
+    if let Some(message) = check_save_path(&save_path) {
+        return Err(message.to_owned());
+    }
+    let magnet = draft.magnet.trim();
+    let source = if !magnet.is_empty() {
+        if let Some(message) = check_magnet(magnet) {
+            return Err(message.to_owned());
+        }
+        AddSource::Magnet(magnet.to_owned())
+    } else if !draft.file_bytes.is_empty() {
+        AddSource::File {
+            name: draft.file_name.clone(),
+            bytes: draft.file_bytes.clone(),
+        }
+    } else {
+        return Err("enter a magnet link or choose a .torrent file".to_owned());
+    };
+    Ok(AddRequest {
+        source,
+        save_path,
+        category: draft.category.trim().to_owned(),
+        start_paused: draft.start_paused,
+    })
+}
+
+fn check_magnet(magnet: &str) -> Option<&'static str> {
+    let Some(rest) = magnet.strip_prefix("magnet:?") else {
+        return Some("magnet link must start with magnet:?");
+    };
+    let ok = rest.split('&').any(|part| {
+        let mut key_value = part.splitn(2, '=');
+        key_value.next() == Some("xt")
+            && key_value
+                .next()
+                .is_some_and(|value| value.to_ascii_lowercase().starts_with("urn:btih:"))
+    });
+    if magnet.starts_with("magnet:?") && ok {
+        None
+    } else if magnet.starts_with("magnet:?") {
+        Some("magnet link needs xt=urn:btih:")
+    } else {
+        Some("magnet link must start with magnet:?")
+    }
+}
+
+fn check_save_path(path: &str) -> Option<&'static str> {
+    if path.is_empty() {
+        return Some("save path is required");
+    }
+    if path.contains('\0') {
+        return Some("save path contains a null");
+    }
+    if path.contains('\n') || path.contains('\r') {
+        return Some("save path must be a single line");
+    }
+    None
+}
+
+/// Open the native file dialog when the `file-dialog` feature is on.
+/// Tests leave it off, so a click records nothing and does not open a window.
+fn pick_torrent_file() -> Option<(String, Vec<u8>)> {
+    #[cfg(feature = "file-dialog")]
+    {
+        let path = rfd::FileDialog::new()
+            .add_filter("Torrent", &["torrent"])
+            .pick_file()?;
+        let bytes = std::fs::read(&path).ok()?;
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("torrent")
+            .to_owned();
+        return Some((name, bytes));
+    }
+    #[cfg(not(feature = "file-dialog"))]
+    {
+        None
+    }
+}
+
+#[cfg(test)]
+mod add_checks {
+    use super::*;
+
+    #[test]
+    fn a_magnet_without_a_hash_is_refused() {
+        let draft = AddDraft {
+            magnet: "magnet:?dn=nohash".into(),
+            save_path: "/data".into(),
+            ..AddDraft::default()
+        };
+        assert!(validate_add(&draft).is_err());
+    }
+
+    #[test]
+    fn a_blank_path_is_refused() {
+        let draft = AddDraft {
+            magnet: "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567".into(),
+            save_path: "  ".into(),
+            ..AddDraft::default()
+        };
+        assert!(validate_add(&draft).is_err());
+    }
+
+    #[test]
+    fn a_good_magnet_and_path_is_accepted() {
+        let draft = AddDraft {
+            magnet: "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Example"
+                .into(),
+            save_path: "/data/incoming".into(),
+            category: "movies".into(),
+            start_paused: true,
+            ..AddDraft::default()
+        };
+        let request = validate_add(&draft).expect("valid");
+        assert!(matches!(request.source, AddSource::Magnet(_)));
+        assert_eq!(request.save_path, "/data/incoming");
+        assert!(request.start_paused);
     }
 }

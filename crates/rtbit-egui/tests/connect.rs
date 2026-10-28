@@ -9,7 +9,9 @@ use rtbit_client::{
     Error, PeerCounts, SessionCounters, SessionStats, Speed, Torrent, TorrentList, TorrentState,
     TorrentStats,
 };
-use rtbit_egui::{App, Connection, LoginAttempt, RowAction, Screen, Snapshot};
+use rtbit_egui::{
+    AddRequest, AddSource, App, Connection, LoginAttempt, RowAction, Screen, Snapshot,
+};
 
 #[derive(Clone, Copy)]
 enum Script {
@@ -22,6 +24,7 @@ struct Scripted {
     result: std::sync::Arc<Mutex<Script>>,
     logins: std::sync::Arc<Mutex<u32>>,
     actions: std::sync::Arc<Mutex<Vec<(u64, RowAction)>>>,
+    adds: std::sync::Arc<Mutex<Vec<AddRequest>>>,
 }
 
 impl LoginAttempt for Scripted {
@@ -41,6 +44,11 @@ impl LoginAttempt for Scripted {
         self.actions.lock().expect("actions").push((id, action));
         Ok(())
     }
+
+    fn add(&self, request: &AddRequest) -> Result<(), Error> {
+        self.adds.lock().expect("adds").push(request.clone());
+        Ok(())
+    }
 }
 
 fn scripted(result: Script) -> Scripted {
@@ -48,6 +56,7 @@ fn scripted(result: Script) -> Scripted {
         result: std::sync::Arc::new(Mutex::new(result)),
         logins: std::sync::Arc::new(Mutex::new(0)),
         actions: std::sync::Arc::new(Mutex::new(Vec::new())),
+        adds: std::sync::Arc::new(Mutex::new(Vec::new())),
     }
 }
 
@@ -106,7 +115,7 @@ fn sample_snapshot() -> Snapshot {
 fn harness(login: Scripted) -> Harness<'static, App<Scripted>> {
     let app = App::with_login(login);
     let mut harness = Harness::builder()
-        .with_size(egui::vec2(900.0, 700.0))
+        .with_size(egui::vec2(1100.0, 900.0))
         .build_ui_state(|ui, app: &mut App<Scripted>| app.ui(ui), app);
     harness.run_steps(2);
     harness
@@ -209,14 +218,43 @@ fn empty_list_says_there_are_no_torrents() {
     assert!(shows(&harness, "No torrents."));
 }
 
+fn type_into(harness: &mut Harness<'static, App<Scripted>>, label: &str, text: &str) {
+    harness
+        .query_all(egui_kittest::kittest::by().predicate(move |node| {
+            node.label().as_deref() == Some(label) && node.role() == Role::TextInput
+        }))
+        .next()
+        .unwrap_or_else(|| panic!("{label} input"))
+        .focus();
+    harness.run_steps(1);
+    harness
+        .query_all(egui_kittest::kittest::by().predicate(move |node| {
+            node.label().as_deref() == Some(label) && node.role() == Role::TextInput
+        }))
+        .next()
+        .unwrap_or_else(|| panic!("{label} input"))
+        .type_text(text);
+    harness.run_steps(1);
+}
+
 fn click_named(harness: &mut Harness<'static, App<Scripted>>, name: &str) {
     harness
         .query_all(egui_kittest::kittest::by().predicate(move |node| {
             node.label().as_deref() == Some(name) && node.role() == Role::Button
         }))
-        .next()
+        .last()
         .unwrap_or_else(|| panic!("{name} button"))
         .click();
+}
+
+/// Press the dialog's primary button. A pointer click at its centre lands on the
+/// command bar behind the dialog, and the accesskit id of a salted button does
+/// not match the node's id, so Enter is used once no text field is focused.
+fn confirm_dialog(harness: &mut Harness<'static, App<Scripted>>) {
+    harness.key_press(egui::Key::Tab);
+    harness.run_steps(1);
+    harness.key_press(egui::Key::Enter);
+    harness.run_steps(1);
 }
 
 fn on_main(harness: &mut Harness<'static, App<Scripted>>) {
@@ -278,4 +316,74 @@ fn delete_asks_and_cancel_does_not_act() {
     click_named(&mut harness, "Cancel");
     harness.run_steps(4);
     assert!(actions.lock().expect("actions").is_empty());
+}
+
+const GOOD_MAGNET: &str = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Example";
+
+#[test]
+fn a_bad_magnet_is_refused_without_an_add() {
+    let login = scripted(Script::Ok);
+    let adds = login.adds.clone();
+    let mut harness = harness(login);
+    on_main(&mut harness);
+    click_named(&mut harness, "Add");
+    harness.run_steps(2);
+    type_into(&mut harness, "Magnet link", "not-a-magnet");
+    type_into(&mut harness, "Save path", "/data/incoming");
+    confirm_dialog(&mut harness);
+    harness.run_steps(4);
+    assert!(adds.lock().expect("adds").is_empty());
+    assert!(shows(&harness, "magnet link must start with magnet:?"));
+}
+
+#[test]
+fn cancel_closes_the_add_dialog_without_an_add() {
+    let login = scripted(Script::Ok);
+    let adds = login.adds.clone();
+    let mut harness = harness(login);
+    on_main(&mut harness);
+    click_named(&mut harness, "Add");
+    harness.run_steps(2);
+    click_named(&mut harness, "Cancel");
+    harness.run_steps(4);
+    assert!(adds.lock().expect("adds").is_empty());
+    assert!(!shows(&harness, "Magnet link"));
+}
+
+#[test]
+fn a_valid_magnet_records_one_add() {
+    let login = scripted(Script::Ok);
+    let adds = login.adds.clone();
+    let mut harness = harness(login);
+    on_main(&mut harness);
+    click_named(&mut harness, "Add");
+    harness.run_steps(2);
+    type_into(&mut harness, "Magnet link", GOOD_MAGNET);
+    type_into(&mut harness, "Save path", "/data/incoming");
+    type_into(&mut harness, "Category", "movies");
+    harness
+        .query_all(
+            egui_kittest::kittest::by()
+                .predicate(|node| node.label().as_deref() == Some("Start paused")),
+        )
+        .last()
+        .expect("Start paused")
+        .click();
+    confirm_dialog(&mut harness);
+    for _ in 0..50 {
+        harness.run_steps(1);
+        if !adds.lock().expect("adds").is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let recorded = adds.lock().expect("adds").clone();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(
+        recorded[0].source,
+        AddSource::Magnet(GOOD_MAGNET.to_owned())
+    );
+    assert_eq!(recorded[0].save_path, "/data/incoming");
+    assert_eq!(recorded[0].category, "movies");
+    assert!(recorded[0].start_paused);
 }

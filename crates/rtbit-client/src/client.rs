@@ -93,6 +93,52 @@ impl Client {
             .await
     }
 
+    /// `POST /torrents` with a magnet or http URL as the body.
+    ///
+    /// `save_path` and `category` are optional. An empty string is omitted.
+    /// `start_paused` maps to `paused=true`. The body is marked `is_url=true`
+    /// so the daemon does not try to read it as a torrent file.
+    pub async fn add_magnet(
+        &mut self,
+        magnet: &str,
+        save_path: Option<&str>,
+        category: Option<&str>,
+        start_paused: bool,
+    ) -> Result<(), Error> {
+        self.add_torrent(magnet.as_bytes(), true, save_path, category, start_paused)
+            .await
+    }
+
+    /// `POST /torrents` with the bytes of a `.torrent` file.
+    pub async fn add_torrent_file(
+        &mut self,
+        bytes: &[u8],
+        save_path: Option<&str>,
+        category: Option<&str>,
+        start_paused: bool,
+    ) -> Result<(), Error> {
+        self.add_torrent(bytes, false, save_path, category, start_paused)
+            .await
+    }
+
+    async fn add_torrent(
+        &mut self,
+        body: &[u8],
+        is_url: bool,
+        save_path: Option<&str>,
+        category: Option<&str>,
+        start_paused: bool,
+    ) -> Result<(), Error> {
+        let path = add_path(is_url, save_path, category, start_paused);
+        let response = self.post_body_once(&path, body, is_url).await?;
+        if response.status() == StatusCode::UNAUTHORIZED {
+            self.refresh_once().await?;
+            decode_empty(self.post_body_once(&path, body, is_url).await?).await
+        } else {
+            decode_empty(response).await
+        }
+    }
+
     async fn authed_get<T: DeserializeOwned>(&mut self, path: &str) -> Result<T, Error> {
         let response = self.get_once(path).await?;
         if response.status() != StatusCode::UNAUTHORIZED {
@@ -135,6 +181,27 @@ impl Client {
             .map_err(|err| Error::Unreachable(err.to_string()))
     }
 
+    /// Adds can take longer than a read. A file body gets the add timeout;
+    /// a magnet stays on the read timeout.
+    async fn post_body_once(
+        &self,
+        path: &str,
+        body: &[u8],
+        is_url: bool,
+    ) -> Result<reqwest::Response, Error> {
+        let token = self.access.as_deref().ok_or(Error::Unauthorised)?;
+        let url = self.url(path)?;
+        let mut request = self.http.post(url).bearer_auth(token);
+        if !is_url {
+            request = request.timeout(ADD_FILE_TIMEOUT);
+        }
+        request
+            .body(body.to_vec())
+            .send()
+            .await
+            .map_err(|err| Error::Unreachable(err.to_string()))
+    }
+
     async fn refresh_once(&mut self) -> Result<(), Error> {
         let refresh = self.refresh.clone().ok_or(Error::Unauthorised)?;
         let url = self.url("auth/refresh")?;
@@ -158,6 +225,46 @@ impl Client {
             .join(path)
             .map_err(|err| Error::Unreachable(err.to_string()))
     }
+}
+
+/// Query string the daemon's add handler already accepts.
+fn add_path(
+    is_url: bool,
+    save_path: Option<&str>,
+    category: Option<&str>,
+    start_paused: bool,
+) -> String {
+    let mut path = String::from("torrents?overwrite=true");
+    if is_url {
+        path.push_str("&is_url=true");
+    }
+    if start_paused {
+        path.push_str("&paused=true");
+    }
+    if let Some(folder) = save_path.map(str::trim).filter(|s| !s.is_empty()) {
+        path.push_str("&output_folder=");
+        path.push_str(&urlencoding_minimal(folder));
+    }
+    if let Some(name) = category.map(str::trim).filter(|s| !s.is_empty()) {
+        path.push_str("&category=");
+        path.push_str(&urlencoding_minimal(name));
+    }
+    path
+}
+
+/// Encode a query value. The client has no `urlencoding` dependency.
+fn urlencoding_minimal(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 fn normalize_base(raw: &str) -> Result<Url, Error> {
