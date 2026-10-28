@@ -107,6 +107,107 @@ pub async fn h_set_downloads(
     Ok(Json(EmptyJsonResponse {}))
 }
 
+// --- Network settings (startup only) ---
+
+/// Peer and discovery settings as the running process actually has them.
+/// Every field is fixed at startup. `encryption` is always null: this engine
+/// has no encryption-mode switch. `pex_enabled` is always true: peer exchange
+/// is part of the peer protocol and has no flag. `http_api_listen` is the
+/// address this request arrived on, for display only.
+#[derive(Serialize)]
+pub struct NetworkConfig {
+    pub listen_ip: Option<String>,
+    pub listen_port: Option<u16>,
+    pub dht_enabled: bool,
+    pub pex_enabled: bool,
+    pub lsd_enabled: bool,
+    pub upnp_port_forward: bool,
+    pub encryption: Option<String>,
+    pub http_api_listen: String,
+}
+
+/// A write of the network settings. Deserialized leniently so an unknown or
+/// forbidden field is still visible to the validator.
+#[derive(Deserialize, Default)]
+pub struct NetworkConfigUpdate {
+    #[serde(default)]
+    pub listen_ip: Option<String>,
+    #[serde(default)]
+    pub listen_port: Option<u16>,
+    #[serde(default)]
+    pub dht_enabled: Option<bool>,
+    #[serde(default)]
+    pub pex_enabled: Option<bool>,
+    #[serde(default)]
+    pub lsd_enabled: Option<bool>,
+    #[serde(default)]
+    pub upnp_port_forward: Option<bool>,
+    #[serde(default)]
+    pub encryption: Option<String>,
+    #[serde(default)]
+    pub http_api_listen: Option<String>,
+    #[serde(default)]
+    pub disable_auth: Option<bool>,
+    #[serde(default)]
+    pub read_only: Option<bool>,
+}
+
+/// Why a network-settings write was refused. `None` means the body asked for
+/// nothing, which is still not applied: there is no runtime setter.
+pub fn reject_network_update(update: &NetworkConfigUpdate) -> &'static str {
+    if update.http_api_listen.is_some() || update.disable_auth == Some(true) {
+        return "refusing to change the HTTP API bind address or authentication; \
+                that would expose the web UI. Set --http-api-listen-addr at startup \
+                and keep authentication on for any non-loopback bind";
+    }
+    if update.listen_ip.is_some()
+        || update.listen_port.is_some()
+        || update.dht_enabled.is_some()
+        || update.pex_enabled.is_some()
+        || update.lsd_enabled.is_some()
+        || update.upnp_port_forward.is_some()
+        || update.encryption.is_some()
+        || update.read_only.is_some()
+        || update.disable_auth.is_some()
+    {
+        return "these settings are fixed at startup and need a restart; \
+                set them with --listen-port, --listen-ip, --disable-dht, \
+                --disable-lsd or --disable-upnp-port-forward. Peer exchange is \
+                always on, and this engine has no encryption-mode switch";
+    }
+    "no network setting was changed; these values are fixed at startup"
+}
+
+pub async fn h_get_network(State(state): State<ApiState>) -> Result<impl IntoResponse> {
+    let session = state.api.session();
+    let listen = session.listen_addr();
+    // Display only. The listener itself is not reachable from here, and this
+    // handler never rebinds it.
+    let http_api_listen = state
+        .opts
+        .web_ui_port
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+    Ok(Json(NetworkConfig {
+        listen_ip: listen.map(|addr| addr.ip().to_string()),
+        listen_port: listen.map(|addr| addr.port()),
+        dht_enabled: session.get_dht().is_some(),
+        pex_enabled: true,
+        lsd_enabled: session.lsd.is_some(),
+        upnp_port_forward: session.upnp_port_forward(),
+        encryption: None,
+        http_api_listen,
+    }))
+}
+
+pub async fn h_set_network(Json(update): Json<NetworkConfigUpdate>) -> Result<impl IntoResponse> {
+    // Nothing here is applied. In particular a request to move the HTTP API
+    // listener, or to turn authentication off, is refused before any other
+    // field is looked at, and there is no setter that could honour it.
+    let message = reject_network_update(&update);
+    Err::<axum::Json<EmptyJsonResponse>, _>(ApiError::from((StatusCode::BAD_REQUEST, message)))
+}
+
 // --- Directory browsing ---
 
 #[derive(Deserialize)]
@@ -220,6 +321,42 @@ mod tests {
         dirs.iter()
             .map(|dir| dir.canonicalize().expect("canonical test root"))
             .collect()
+    }
+
+    fn network_update(patch: impl FnOnce(&mut NetworkConfigUpdate)) -> NetworkConfigUpdate {
+        let mut update = NetworkConfigUpdate::default();
+        patch(&mut update);
+        update
+    }
+
+    #[test]
+    fn network_update_refuses_a_public_http_bind_without_auth() {
+        let expose = network_update(|update| {
+            update.http_api_listen = Some("0.0.0.0:3030".to_string());
+            update.disable_auth = Some(true);
+        });
+        let message = reject_network_update(&expose);
+        assert!(message.contains("expose the web UI"), "{message}");
+
+        let bind_only = network_update(|update| {
+            update.http_api_listen = Some("0.0.0.0:3030".to_string());
+        });
+        assert!(reject_network_update(&bind_only).contains("expose the web UI"));
+
+        let auth_off = network_update(|update| update.disable_auth = Some(true));
+        assert!(reject_network_update(&auth_off).contains("expose the web UI"));
+    }
+
+    #[test]
+    fn network_update_refuses_startup_settings_and_empty_bodies() {
+        let port = network_update(|update| update.listen_port = Some(6881));
+        let message = reject_network_update(&port);
+        assert!(message.contains("restart"), "{message}");
+        let encryption = network_update(|update| update.encryption = Some("forced".to_string()));
+        assert!(reject_network_update(&encryption).contains("encryption-mode"));
+        assert!(
+            reject_network_update(&NetworkConfigUpdate::default()).contains("fixed at startup")
+        );
     }
 
     #[test]

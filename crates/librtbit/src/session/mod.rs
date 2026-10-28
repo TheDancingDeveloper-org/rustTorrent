@@ -118,6 +118,9 @@ pub struct Session {
     peer_id: Id20,
     announce_port: AnnouncePort,
     listen_addr: Option<SocketAddr>,
+    /// Whether a UPnP port forward was requested at startup. The forwarder
+    /// itself is spawned once and there is no runtime switch.
+    upnp_port_forward: bool,
     dht: Option<Dht>,
     pub(crate) connector: Arc<StreamConnector>,
     reqwest_client: reqwest::Client,
@@ -135,7 +138,7 @@ pub struct Session {
     persistence: Option<Arc<dyn SessionPersistenceStore>>,
     trackers: HashSet<url::Url>,
 
-    lsd: Option<LocalServiceDiscovery>,
+    pub(crate) lsd: Option<LocalServiceDiscovery>,
 
     // Categories
     category_manager: CategoryManager,
@@ -506,6 +509,9 @@ impl Session {
                         .and_then(NonZeroU16::new),
                 ),
                 listen_addr: listen_result.as_ref().map(|l| l.addr),
+                upnp_port_forward: listen_result
+                    .as_ref()
+                    .is_some_and(|l| l.enable_upnp_port_forwarding),
                 default_storage_factory: opts.default_storage_factory,
                 reqwest_client,
                 connector: stream_connector,
@@ -1729,6 +1735,11 @@ impl Session {
 
     pub fn listen_addr(&self) -> Option<SocketAddr> {
         self.listen_addr
+    }
+
+    /// True when startup asked the router to forward the peer port.
+    pub fn upnp_port_forward(&self) -> bool {
+        self.upnp_port_forward
     }
 
     pub fn announce_port(&self) -> Option<u16> {

@@ -8,6 +8,7 @@ import {
   DhtStats,
   FoldersConfig,
   DownloadsConfig,
+  NetworkConfig,
   LimitsConfig,
   RtbitAPI,
   SeedLimits,
@@ -186,6 +187,9 @@ export const APIContext = createContext<RtbitAPI>({
     throw new Error("Function not implemented.");
   },
   setDownloadsConfig: function (_config: DownloadsConfig): Promise<void> {
+    throw new Error("Function not implemented.");
+  },
+  getNetworkConfig: function (): Promise<NetworkConfig> {
     throw new Error("Function not implemented.");
   },
   browseDirectory: function (_path?: string): Promise<BrowseResponse> {

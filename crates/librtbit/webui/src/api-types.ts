@@ -484,6 +484,18 @@ export interface FoldersConfig {
   completed_folder: string | null;
 }
 
+/** Startup-only peer and discovery settings. `encryption` is null: unsupported. */
+export interface NetworkConfig {
+  listen_ip: string | null;
+  listen_port: number | null;
+  dht_enabled: boolean;
+  pex_enabled: boolean;
+  lsd_enabled: boolean;
+  upnp_port_forward: boolean;
+  encryption: string | null;
+  http_api_listen: string;
+}
+
 // Directory browsing
 export interface DirEntry {
   name: string;
@@ -576,5 +588,6 @@ export interface RtbitAPI {
   setFolders: (config: FoldersConfig) => Promise<void>;
   getDownloadsConfig: () => Promise<DownloadsConfig>;
   setDownloadsConfig: (config: DownloadsConfig) => Promise<void>;
+  getNetworkConfig: () => Promise<NetworkConfig>;
   browseDirectory: (path?: string) => Promise<BrowseResponse>;
 }

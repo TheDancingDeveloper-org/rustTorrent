@@ -1079,6 +1079,16 @@ export const MockAPI: RtbitAPI & { getVersion: () => Promise<string> } = {
     incomplete_file_suffix: false,
   }),
   setDownloadsConfig: async () => {},
+  getNetworkConfig: async () => ({
+    listen_ip: "::",
+    listen_port: 4240,
+    dht_enabled: true,
+    pex_enabled: true,
+    lsd_enabled: true,
+    upnp_port_forward: true,
+    encryption: null,
+    http_api_listen: ":3030",
+  }),
   browseDirectory: async (path?: string) => ({
     current: path ?? "/",
     parent:

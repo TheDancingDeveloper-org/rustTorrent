@@ -25,10 +25,13 @@ export interface SettingDefinition {
 }
 
 // restartRequired entries were checked against the engine: the listen port and
-// listen IP are bound when the session is created, the DHT is created with the
-// session (--disable-dht), the HTTP API listener is bound at startup, and the
+// listen IP are bound when the session is created, DHT and LSD are created with
+// the session (--disable-dht, --disable-lsd), UPnP port forwarding is started
+// once (--disable-upnp-port-forward), peer exchange has no switch, encryption
+// mode is not implemented, the HTTP API listener is bound at startup, and the
 // persistence location is read only in main() at startup. There is no runtime
-// setter for any of them. The download folder is different: api_set_folders
+// setter for any of them. The HTTP bind address is display-only: changing it
+// here is refused so the web UI cannot be exposed without authentication. The download folder is different: api_set_folders
 // applies it live, so it is not marked.
 export const SETTINGS: readonly SettingDefinition[] = [
   { id: "download-folder", tab: "folders", label: "Default download folder" },
@@ -83,6 +86,27 @@ export const SETTINGS: readonly SettingDefinition[] = [
     restartRequired: true,
     description: "Set with --listen-ip.",
   },
+  {
+    id: "upnp-port-forward",
+    tab: "connections",
+    label: "UPnP port forward",
+    restartRequired: true,
+    description: "On unless --disable-upnp-port-forward is set.",
+  },
+  {
+    id: "pex-enabled",
+    tab: "connections",
+    label: "Peer exchange (PEX)",
+    restartRequired: true,
+    description: "Always on. There is no flag to turn it off.",
+  },
+  {
+    id: "encryption-mode",
+    tab: "connections",
+    label: "Encryption mode",
+    restartRequired: true,
+    description: "Informational. This engine has no encryption-mode switch.",
+  },
 
   { id: "max-active-downloads", tab: "behaviour", label: "Max active downloads" },
   { id: "max-active-uploads", tab: "behaviour", label: "Max active uploads" },
@@ -117,6 +141,13 @@ export const SETTINGS: readonly SettingDefinition[] = [
     label: "DHT enabled",
     restartRequired: true,
     description: "Turned off with --disable-dht.",
+  },
+  {
+    id: "lsd-enabled",
+    tab: "dht",
+    label: "Local service discovery (LSD)",
+    restartRequired: true,
+    description: "Turned off with --disable-lsd.",
   },
 
   { id: "current-password", tab: "security", label: "Current Password" },
