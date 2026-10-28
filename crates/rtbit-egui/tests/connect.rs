@@ -30,10 +30,9 @@ impl LoginAttempt for Scripted {
 
 fn harness(login: Scripted) -> Harness<'static, App<Scripted>> {
     let app = App::with_login(login);
-    let mut harness = Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_ui_state(
-        |ui, app: &mut App<Scripted>| app.ui(ui),
-        app,
-    );
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(900.0, 700.0))
+        .build_ui_state(|ui, app: &mut App<Scripted>| app.ui(ui), app);
     harness.run_steps(2);
     harness
 }
@@ -59,9 +58,10 @@ fn connect_screen_has_url_username_password_and_a_button() {
     assert!(shows(&harness, "Connect"));
     assert!(shows(&harness, "rustTorrent"));
     assert!(shows(&harness, "Disconnected"));
-    let mut inputs = harness.query_all(egui_kittest::kittest::by().predicate(|node| {
-        matches!(node.role(), Role::TextInput | Role::PasswordInput)
-    }));
+    let mut inputs = harness.query_all(
+        egui_kittest::kittest::by()
+            .predicate(|node| matches!(node.role(), Role::TextInput | Role::PasswordInput)),
+    );
     let count = inputs.by_ref().count();
     assert!(count >= 3, "url, username and password, got {count}");
 }

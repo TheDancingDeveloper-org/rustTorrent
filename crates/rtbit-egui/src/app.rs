@@ -56,7 +56,9 @@ impl LoginAttempt for DaemonLogin {
             .build()
             .map_err(|err| Error::Unreachable(format!("could not start login: {err}")))?;
         let mut client = Client::new(url)?;
-        runtime.block_on(client.login(username, password)).map(|_| ())
+        runtime
+            .block_on(client.login(username, password))
+            .map(|_| ())
     }
 }
 
@@ -186,7 +188,8 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             .focused(focused)
             .show(ui, |_| ());
         if let Some(action) = response.action {
-            ui.ctx().send_viewport_cmd(window_command(action, maximized));
+            ui.ctx()
+                .send_viewport_cmd(window_command(action, maximized));
         }
         if response.double_clicked {
             ui.ctx()
