@@ -72,7 +72,7 @@ impl LoginAttempt for Scripted {
                 auth_enabled: false,
                 setup_required: true,
             }),
-            SetupScript::Unreachable => Err(Error::Unreachable("down".into())),
+            SetupScript::Unreachable => Err(Error::Unreachable("down bearer secret-token".into())),
         }
     }
 
@@ -277,8 +277,8 @@ fn failed_login_surfaces_the_error_without_a_daemon() {
     }
     assert_eq!(harness.state().connection(), Connection::Error);
     assert_eq!(harness.state().screen(), Screen::Connect);
-    assert_eq!(harness.state().error(), "unauthorised");
-    assert!(shows(&harness, "unauthorised"));
+    assert_eq!(harness.state().error(), "Sign-in was refused.");
+    assert!(shows(&harness, "Sign-in was refused."));
     assert!(shows(&harness, "Error"));
 }
 
@@ -733,7 +733,7 @@ fn unreachable_status_stays_on_connect() {
     let harness = mem_harness(script, MemoryStore::default());
     assert_eq!(harness.state().screen(), Screen::Connect);
     assert!(!shows_mem(&harness, "Setup token"));
-    assert!(shows_mem(&harness, "daemon unreachable"));
+    assert!(shows_mem(&harness, "The daemon is unreachable."));
 }
 
 #[test]
@@ -887,4 +887,18 @@ fn rss_lists_an_item_and_download_posts_only_that_id() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert_eq!(downloads.lock().expect("rss").as_slice(), ["ep-1"]);
+}
+
+#[test]
+fn an_unreachable_daemon_shows_a_mapped_message_without_the_detail() {
+    let mut script = scripted(Script::Ok);
+    script.setup_script = SetupScript::Unreachable;
+    let harness = mem_harness(script, MemoryStore::default());
+    assert_eq!(harness.state().screen(), Screen::Connect);
+    assert_eq!(harness.state().connection(), Connection::Error);
+    let text = harness.state().error();
+    assert_eq!(text, "The daemon is unreachable.");
+    assert!(!text.contains("secret-token"));
+    assert!(shows_mem(&harness, "The daemon is unreachable."));
+    assert!(shows_mem(&harness, "Dismiss"));
 }
