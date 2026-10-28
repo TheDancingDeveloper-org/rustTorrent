@@ -7,8 +7,8 @@ use url::Url;
 
 use crate::error::Error;
 use crate::types::{
-    LoginBody, PieceProgress, RefreshBody, SessionStats, TokenPair, Torrent, TorrentList,
-    TrackerList,
+    AuthStatus, LoginBody, PieceProgress, RefreshBody, SessionStats, SetupBody, TokenPair, Torrent,
+    TorrentList, TrackerList,
 };
 use serde::Serialize;
 
@@ -55,6 +55,45 @@ impl Client {
             .http
             .post(url)
             .json(&LoginBody { username, password })
+            .send()
+            .await
+            .map_err(|err| Error::Unreachable(err.to_string()))?;
+        let tokens: TokenPair = decode(response).await?;
+        self.access = Some(tokens.access_token.clone());
+        self.refresh = Some(tokens.refresh_token.clone());
+        Ok(tokens)
+    }
+
+    /// `GET /auth/status`. No credentials. Tells the shell whether first-run
+    /// setup is still open.
+    pub async fn auth_status(&self) -> Result<AuthStatus, Error> {
+        let url = self.url("auth/status")?;
+        let response = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .map_err(|err| Error::Unreachable(err.to_string()))?;
+        decode(response).await
+    }
+
+    /// `POST /auth/setup`. Stores the returned token pair, the same way login does.
+    /// The setup token and password are not logged.
+    pub async fn setup(
+        &mut self,
+        username: &str,
+        password: &str,
+        setup_token: &str,
+    ) -> Result<TokenPair, Error> {
+        let url = self.url("auth/setup")?;
+        let response = self
+            .http
+            .post(url)
+            .json(&SetupBody {
+                username,
+                password,
+                setup_token,
+            })
             .send()
             .await
             .map_err(|err| Error::Unreachable(err.to_string()))?;

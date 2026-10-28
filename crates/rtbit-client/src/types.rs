@@ -20,15 +20,86 @@ pub struct TokenPair {
     pub role: Role,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct LoginBody<'a> {
     pub username: &'a str,
     pub password: &'a str,
 }
 
-#[derive(Debug, Clone, Serialize)]
+impl std::fmt::Debug for LoginBody<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoginBody")
+            .field("username", &self.username)
+            .field("password", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Serialize)]
 pub(crate) struct RefreshBody<'a> {
     pub refresh_token: &'a str,
+}
+
+impl std::fmt::Debug for RefreshBody<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RefreshBody")
+            .field("refresh_token", &"[redacted]")
+            .finish()
+    }
+}
+
+/// `POST /auth/setup`. The setup token and password are secrets.
+#[derive(Clone, Serialize)]
+pub(crate) struct SetupBody<'a> {
+    pub username: &'a str,
+    pub password: &'a str,
+    pub setup_token: &'a str,
+}
+
+impl std::fmt::Debug for SetupBody<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetupBody")
+            .field("username", &self.username)
+            .field("password", &"[redacted]")
+            .field("setup_token", &"[redacted]")
+            .finish()
+    }
+}
+
+/// `GET /auth/status`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthStatus {
+    #[serde(default)]
+    pub auth_enabled: bool,
+    #[serde(default)]
+    pub setup_required: bool,
+}
+
+#[cfg(test)]
+mod secret_debug {
+    use super::{LoginBody, RefreshBody, SetupBody};
+
+    #[test]
+    fn debug_masks_login_and_refresh_secrets() {
+        let login = LoginBody {
+            username: "ada",
+            password: "s3cret-pass",
+        };
+        let refresh = RefreshBody {
+            refresh_token: "refresh-secret",
+        };
+        let setup = SetupBody {
+            username: "ada",
+            password: "s3cret-pass",
+            setup_token: "setup-secret",
+        };
+        let shown = format!("{login:?} {refresh:?} {setup:?}");
+        assert!(shown.contains("ada"));
+        assert!(shown.contains("[redacted]"));
+        assert!(!shown.contains("s3cret-pass"));
+        assert!(!shown.contains("refresh-secret"));
+        assert!(!shown.contains("setup-secret"));
+    }
 }
 
 /// Wire value of a torrent's `stats.state`. These strings are what the daemon
