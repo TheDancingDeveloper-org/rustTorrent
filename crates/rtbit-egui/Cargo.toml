@@ -1,0 +1,21 @@
+[package]
+name = "rtbit-egui"
+version = "0.2.0-beta.2"
+authors = ["AusAgentSmith <admin@rusttorrent.dev>"]
+edition = "2024"
+description = "Native rustTorrent client."
+license = "Apache-2.0"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
+egui = "0.36"
+fluent2-egui = { git = "https://github.com/TheDancingDeveloper-org/fluent2-egui", tag = "v0.2.0" }
+rtbit-client = { path = "../rtbit-client" }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+egui_kittest = "0.36"

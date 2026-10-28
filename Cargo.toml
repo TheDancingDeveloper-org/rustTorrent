@@ -15,6 +15,7 @@ members = [
     "crates/librtbit-upnp-serve",
     "crates/rtbit",
     "crates/rtbit-client",
+    "crates/rtbit-egui",
     "desktop/src-tauri",
     "desktop/menu",
 ]
