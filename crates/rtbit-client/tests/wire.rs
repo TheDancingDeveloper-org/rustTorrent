@@ -390,3 +390,67 @@ async fn file_selection_and_tracker_add_post_json() {
         .unwrap();
     server.verify().await;
 }
+
+#[tokio::test]
+async fn settings_reads_the_five_tabs_and_posts_only_the_changed_section() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("login.json"), "application/json"),
+        )
+        .mount(&server)
+        .await;
+    for (route, file) in [
+        ("/session/downloads", "downloads.json"),
+        ("/session/advanced", "advanced.json"),
+        ("/session/network", "network.json"),
+        ("/session/proxy", "proxy.json"),
+        ("/session/ip-filter", "ip-filter.json"),
+        ("/session/folders", "folders.json"),
+        ("/torrents/limits", "limits.json"),
+        ("/speed/alt", "alt.json"),
+        ("/speed/schedule", "schedule.json"),
+        ("/torrents/seed_limits", "seed.json"),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(route))
+            .and(header("authorization", "Bearer access-1"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(fixture(file), "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("POST"))
+        .and(path("/torrents/seed_limits"))
+        .and(body_json(
+            serde_json::json!({"ratio_limit": 1.5, "time_limit_secs": null}),
+        ))
+        .and(header("authorization", "Bearer access-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut client = Client::new(server.uri()).unwrap();
+    client.login("ada", "secret").await.unwrap();
+    let snap = client.settings().await.unwrap();
+    assert!(snap.network.dht_enabled);
+    assert_eq!(
+        snap.proxy.proxy_url.as_deref(),
+        Some("socks5://user:***@127.0.0.1:1080")
+    );
+    assert_eq!(snap.folders.download_folder, "/data/in");
+    assert_eq!(snap.seed_limits.ratio_limit, Some(2.0));
+    // The masked proxy is not posted back. Only the changed seed limit is.
+    client
+        .set_seed_limits(&rtbit_client::SeedLimits {
+            ratio_limit: Some(1.5),
+            time_limit_secs: None,
+        })
+        .await
+        .unwrap();
+    server.verify().await;
+}

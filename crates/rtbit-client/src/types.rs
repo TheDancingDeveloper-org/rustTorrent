@@ -419,3 +419,109 @@ pub struct SessionStats {
     pub upload_speed: Speed,
     pub uptime_seconds: u64,
 }
+
+/// `GET /session/downloads`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+pub struct DownloadsConfig {
+    pub incomplete_file_suffix: bool,
+}
+
+/// `GET /session/advanced`. Seconds; null is the engine default.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+pub struct AdvancedConfig {
+    pub connect_timeout_secs: Option<u64>,
+    pub read_write_timeout_secs: Option<u64>,
+    pub keep_alive_secs: Option<u64>,
+}
+
+/// `GET /session/network`. Writes are refused by the daemon: these are fixed at startup.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+pub struct NetworkConfig {
+    pub listen_ip: Option<String>,
+    pub listen_port: Option<u16>,
+    pub dht_enabled: bool,
+    pub pex_enabled: bool,
+    pub lsd_enabled: bool,
+    pub upnp_port_forward: bool,
+    pub encryption: Option<String>,
+    #[serde(default)]
+    pub http_api_listen: String,
+}
+
+/// `GET /session/proxy`. The password, if any, is already masked by the daemon.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+pub struct ProxyConfig {
+    pub proxy_url: Option<String>,
+}
+
+/// `GET /session/ip-filter`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+pub struct IpFilterConfig {
+    pub filter: String,
+}
+
+/// `GET /session/folders`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+pub struct FoldersConfig {
+    pub download_folder: String,
+    pub completed_folder: Option<String>,
+}
+
+/// `GET /torrents/limits`. `None` is unlimited.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+pub struct RateLimits {
+    pub upload_bps: Option<u32>,
+    pub download_bps: Option<u32>,
+    pub peer_limit: Option<u64>,
+    pub concurrent_init_limit: Option<u64>,
+}
+
+/// `GET /speed/alt`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+pub struct AltSpeedStatus {
+    pub enabled: bool,
+    pub config: AltSpeedConfig,
+    #[serde(default)]
+    pub schedule: Option<AltSpeedSchedule>,
+}
+
+/// Alternative rates in bytes per second. `None` is unlimited.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize, Default)]
+pub struct AltSpeedConfig {
+    pub download_rate: Option<u64>,
+    pub upload_rate: Option<u64>,
+}
+
+/// `GET /speed/schedule`. Minutes from local midnight; days is a bitmask.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize, Default)]
+pub struct AltSpeedSchedule {
+    pub enabled: bool,
+    #[serde(default)]
+    pub start_minutes: u32,
+    #[serde(default)]
+    pub end_minutes: u32,
+    #[serde(default)]
+    pub days: u8,
+}
+
+/// `GET /torrents/seed_limits`. `None` disables that limit.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize, Default)]
+pub struct SeedLimits {
+    pub ratio_limit: Option<f64>,
+    pub time_limit_secs: Option<u64>,
+}
+
+/// Everything the five settings tabs read, in one round trip.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SettingsSnapshot {
+    pub downloads: DownloadsConfig,
+    pub advanced: AdvancedConfig,
+    pub network: NetworkConfig,
+    pub proxy: ProxyConfig,
+    pub ip_filter: IpFilterConfig,
+    pub folders: FoldersConfig,
+    pub limits: RateLimits,
+    pub alt: AltSpeedStatus,
+    pub schedule: AltSpeedSchedule,
+    pub seed_limits: SeedLimits,
+}
