@@ -779,6 +779,7 @@ mod tests {
     fn free_space_is_reported_for_missing_child_of_existing_dir() {
         let dir = tempfile::tempdir().unwrap();
         let free = free_disk_space(&dir.path().join("not/yet/created"));
-        assert!(free.is_some_and(|f| f > 0));
+        // A full disk reports 0; the test is that the value is reported, not how much.
+        assert!(free.is_some());
     }
 }
