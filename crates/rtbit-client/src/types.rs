@@ -9,7 +9,8 @@ pub enum Role {
 }
 
 /// The token pair `POST /auth/login` and `POST /auth/refresh` return.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// Debug masks both tokens; the role and expiry stay visible.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 pub struct TokenPair {
     pub access_token: String,
     pub refresh_token: String,
@@ -18,6 +19,18 @@ pub struct TokenPair {
     #[serde(default)]
     pub expires_in: u64,
     pub role: Role,
+}
+
+impl std::fmt::Debug for TokenPair {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenPair")
+            .field("access_token", &"[redacted]")
+            .field("refresh_token", &"[redacted]")
+            .field("token_type", &self.token_type)
+            .field("expires_in", &self.expires_in)
+            .field("role", &self.role)
+            .finish()
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -77,7 +90,7 @@ pub struct AuthStatus {
 
 #[cfg(test)]
 mod secret_debug {
-    use super::{LoginBody, RefreshBody, SetupBody};
+    use super::{LoginBody, RefreshBody, Role, SetupBody, TokenPair};
 
     #[test]
     fn debug_masks_login_and_refresh_secrets() {
@@ -99,6 +112,24 @@ mod secret_debug {
         assert!(!shown.contains("s3cret-pass"));
         assert!(!shown.contains("refresh-secret"));
         assert!(!shown.contains("setup-secret"));
+    }
+
+    #[test]
+    fn debug_masks_token_pair_secrets() {
+        let pair = TokenPair {
+            access_token: "access-secret".into(),
+            refresh_token: "refresh-secret".into(),
+            token_type: "Bearer".into(),
+            expires_in: 3600,
+            role: Role::Admin,
+        };
+        let shown = format!("{pair:?}");
+        assert!(shown.contains("[redacted]"));
+        assert!(shown.contains("Bearer"));
+        assert!(shown.contains("3600"));
+        assert!(shown.contains("Admin"));
+        assert!(!shown.contains("access-secret"));
+        assert!(!shown.contains("refresh-secret"));
     }
 }
 
