@@ -525,3 +525,33 @@ pub struct SettingsSnapshot {
     pub schedule: AltSpeedSchedule,
     pub seed_limits: SeedLimits,
 }
+
+/// `GET /rss/feeds`. Unknown fields are ignored.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+pub struct RssFeed {
+    pub name: String,
+    pub url: String,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// `GET /rss/items`. A missing download URL cannot be fetched.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+pub struct RssItem {
+    pub id: String,
+    #[serde(default)]
+    pub feed_name: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub downloaded: bool,
+}
+
+/// Feeds and items the RSS screen shows. Rules are not part of v1.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RssSnapshot {
+    pub feeds: Vec<RssFeed>,
+    pub items: Vec<RssItem>,
+}

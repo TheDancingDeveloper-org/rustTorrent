@@ -8,8 +8,9 @@ use egui_kittest::kittest::Queryable;
 use rtbit_client::{
     AdvancedConfig, AltSpeedConfig, AltSpeedSchedule, AltSpeedStatus, AuthStatus, DownloadsConfig,
     Error, FoldersConfig, IpFilterConfig, NetworkConfig, PeerCounts, PeerList, PieceProgress,
-    ProxyConfig, RateLimits, SeedLimits, SessionCounters, SessionStats, SettingsSnapshot, Speed,
-    Torrent, TorrentFile, TorrentList, TorrentState, TorrentStats, TrackerList,
+    ProxyConfig, RateLimits, RssFeed, RssItem, RssSnapshot, SeedLimits, SessionCounters,
+    SessionStats, SettingsSnapshot, Speed, Torrent, TorrentFile, TorrentList, TorrentState,
+    TorrentStats, TrackerList,
 };
 use rtbit_egui::{
     AddRequest, AddSource, App, Connection, DetailSnapshot, LoginAttempt, MemoryStore, RowAction,
@@ -40,6 +41,7 @@ struct Scripted {
     /// What `rotated_refresh` reports. Tests set this to simulate a 401 rotation.
     rotated: std::sync::Arc<Mutex<Option<String>>>,
     settings_saves: std::sync::Arc<Mutex<Vec<SettingsChanges>>>,
+    rss_downloads: std::sync::Arc<Mutex<Vec<String>>>,
 }
 
 impl LoginAttempt for Scripted {
@@ -116,6 +118,28 @@ impl LoginAttempt for Scripted {
         Ok(())
     }
 
+    fn load_rss(&self) -> Result<RssSnapshot, Error> {
+        Ok(RssSnapshot {
+            feeds: vec![RssFeed {
+                name: "Show".into(),
+                url: "https://feeds.example/show.xml".into(),
+                enabled: true,
+            }],
+            items: vec![RssItem {
+                id: "ep-1".into(),
+                feed_name: "Show".into(),
+                title: "Episode One".into(),
+                url: Some("magnet:?xt=urn:btih:abc".into()),
+                downloaded: false,
+            }],
+        })
+    }
+
+    fn download_rss(&self, id: &str) -> Result<(), Error> {
+        self.rss_downloads.lock().expect("rss").push(id.to_owned());
+        Ok(())
+    }
+
     fn detail(&self, id: u64) -> Result<DetailSnapshot, Error> {
         let _ = id;
         Ok(DetailSnapshot {
@@ -139,6 +163,7 @@ fn scripted(result: Script) -> Scripted {
         setups: std::sync::Arc::new(Mutex::new(0)),
         rotated: std::sync::Arc::new(Mutex::new(None)),
         settings_saves: std::sync::Arc::new(Mutex::new(Vec::new())),
+        rss_downloads: std::sync::Arc::new(Mutex::new(Vec::new())),
     }
 }
 
@@ -828,4 +853,38 @@ fn settings_opens_and_a_save_posts_only_the_changed_ratio() {
         })
     );
     let _ = SettingsTab::Seeding;
+}
+
+#[test]
+fn rss_lists_an_item_and_download_posts_only_that_id() {
+    let script = scripted(Script::Ok);
+    let downloads = script.rss_downloads.clone();
+    let mut harness = mem_harness(script, MemoryStore::default());
+    click_mem(&mut harness, "Connect");
+    for _ in 0..50 {
+        harness.run_steps(1);
+        if harness.state().screen() == Screen::Main {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(harness.state().screen(), Screen::Main);
+    click_mem(&mut harness, "RSS");
+    for _ in 0..50 {
+        harness.run_steps(1);
+        if shows_mem(&harness, "Episode One") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(shows_mem(&harness, "Show (on)"));
+    click_mem(&mut harness, "Download");
+    for _ in 0..50 {
+        harness.run_steps(1);
+        if !downloads.lock().expect("rss").is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(downloads.lock().expect("rss").as_slice(), ["ep-1"]);
 }

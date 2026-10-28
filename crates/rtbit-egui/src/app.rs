@@ -10,12 +10,12 @@ use fluent2_egui::office::{TitleBar, WindowAction, window_command};
 use fluent2_egui::theme::{Theme, install};
 use fluent2_egui::tokens::FLUENT;
 use rtbit_client::{
-    AuthStatus, Client, Error, PeerList, PieceProgress, SessionStats, SettingsSnapshot, Torrent,
-    TorrentList, TrackerList,
+    AuthStatus, Client, Error, PeerList, PieceProgress, RssSnapshot, SessionStats,
+    SettingsSnapshot, Torrent, TorrentList, TrackerList,
 };
 
 use crate::screens::{
-    AddDraft, AddRequest, AddSource, DetailAction, DetailTab, DetailView, RowAction,
+    AddDraft, AddRequest, AddSource, DetailAction, DetailTab, DetailView, RowAction, RssView,
     SettingsChanges, SettingsDraft, SettingsTab,
 };
 
@@ -37,6 +37,8 @@ pub enum Screen {
     Main,
     /// Read/write preferences: General, Connection, Speed, Folders, Seeding.
     Settings,
+    /// Feeds and items, read-only, plus download one item.
+    Rss,
 }
 
 /// What the status bar says about the daemon.
@@ -153,6 +155,17 @@ pub trait LoginAttempt: Send {
     fn save_settings(&self, changes: &SettingsChanges) -> Result<(), Error> {
         let _ = changes;
         Err(Error::Unreachable("no settings".into()))
+    }
+
+    /// Feeds and items. Rules are not loaded.
+    fn load_rss(&self) -> Result<RssSnapshot, Error> {
+        Err(Error::Unreachable("no rss".into()))
+    }
+
+    /// Ask the daemon to add one item as a torrent.
+    fn download_rss(&self, id: &str) -> Result<(), Error> {
+        let _ = id;
+        Err(Error::Unreachable("no rss".into()))
     }
 }
 
@@ -458,6 +471,10 @@ pub struct App<L: LoginAttempt = DaemonLogin, S: TokenStore = OsKeychain> {
     /// Torrent the in-flight detail poll is for. A new selection drops it.
     detail_for: Option<u64>,
     detail_flight: Option<Receiver<Result<(), String>>>,
+    rss_view: RssView,
+    rss_load: Option<Receiver<Result<RssSnapshot, String>>>,
+    rss_download: Option<Receiver<Result<(), String>>>,
+    rss_error: String,
     settings_tab: SettingsTab,
     settings_draft: SettingsDraft,
     settings_load: Option<Receiver<Result<SettingsSnapshot, String>>>,
@@ -520,6 +537,10 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             detail_poll_at: None,
             detail_for: None,
             detail_flight: None,
+            rss_view: RssView::default(),
+            rss_load: None,
+            rss_download: None,
+            rss_error: String::new(),
             settings_tab: SettingsTab::General,
             settings_draft: SettingsDraft::default(),
             settings_load: None,
@@ -570,6 +591,10 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             detail_poll_at: None,
             detail_for: None,
             detail_flight: None,
+            rss_view: RssView::default(),
+            rss_load: None,
+            rss_download: None,
+            rss_error: String::new(),
             settings_tab: SettingsTab::General,
             settings_draft: SettingsDraft::default(),
             settings_load: None,
@@ -780,6 +805,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
                 Screen::Setup => self.setup_screen(ui),
                 Screen::Main => self.main_screen(ui),
                 Screen::Settings => self.settings_screen(ui),
+                Screen::Rss => self.rss_screen(ui),
             },
         );
 
@@ -960,6 +986,9 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             ui.label("Session");
             if ui.button("Settings").clicked() && self.screen == Screen::Main {
                 self.open_settings();
+            }
+            if ui.button("RSS").clicked() && self.screen == Screen::Main {
+                self.open_rss();
             }
             if ui.button("Sign out").clicked() {
                 self.logout();
@@ -1318,6 +1347,82 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
         });
         self.settings_save = Some(rx);
         self.settings_error.clear();
+    }
+    fn open_rss(&mut self) {
+        self.screen = Screen::Rss;
+        self.rss_error.clear();
+        if self.rss_load.is_some() {
+            return;
+        }
+        let login = self.login.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let outcome = login.load_rss().map_err(|err| login_message(&err));
+            let _ = tx.send(outcome);
+        });
+        self.rss_load = Some(rx);
+    }
+
+    fn rss_screen(&mut self, ui: &mut egui::Ui) {
+        self.take_rss();
+        ui.horizontal(|ui| {
+            if ui.button("Back").clicked() {
+                self.screen = Screen::Main;
+            }
+        });
+        let busy = self.rss_load.is_some() || self.rss_download.is_some();
+        if let Some(id) = crate::screens::draw_rss(ui, &self.rss_view, busy, &self.rss_error) {
+            self.download_rss(&id);
+        }
+    }
+
+    fn take_rss(&mut self) {
+        if let Some(rx) = &self.rss_load {
+            match rx.try_recv() {
+                Ok(Ok(snap)) => {
+                    self.rss_view = RssView::from_snapshot(&snap);
+                    self.rss_load = None;
+                    self.rss_error.clear();
+                }
+                Ok(Err(message)) => {
+                    self.rss_error = message;
+                    self.rss_load = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.rss_load = None,
+            }
+        }
+        if let Some(rx) = &self.rss_download {
+            match rx.try_recv() {
+                Ok(Ok(())) => {
+                    self.rss_download = None;
+                    self.rss_error.clear();
+                    self.rss_load = None;
+                    self.open_rss();
+                }
+                Ok(Err(message)) => {
+                    self.rss_error = message;
+                    self.rss_download = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.rss_download = None,
+            }
+        }
+    }
+
+    fn download_rss(&mut self, id: &str) {
+        if self.rss_download.is_some() {
+            return;
+        }
+        let id = id.to_owned();
+        let login = self.login.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let outcome = login.download_rss(&id).map_err(|err| login_message(&err));
+            let _ = tx.send(outcome);
+        });
+        self.rss_download = Some(rx);
+        self.rss_error.clear();
     }
 }
 
