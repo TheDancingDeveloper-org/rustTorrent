@@ -337,6 +337,10 @@ function generateTorrentListItem(
   if (category) {
     item.category = category;
   }
+  const tags = torrentTags.get(id);
+  if (tags && tags.size > 0) {
+    item.tags = Array.from(tags).sort();
+  }
 
   if (withStats) {
     item.stats = generateTorrentStats(id);
@@ -441,6 +445,13 @@ const mockCategories: Record<string, CategoryInfo> = {
 
 // Track torrent category assignments
 const torrentCategories = new Map<number, string>();
+
+// Tag registry and per-torrent assignments for the mock.
+const mockTags = new Set<string>(["hd", "tv"]);
+const torrentTags = new Map<number, Set<string>>([
+  [0, new Set(["hd"])],
+  [1, new Set(["tv"])],
+]);
 
 // Assign initial categories to some torrents
 for (let i = 0; i < TOTAL_TORRENTS; i++) {
@@ -939,6 +950,45 @@ export const MockAPI: RtbitAPI & { getVersion: () => Promise<string> } = {
     const mockTorrent =
       "d8:announce35:udp://tracker.example.com:6969/announce13:announce-listll35:udp://tracker.example.com:6969/announceel38:https://tracker2.example.org:443/announceee4:infod6:lengthi1024ee8:url-list0:e";
     return new TextEncoder().encode(mockTorrent);
+  },
+
+  getTags: async (): Promise<string[]> => {
+    await new Promise((r) => setTimeout(r, 30));
+    return Array.from(mockTags);
+  },
+
+  createTags: async (tags: string[]): Promise<void> => {
+    await new Promise((r) => setTimeout(r, 30));
+    for (const tag of tags) if (tag.trim()) mockTags.add(tag.trim());
+  },
+
+  deleteTags: async (tags: string[]): Promise<void> => {
+    await new Promise((r) => setTimeout(r, 30));
+    for (const tag of tags) {
+      mockTags.delete(tag);
+      for (const own of torrentTags.values()) own.delete(tag);
+    }
+  },
+
+  addTorrentTags: async (ids: number[], tags: string[]): Promise<void> => {
+    await new Promise((r) => setTimeout(r, 30));
+    for (const id of ids) {
+      const own = torrentTags.get(id) ?? new Set<string>();
+      for (const tag of tags) {
+        own.add(tag);
+        mockTags.add(tag);
+      }
+      torrentTags.set(id, own);
+    }
+  },
+
+  removeTorrentTags: async (ids: number[], tags: string[]): Promise<void> => {
+    await new Promise((r) => setTimeout(r, 30));
+    for (const id of ids) {
+      const own = torrentTags.get(id);
+      if (!own) continue;
+      for (const tag of tags) own.delete(tag);
+    }
   },
 
   getCategories: async (): Promise<Record<string, CategoryInfo>> => {

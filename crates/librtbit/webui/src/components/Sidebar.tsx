@@ -22,6 +22,7 @@ import {
 } from "../helper/torrentFilters";
 import { CategoryFilter } from "./compact/CategoryFilter";
 import { TrackerFilter } from "./compact/TrackerFilter";
+import { TagFilter } from "./compact/TagFilter";
 
 interface FilterItem {
   key: StatusFilter;
@@ -160,6 +161,9 @@ export const Sidebar: React.FC<{ variant?: "default" | "drawer" }> = ({
 
         {/* Trackers section */}
         <TrackerFilter />
+
+        {/* Tags section */}
+        <TagFilter />
       </div>
       {variant === "default" && (
         <button

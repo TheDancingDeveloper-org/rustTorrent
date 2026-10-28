@@ -69,6 +69,9 @@ export const TorrentContextMenu: React.FC<TorrentContextMenuProps> = ({
   const [showCategoryMenu, setShowCategoryMenu] = useState(false);
   const [showNewCategoryInput, setShowNewCategoryInput] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
+  const [showTagMenu, setShowTagMenu] = useState(false);
+  const [tagRegistry, setTagRegistry] = useState<string[]>([]);
+  const [newTagName, setNewTagName] = useState("");
   const [actionInProgress, setActionInProgress] = useState(false);
   const [showSpeedLimits, setShowSpeedLimits] = useState(false);
   const [showSeedLimits, setShowSeedLimits] = useState(false);
@@ -80,6 +83,7 @@ export const TorrentContextMenu: React.FC<TorrentContextMenuProps> = ({
     null,
   );
   const newCategoryInputRef = useRef<HTMLInputElement>(null);
+  const newTagInputRef = useRef<HTMLInputElement>(null);
 
   const API = useContext(APIContext);
   const setCloseableError = useErrorStore((s) => s.setCloseableError);
@@ -90,6 +94,18 @@ export const TorrentContextMenu: React.FC<TorrentContextMenuProps> = ({
   const setCategories = useUIStore((s) => s.setCategories);
 
   const targets = menu.selectedTorrents;
+
+  useEffect(() => {
+    let cancelled = false;
+    API.getTags()
+      .then((tags) => {
+        if (!cancelled) setTagRegistry(tags);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [API]);
   const isBulk = targets.length > 1;
 
   const hasLive = targets.some((t) => t.stats?.state === "live");
@@ -345,6 +361,54 @@ export const TorrentContextMenu: React.FC<TorrentContextMenuProps> = ({
           details: e,
         });
       }
+    }
+    refreshTorrents();
+    onClose();
+  };
+
+  const tagNames = Array.from(
+    new Set([...tagRegistry, ...targets.flatMap((t) => t.tags ?? [])]),
+  ).sort((a, b) => a.localeCompare(b));
+
+  const editTags = async (
+    call: (ids: number[], tags: string[]) => Promise<void>,
+    tags: string[],
+    failure: string,
+  ) => {
+    setActionInProgress(true);
+    try {
+      await call(
+        targets.map((t) => t.id),
+        tags,
+      );
+    } catch (e: any) {
+      setCloseableError({ text: failure, details: e });
+    }
+    refreshTorrents();
+    onClose();
+  };
+
+  const handleAddTag = (tag: string) =>
+    editTags(API.addTorrentTags, [tag], `Error adding tag "${tag}"`);
+
+  const handleRemoveTag = (tag: string) =>
+    editTags(API.removeTorrentTags, [tag], `Error removing tag "${tag}"`);
+
+  const handleCreateAndAssignTag = async () => {
+    const name = newTagName.trim();
+    if (!name) return;
+    setActionInProgress(true);
+    try {
+      await API.createTags([name]);
+      await API.addTorrentTags(
+        targets.map((t) => t.id),
+        [name],
+      );
+    } catch (e: any) {
+      setCloseableError({
+        text: `Error adding tag "${name}"`,
+        details: e,
+      });
     }
     refreshTorrents();
     onClose();
@@ -727,6 +791,63 @@ export const TorrentContextMenu: React.FC<TorrentContextMenuProps> = ({
             {separator}
           </>
         )}
+
+        {/* Tags submenu */}
+        <div className="relative">
+          <button
+            role="menuitem"
+            className={itemCls}
+            onClick={() => setShowTagMenu((v) => !v)}
+            disabled={actionInProgress}
+          >
+            <FaTag className={`${iconCls} text-secondary`} />
+            Tags...
+          </button>
+          {showTagMenu && (
+            <div className="border-t border-divider bg-surface-raised">
+              {tagNames.map((name) => {
+                const onAll = targets.every((t) =>
+                  (t.tags ?? []).includes(name),
+                );
+                return (
+                  <button
+                    role="menuitem"
+                    key={name}
+                    className={itemCls}
+                    onClick={() =>
+                      onAll ? handleRemoveTag(name) : handleAddTag(name)
+                    }
+                  >
+                    <span className="flex-1 truncate">{name}</span>
+                    <span className="text-xs text-tertiary">
+                      {onAll ? "Remove" : "Add"}
+                    </span>
+                  </button>
+                );
+              })}
+              <div className="px-3 py-1 flex gap-1">
+                <input
+                  ref={newTagInputRef}
+                  type="text"
+                  value={newTagName}
+                  onChange={(e) => setNewTagName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleCreateAndAssignTag();
+                  }}
+                  placeholder="New tag..."
+                  className={inputCls}
+                />
+                <button
+                  type="button"
+                  className="px-2 py-1 text-sm bg-primary-bg text-white rounded hover:bg-primary-bg-hover cursor-pointer"
+                  onClick={handleCreateAndAssignTag}
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Category submenu */}
         <div className="relative">

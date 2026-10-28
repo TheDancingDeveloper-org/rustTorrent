@@ -12,13 +12,14 @@ import {
 
 test("parseViewQuery restores search, filters and sort", () => {
   const view = parseViewQuery(
-    "?q=linux&status=seeding&category=docs&tracker=example.org&sort=name&dir=asc",
+    "?q=linux&status=seeding&category=docs&tracker=example.org&tag=linux&sort=name&dir=asc",
   );
   assert.deepEqual(view, {
     search: "linux",
     status: "seeding",
     category: "docs",
     tracker: "example.org",
+    tag: "linux",
     sortColumn: "name",
     sortDirection: "asc",
   });
@@ -27,6 +28,11 @@ test("parseViewQuery restores search, filters and sort", () => {
 test("parseViewQuery drops unknown and invalid values", () => {
   const view = parseViewQuery("?q=&status=nope&sort=nope&dir=sideways&extra=1");
   assert.deepEqual(view, DEFAULT_VIEW_QUERY);
+});
+
+test("parseViewQuery keeps an empty tag as untagged", () => {
+  const view = parseViewQuery("?tag=");
+  assert.equal(view.tag, "");
 });
 
 test("formatViewQuery omits defaults and round-trips", () => {

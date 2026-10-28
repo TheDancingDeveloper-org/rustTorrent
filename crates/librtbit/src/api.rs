@@ -252,6 +252,7 @@ impl Api {
                         files: None,
                         stats: None,
                         category: mgr.shared().category.read().clone(),
+                        tags: Some(mgr.shared().tags.read().iter().cloned().collect()),
                         added_on: Some(mgr.shared().added_on),
                         trackers: Some(
                             mgr.shared()
@@ -900,6 +901,9 @@ pub struct TorrentDetailsResponse {
     pub stats: Option<TorrentStats>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
+    /// Tags assigned to this torrent, sorted. Omitted by the detail endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
     /// Unix timestamp of when the torrent was added to the session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub added_on: Option<u64>,
@@ -958,6 +962,7 @@ fn make_torrent_details(
         total_pieces,
         stats: None,
         category,
+        tags: None,
         added_on: None,
         trackers: None,
     })

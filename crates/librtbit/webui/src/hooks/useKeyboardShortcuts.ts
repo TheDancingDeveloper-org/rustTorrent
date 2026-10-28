@@ -27,6 +27,8 @@ export function useKeyboardShortcuts(actions?: KeyboardShortcutActions) {
   const searchQuery = useUIStore((state) => state.searchQuery);
   const statusFilter = useUIStore((state) => state.statusFilter);
   const categoryFilter = useUIStore((state) => state.categoryFilter);
+  const trackerFilter = useUIStore((state) => state.trackerFilter);
+  const tagFilter = useUIStore((state) => state.tagFilter);
   const selectAll = useUIStore((state) => state.selectAll);
   const clearSelection = useUIStore((state) => state.clearSelection);
   const selectedTorrentIds = useUIStore((state) => state.selectedTorrentIds);
@@ -64,6 +66,9 @@ export function useKeyboardShortcuts(actions?: KeyboardShortcutActions) {
                 normalizedQuery,
                 statusFilter,
                 categoryFilter,
+                trackerFilter,
+                undefined,
+                tagFilter,
               ),
             )
             .map((t) => t.id);
@@ -176,6 +181,8 @@ export function useKeyboardShortcuts(actions?: KeyboardShortcutActions) {
     searchQuery,
     statusFilter,
     categoryFilter,
+    trackerFilter,
+    tagFilter,
     selectAll,
     clearSelection,
     selectedTorrentIds,

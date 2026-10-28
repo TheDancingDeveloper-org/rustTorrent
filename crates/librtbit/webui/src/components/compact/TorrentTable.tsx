@@ -179,6 +179,7 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
   const searchQuery = useUIStore((state) => state.searchQuery);
   const statusFilter = useUIStore((state) => state.statusFilter);
   const categoryFilter = useUIStore((state) => state.categoryFilter);
+  const tagFilter = useUIStore((state) => state.tagFilter);
   const trackerFilter = useUIStore((state) => state.trackerFilter);
   const trackerHealth = useTrackerHealthStore((state) => state.health);
   const setSearchQuery = useUIStore((state) => state.setSearchQuery);
@@ -264,6 +265,7 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
           categoryFilter,
           trackerFilter,
           trackerHealth,
+          tagFilter,
         ),
       )
       .sort((a, b) => {
@@ -280,6 +282,7 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
     normalizedQuery,
     statusFilter,
     categoryFilter,
+    tagFilter,
     trackerFilter,
     trackerHealth,
     sortColumn,

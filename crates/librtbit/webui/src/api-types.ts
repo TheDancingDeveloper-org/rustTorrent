@@ -39,6 +39,8 @@ export interface TorrentListItem {
   total_pieces: number;
   stats?: TorrentStats;
   category?: string;
+  /** Tags assigned to this torrent. */
+  tags?: string[];
   /** Unix timestamp (seconds) when the torrent was added. */
   added_on?: number;
   /** Announce URLs configured for this torrent. */
@@ -539,6 +541,13 @@ export interface RtbitAPI {
     torrentId: number,
     category: string | null,
   ) => Promise<void>;
+
+  // Tags
+  getTags: () => Promise<string[]>;
+  createTags: (tags: string[]) => Promise<void>;
+  deleteTags: (tags: string[]) => Promise<void>;
+  addTorrentTags: (ids: number[], tags: string[]) => Promise<void>;
+  removeTorrentTags: (ids: number[], tags: string[]) => Promise<void>;
 
   // Alt speed
   getAltSpeed: () => Promise<AltSpeedStatus>;

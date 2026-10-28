@@ -137,6 +137,37 @@ const makeBinaryRequest = async (path: string): Promise<ArrayBuffer> => {
   return response.arrayBuffer();
 };
 
+/** Form post for the compat tag endpoints: `hashes` is `|` joined ids, `tags` comma separated. */
+const postTagForm = async (
+  path: string,
+  ids: number[],
+  tags: string[],
+): Promise<void> => {
+  const body = new URLSearchParams();
+  if (ids.length > 0) body.set("hashes", ids.join("|"));
+  body.set("tags", tags.join(","));
+  const url = apiUrl + path;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+      ...getAuthHeaders(),
+    },
+    body: body.toString(),
+  });
+  if (!response.ok) {
+    const error: ErrorDetails = {
+      method: "POST",
+      path,
+      status: response.status,
+      statusText: `${response.status} ${response.statusText}`,
+      text: await response.text(),
+    };
+    return Promise.reject(error);
+  }
+};
+
 const makeRequest = async (
   method: string,
   path: string,
@@ -486,6 +517,23 @@ export const API: RtbitAPI & { getVersion: () => Promise<string> } = {
       { category },
       true,
     );
+  },
+
+  // Tags ride the compat form endpoints (hashes + comma-separated tags).
+  getTags: (): Promise<string[]> => {
+    return makeRequest("GET", "/api/v2/torrents/tags");
+  },
+  createTags: (tags: string[]): Promise<void> => {
+    return postTagForm("/api/v2/torrents/createTags", [], tags);
+  },
+  deleteTags: (tags: string[]): Promise<void> => {
+    return postTagForm("/api/v2/torrents/deleteTags", [], tags);
+  },
+  addTorrentTags: (ids: number[], tags: string[]): Promise<void> => {
+    return postTagForm("/api/v2/torrents/addTags", ids, tags);
+  },
+  removeTorrentTags: (ids: number[], tags: string[]): Promise<void> => {
+    return postTagForm("/api/v2/torrents/removeTags", ids, tags);
   },
 
   // Alt speed

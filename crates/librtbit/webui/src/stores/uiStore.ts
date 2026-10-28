@@ -27,6 +27,7 @@ function publishView(patch: Partial<ViewQuery>): void {
     status: state.statusFilter,
     category: state.categoryFilter,
     tracker: state.trackerFilter,
+    tag: state.tagFilter,
     sortColumn: state.sortColumn,
     sortDirection: state.sortDirection,
     ...patch,
@@ -67,10 +68,12 @@ export interface UIStore {
   sidebarOpen: boolean; // for mobile drawer
   trackerFilter: string | null;
   categoryFilter: string | null; // null = show all, "" = uncategorized, string = filter to category
+  tagFilter: string | null; // null = show all, "" = untagged, string = filter to that tag
   toggleSidebar: () => void;
   setSidebarOpen: (open: boolean) => void;
   setTrackerFilter: (tracker: string | null) => void;
   setCategoryFilter: (category: string | null) => void;
+  setTagFilter: (tag: string | null) => void;
 
   sortColumn: ViewQuery["sortColumn"];
   sortDirection: ViewQuery["sortDirection"];
@@ -246,6 +249,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   sidebarOpen: false,
   trackerFilter: initialView.tracker,
   categoryFilter: initialView.category,
+  tagFilter: initialView.tag,
   toggleSidebar: () =>
     set((state) => {
       const sidebarCollapsed = !state.sidebarCollapsed;
@@ -262,6 +266,10 @@ export const useUIStore = create<UIStore>((set, get) => ({
     saveViewPref("categoryFilter", category);
     publishView({ category });
     set({ categoryFilter: category });
+  },
+  setTagFilter: (tag) => {
+    publishView({ tag });
+    set({ tagFilter: tag });
   },
 
   sortColumn: initialView.sortColumn,
