@@ -10,7 +10,8 @@ use fluent2_egui::office::{TitleBar, WindowAction, window_command};
 use fluent2_egui::theme::{Theme, install};
 use fluent2_egui::tokens::FLUENT;
 use rtbit_client::{
-    Client, Error, PeerList, PieceProgress, SessionStats, Torrent, TorrentList, TrackerList,
+    AuthStatus, Client, Error, PeerList, PieceProgress, SessionStats, Torrent, TorrentList,
+    TrackerList,
 };
 
 use crate::screens::{
@@ -29,6 +30,8 @@ const POLL_EVERY: Duration = Duration::from_secs(2);
 pub enum Screen {
     /// Daemon URL, username and password.
     Connect,
+    /// First-run account, only while the daemon says setup is still open.
+    Setup,
     /// Placeholder until the torrent grid lands.
     Main,
 }
@@ -79,6 +82,35 @@ pub trait LoginAttempt: Send {
 
     /// Drop the live session. The shell clears the keychain itself.
     fn logout(&self) {}
+
+    /// Whether first-run setup is still open. `Err` means the daemon could
+    /// not be asked, and the shell stays on the connect screen.
+    fn status(&self, url: &str) -> Result<AuthStatus, Error> {
+        let _ = url;
+        Ok(AuthStatus {
+            auth_enabled: true,
+            setup_required: false,
+        })
+    }
+
+    /// Create the first account. Returns the refresh token, as `login` does.
+    /// The setup token and password must not be written to a log.
+    fn setup(
+        &self,
+        url: &str,
+        username: &str,
+        password: &str,
+        setup_token: &str,
+    ) -> Result<Option<String>, Error> {
+        let _ = (url, username, password, setup_token);
+        Err(Error::NotSetUp)
+    }
+
+    /// The refresh token the live session holds now. After a 401 the client
+    /// rotates it; the shell writes the new one back to the keychain.
+    fn rotated_refresh(&self) -> Option<String> {
+        None
+    }
 
     /// The current list and session speeds, on the session `login` opened.
     fn snapshot(&self) -> Result<Snapshot, Error> {
@@ -164,6 +196,41 @@ impl LoginAttempt for DaemonLogin {
 
     fn logout(&self) {
         *sessions().lock().unwrap_or_else(|err| err.into_inner()) = None;
+    }
+
+    fn status(&self, url: &str) -> Result<AuthStatus, Error> {
+        let runtime = runtime()?;
+        runtime.block_on(async {
+            let client = Client::new(url)?;
+            client.auth_status().await
+        })
+    }
+
+    fn setup(
+        &self,
+        url: &str,
+        username: &str,
+        password: &str,
+        setup_token: &str,
+    ) -> Result<Option<String>, Error> {
+        let runtime = runtime()?;
+        let client = runtime.block_on(async {
+            let mut client = Client::new(url)?;
+            client.setup(username, password, setup_token).await?;
+            Ok::<Client, Error>(client)
+        })?;
+        let refresh = client.refresh_token().map(str::to_owned);
+        *sessions().lock().unwrap_or_else(|err| err.into_inner()) =
+            Some(Session { runtime, client });
+        Ok(refresh)
+    }
+
+    fn rotated_refresh(&self) -> Option<String> {
+        sessions()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .as_ref()
+            .and_then(|session| session.client.refresh_token().map(str::to_owned))
     }
 
     fn snapshot(&self) -> Result<Snapshot, Error> {
@@ -292,8 +359,16 @@ pub struct App<L: LoginAttempt = DaemonLogin, S: TokenStore = OsKeychain> {
     url: String,
     username: String,
     password: String,
+    setup_token: String,
+    confirm_password: String,
     /// Shown under the form after a failed attempt. Empty when there is none.
     error: String,
+    /// Refresh token last written to the keychain, so a rotation is stored once.
+    stored_refresh: Option<String>,
+    /// Status check in flight before the connect screen decides on setup.
+    status_flight: Option<Receiver<Result<AuthStatus, String>>>,
+    /// True once `/auth/status` has answered for this visit to Connect.
+    status_known: bool,
     login: L,
     keychain: S,
     pending: Option<PendingLogin>,
@@ -352,7 +427,12 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             url: "http://127.0.0.1:3030".to_owned(),
             username: String::new(),
             password: String::new(),
+            setup_token: String::new(),
+            confirm_password: String::new(),
             error: String::new(),
+            stored_refresh: None,
+            status_flight: None,
+            status_known: false,
             login,
             keychain,
             pending: None,
@@ -392,7 +472,12 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             url: "http://127.0.0.1:3030".to_owned(),
             username: String::new(),
             password: String::new(),
+            setup_token: String::new(),
+            confirm_password: String::new(),
             error: String::new(),
+            stored_refresh: None,
+            status_flight: None,
+            status_known: false,
             login,
             keychain: OsKeychain,
             pending: None,
@@ -479,7 +564,11 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
     /// One try, on the first frame, to continue from the keychain. No token,
     /// or a keychain that cannot be opened, leaves the connect screen.
     fn reconnect(&mut self) {
-        if self.reconnect_tried || self.pending.is_some() || self.screen != Screen::Connect {
+        if self.reconnect_tried
+            || self.pending.is_some()
+            || self.screen != Screen::Connect
+            || !self.status_known
+        {
             return;
         }
         self.reconnect_tried = true;
@@ -501,10 +590,36 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
         });
     }
 
+    /// Write a refresh token when it is not the one already stored.
+    fn remember(&mut self, token: &str) {
+        if self.stored_refresh.as_deref() == Some(token) {
+            return;
+        }
+        // A keychain that refuses the write does not fail the session.
+        // The token simply will not survive a relaunch.
+        let _ = self.keychain.store(&self.url, token);
+        self.stored_refresh = Some(token.to_owned());
+    }
+
+    /// After a poll or an action the client may have rotated the refresh
+    /// token on a 401. Write the new one back; never log it.
+    fn persist_rotation(&mut self) {
+        if self.screen != Screen::Main {
+            return;
+        }
+        let Some(token) = self.login.rotated_refresh() else {
+            return;
+        };
+        self.remember(&token);
+    }
+
     /// Leave the session and drop the stored refresh token.
     pub fn logout(&mut self) {
         self.login.logout();
         let _ = self.keychain.clear(&self.url);
+        self.stored_refresh = None;
+        self.status_known = false;
+        self.status_flight = None;
         self.screen = Screen::Connect;
         self.connection = Connection::Disconnected;
         self.password.clear();
@@ -529,9 +644,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             match outcome {
                 Ok(refresh) => {
                     if let Some(token) = refresh.as_deref() {
-                        // A keychain that refuses the write does not fail the
-                        // session. The token simply will not survive a relaunch.
-                        let _ = self.keychain.store(&self.url, token);
+                        self.remember(token);
                     }
                     self.connection = Connection::Connected;
                     self.screen = Screen::Main;
@@ -559,10 +672,13 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             install(ui.ctx(), &Theme::dark(FLUENT));
             self.theme_ready = true;
         }
+        self.ask_status();
+        self.poll_status();
         self.reconnect();
         self.poll_login();
         self.poll_list();
         self.poll_detail();
+        self.persist_rotation();
         self.chrome(ui);
     }
 
@@ -589,6 +705,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             egui::Layout::top_down(egui::Align::Min),
             |ui| match self.screen {
                 Screen::Connect => self.connect_screen(ui),
+                Screen::Setup => self.setup_screen(ui),
                 Screen::Main => self.main_screen(ui),
             },
         );
@@ -599,6 +716,130 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
                 ui.label(status);
             })
             .show(ui);
+    }
+
+    /// Ask whether setup is still open, once, before reconnecting.
+    fn ask_status(&mut self) {
+        if self.status_known || self.status_flight.is_some() || self.screen != Screen::Connect {
+            return;
+        }
+        let login = self.login.clone();
+        let url = self.url.clone();
+        let (tx, rx) = mpsc::channel();
+        self.status_flight = Some(rx);
+        std::thread::spawn(move || {
+            let outcome = login.status(&url).map_err(|err| login_message(&err));
+            let _ = tx.send(outcome);
+        });
+    }
+
+    fn poll_status(&mut self) {
+        let finished = self
+            .status_flight
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok());
+        let Some(outcome) = finished else { return };
+        self.status_flight = None;
+        self.status_known = true;
+        match outcome {
+            Ok(status) if status.setup_required && self.screen == Screen::Connect => {
+                self.screen = Screen::Setup;
+                self.error.clear();
+            }
+            Ok(_) => {}
+            Err(message) => {
+                // Unreachable daemon stays on Connect. Do not invent a setup screen.
+                self.connection = Connection::Error;
+                self.error = message;
+            }
+        }
+    }
+
+    /// Client-side checks, then the daemon's own setup validation.
+    pub fn submit_setup(&mut self) {
+        if self.pending.is_some() {
+            return;
+        }
+        let token = self.setup_token.trim();
+        let username = self.username.trim();
+        if token.is_empty() || username.is_empty() || self.password.is_empty() {
+            self.error = "Setup token, username and password are required.".to_owned();
+            return;
+        }
+        if self.password.chars().count() < 4 {
+            self.error = "Password must be at least 4 characters.".to_owned();
+            return;
+        }
+        if self.password != self.confirm_password {
+            self.error = "Passwords do not match.".to_owned();
+            return;
+        }
+        let login = self.login.clone();
+        let url = self.url.clone();
+        let username = username.to_owned();
+        let password = self.password.clone();
+        let setup_token = token.to_owned();
+        let (tx, rx) = mpsc::channel();
+        self.connection = Connection::Connecting;
+        self.error.clear();
+        self.pending = Some(PendingLogin {
+            rx,
+            reconnect: false,
+        });
+        std::thread::spawn(move || {
+            let outcome = login
+                .setup(&url, &username, &password, &setup_token)
+                .map_err(|err| login_message(&err));
+            let _ = tx.send(outcome);
+        });
+    }
+
+    fn setup_screen(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(24.0);
+        ui.heading("Set up");
+        ui.label("The setup token is printed in the rtbit log.");
+        ui.add_space(8.0);
+        ui.add(
+            Input::new(&mut self.setup_token)
+                .label("Setup token")
+                .password()
+                .id_salt("setup_token"),
+        );
+        ui.add_space(8.0);
+        ui.add(
+            Input::new(&mut self.username)
+                .label("Username")
+                .id_salt("setup_username"),
+        );
+        ui.add_space(8.0);
+        ui.add(
+            Input::new(&mut self.password)
+                .label("Password")
+                .password()
+                .id_salt("setup_password"),
+        );
+        ui.add_space(8.0);
+        ui.add(
+            Input::new(&mut self.confirm_password)
+                .label("Confirm password")
+                .password()
+                .id_salt("setup_confirm"),
+        );
+        ui.add_space(12.0);
+        let busy = self.pending.is_some();
+        if ui
+            .add_enabled(
+                !busy,
+                Button::new("Create account").appearance(Appearance::Primary),
+            )
+            .clicked()
+        {
+            self.submit_setup();
+        }
+        if !self.error.is_empty() {
+            ui.add_space(8.0);
+            ui.colored_label(egui::Color32::from_rgb(196, 43, 28), &self.error);
+        }
     }
 
     fn connect_screen(&mut self, ui: &mut egui::Ui) {

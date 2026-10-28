@@ -6,8 +6,8 @@ use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use rtbit_client::{
-    Error, PeerCounts, PeerList, PieceProgress, SessionCounters, SessionStats, Speed, Torrent,
-    TorrentFile, TorrentList, TorrentState, TorrentStats, TrackerList,
+    AuthStatus, Error, PeerCounts, PeerList, PieceProgress, SessionCounters, SessionStats, Speed,
+    Torrent, TorrentFile, TorrentList, TorrentState, TorrentStats, TrackerList,
 };
 use rtbit_egui::{
     AddRequest, AddSource, App, Connection, DetailSnapshot, LoginAttempt, MemoryStore, RowAction,
@@ -20,12 +20,23 @@ enum Script {
     Unauthorised,
 }
 
+#[derive(Clone, Copy)]
+enum SetupScript {
+    Closed,
+    Required,
+    Unreachable,
+}
+
 #[derive(Clone)]
 struct Scripted {
     result: std::sync::Arc<Mutex<Script>>,
     logins: std::sync::Arc<Mutex<u32>>,
     actions: std::sync::Arc<Mutex<Vec<(u64, RowAction)>>>,
     adds: std::sync::Arc<Mutex<Vec<AddRequest>>>,
+    setup_script: SetupScript,
+    setups: std::sync::Arc<Mutex<u32>>,
+    /// What `rotated_refresh` reports. Tests set this to simulate a 401 rotation.
+    rotated: std::sync::Arc<Mutex<Option<String>>>,
 }
 
 impl LoginAttempt for Scripted {
@@ -44,6 +55,36 @@ impl LoginAttempt for Scripted {
         } else {
             Err(Error::Unauthorised)
         }
+    }
+
+    fn status(&self, _url: &str) -> Result<AuthStatus, Error> {
+        match self.setup_script {
+            SetupScript::Closed => Ok(AuthStatus {
+                auth_enabled: true,
+                setup_required: false,
+            }),
+            SetupScript::Required => Ok(AuthStatus {
+                auth_enabled: false,
+                setup_required: true,
+            }),
+            SetupScript::Unreachable => Err(Error::Unreachable("down".into())),
+        }
+    }
+
+    fn setup(
+        &self,
+        _url: &str,
+        username: &str,
+        password: &str,
+        setup_token: &str,
+    ) -> Result<Option<String>, Error> {
+        let _ = (username, password, setup_token);
+        *self.setups.lock().expect("setups") += 1;
+        Ok(Some("refresh-setup".into()))
+    }
+
+    fn rotated_refresh(&self) -> Option<String> {
+        self.rotated.lock().expect("rotated").clone()
     }
 
     fn snapshot(&self) -> Result<Snapshot, Error> {
@@ -79,6 +120,9 @@ fn scripted(result: Script) -> Scripted {
         logins: std::sync::Arc::new(Mutex::new(0)),
         actions: std::sync::Arc::new(Mutex::new(Vec::new())),
         adds: std::sync::Arc::new(Mutex::new(Vec::new())),
+        setup_script: SetupScript::Closed,
+        setups: std::sync::Arc::new(Mutex::new(0)),
+        rotated: std::sync::Arc::new(Mutex::new(None)),
     }
 }
 
@@ -513,4 +557,168 @@ impl TokenStore for Closed {
     fn clear(&self, _: &str) -> Option<()> {
         None
     }
+}
+
+fn mem_harness(
+    login: Scripted,
+    store: MemoryStore,
+) -> Harness<'static, App<Scripted, MemoryStore>> {
+    let app = App::with_store(login, store);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1100.0, 900.0))
+        .build_ui_state(|ui, app: &mut App<Scripted, MemoryStore>| app.ui(ui), app);
+    harness.run_steps(2);
+    harness
+}
+
+fn node_contains(node: &egui_kittest::kittest::AccessKitNode<'_>, text: &str) -> bool {
+    node.label()
+        .as_deref()
+        .is_some_and(|label| label.contains(text))
+        || node
+            .value()
+            .as_deref()
+            .is_some_and(|value| value.contains(text))
+}
+
+fn shows_mem(harness: &Harness<'static, App<Scripted, MemoryStore>>, text: &'static str) -> bool {
+    harness
+        .query_all(egui_kittest::kittest::by().predicate(move |node| node_contains(node, text)))
+        .next()
+        .is_some()
+}
+
+fn fill(
+    harness: &mut Harness<'static, App<Scripted, MemoryStore>>,
+    label: &'static str,
+    value: &str,
+) {
+    let mut nodes = harness.query_all(egui_kittest::kittest::by().predicate(move |node| {
+        node.label().as_deref() == Some(label)
+            && matches!(node.role(), Role::TextInput | Role::PasswordInput)
+    }));
+    let node = nodes.next().unwrap_or_else(|| panic!("no input {label}"));
+    assert!(
+        nodes.next().is_none(),
+        "more than one input labelled {label}"
+    );
+    node.click();
+    drop(nodes);
+    harness
+        .query_all(egui_kittest::kittest::by().predicate(move |node| {
+            node.label().as_deref() == Some(label)
+                && matches!(node.role(), Role::TextInput | Role::PasswordInput)
+        }))
+        .next()
+        .unwrap_or_else(|| panic!("no input {label}"))
+        .type_text(value);
+}
+
+fn click_mem(harness: &mut Harness<'static, App<Scripted, MemoryStore>>, name: &'static str) {
+    harness
+        .query_all(egui_kittest::kittest::by().predicate(move |node| {
+            node.label().as_deref() == Some(name) && node.role() == Role::Button
+        }))
+        .next()
+        .unwrap_or_else(|| panic!("no button {name}"))
+        .click();
+}
+
+#[test]
+fn setup_required_shows_the_setup_form() {
+    let mut script = scripted(Script::Ok);
+    script.setup_script = SetupScript::Required;
+    let harness = mem_harness(script, MemoryStore::default());
+    assert!(shows_mem(&harness, "Setup token"));
+    assert!(shows_mem(&harness, "Confirm password"));
+    assert!(shows_mem(&harness, "Create account"));
+}
+
+#[test]
+fn mismatched_passwords_do_not_call_setup() {
+    let mut script = scripted(Script::Ok);
+    script.setup_script = SetupScript::Required;
+    let setups = script.setups.clone();
+    let mut harness = mem_harness(script, MemoryStore::default());
+    fill(&mut harness, "Setup token", "tok");
+    fill(&mut harness, "Username", "ada");
+    fill(&mut harness, "Password", "long-enough");
+    fill(&mut harness, "Confirm password", "different");
+    click_mem(&mut harness, "Create account");
+    harness.run_steps(2);
+    assert_eq!(*setups.lock().expect("setups"), 0);
+    assert!(shows_mem(&harness, "Passwords do not match."));
+}
+
+#[test]
+fn a_successful_setup_opens_main_and_stores_the_refresh_token() {
+    let mut script = scripted(Script::Ok);
+    script.setup_script = SetupScript::Required;
+    let store = MemoryStore::default();
+    let stored = store.clone();
+    let mut harness = mem_harness(script, store);
+    fill(&mut harness, "Setup token", "tok");
+    fill(&mut harness, "Username", "ada");
+    fill(&mut harness, "Password", "long-enough");
+    fill(&mut harness, "Confirm password", "long-enough");
+    click_mem(&mut harness, "Create account");
+    for _ in 0..50 {
+        harness.run_steps(1);
+        if harness.state().screen() == Screen::Main {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(harness.state().screen(), Screen::Main);
+    assert_eq!(
+        stored.load("http://127.0.0.1:3030").unwrap().as_deref(),
+        Some("refresh-setup")
+    );
+}
+
+#[test]
+fn setup_closed_stays_on_connect() {
+    let script = scripted(Script::Ok);
+    let harness = mem_harness(script, MemoryStore::default());
+    assert!(shows_mem(&harness, "Daemon URL"));
+    assert!(!shows_mem(&harness, "Setup token"));
+    assert_eq!(harness.state().screen(), Screen::Connect);
+}
+
+#[test]
+fn unreachable_status_stays_on_connect() {
+    let mut script = scripted(Script::Ok);
+    script.setup_script = SetupScript::Unreachable;
+    let harness = mem_harness(script, MemoryStore::default());
+    assert_eq!(harness.state().screen(), Screen::Connect);
+    assert!(!shows_mem(&harness, "Setup token"));
+    assert!(shows_mem(&harness, "daemon unreachable"));
+}
+
+#[test]
+fn a_rotated_refresh_token_is_written_back() {
+    let script = scripted(Script::Ok);
+    let rotated = script.rotated.clone();
+    let store = MemoryStore::default();
+    let stored = store.clone();
+    let mut harness = mem_harness(script, store);
+    click_mem(&mut harness, "Connect");
+    for _ in 0..50 {
+        harness.run_steps(1);
+        if harness.state().screen() == Screen::Main {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(harness.state().screen(), Screen::Main);
+    assert_eq!(
+        stored.load("http://127.0.0.1:3030").unwrap().as_deref(),
+        Some("refresh-1")
+    );
+    *rotated.lock().expect("rotated") = Some("refresh-rotated".into());
+    harness.run_steps(2);
+    assert_eq!(
+        stored.load("http://127.0.0.1:3030").unwrap().as_deref(),
+        Some("refresh-rotated")
+    );
 }
