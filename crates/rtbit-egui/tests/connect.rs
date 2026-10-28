@@ -10,8 +10,8 @@ use rtbit_client::{
     TorrentFile, TorrentList, TorrentState, TorrentStats, TrackerList,
 };
 use rtbit_egui::{
-    AddRequest, AddSource, App, Connection, DetailSnapshot, LoginAttempt, RowAction, Screen,
-    Snapshot,
+    AddRequest, AddSource, App, Connection, DetailSnapshot, LoginAttempt, MemoryStore, RowAction,
+    Screen, Snapshot, TokenStore,
 };
 
 #[derive(Clone, Copy)]
@@ -29,11 +29,20 @@ struct Scripted {
 }
 
 impl LoginAttempt for Scripted {
-    fn login(&self, _url: &str, _username: &str, _password: &str) -> Result<(), Error> {
+    fn login(&self, _url: &str, _username: &str, _password: &str) -> Result<Option<String>, Error> {
         *self.logins.lock().expect("logins") += 1;
         match *self.result.lock().expect("script") {
-            Script::Ok => Ok(()),
+            Script::Ok => Ok(Some("refresh-1".into())),
             Script::Unauthorised => Err(Error::Unauthorised),
+        }
+    }
+
+    fn resume(&self, _url: &str, refresh: &str) -> Result<Option<String>, Error> {
+        *self.logins.lock().expect("logins") += 1;
+        if refresh == "refresh-1" {
+            Ok(Some("refresh-2".into()))
+        } else {
+            Err(Error::Unauthorised)
         }
     }
 
@@ -429,4 +438,79 @@ fn selected_row_shows_the_file_name() {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     panic!("file name missing after the detail poll");
+}
+
+#[test]
+fn a_stored_refresh_token_reconnects_without_a_password() {
+    let login = scripted(Script::Ok);
+    let logins = login.logins.clone();
+    let store = MemoryStore::default();
+    store.store("http://127.0.0.1:3030", "refresh-1").unwrap();
+    let app = App::with_store(login, store.clone());
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1100.0, 900.0))
+        .build_ui_state(|ui, app: &mut App<Scripted, MemoryStore>| app.ui(ui), app);
+    harness.run_steps(4);
+    assert_eq!(harness.state().screen(), Screen::Main);
+    assert_eq!(
+        *logins.lock().expect("logins"),
+        1,
+        "one resume, no password login"
+    );
+    assert_eq!(
+        store.load("http://127.0.0.1:3030").unwrap().as_deref(),
+        Some("refresh-2")
+    );
+}
+
+#[test]
+fn a_missing_keychain_stays_on_the_connect_screen() {
+    let login = scripted(Script::Ok);
+    let logins = login.logins.clone();
+    let app = App::with_store(login, Closed);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1100.0, 900.0))
+        .build_ui_state(|ui, app: &mut App<Scripted, Closed>| app.ui(ui), app);
+    harness.run_steps(3);
+    assert_eq!(harness.state().screen(), Screen::Connect);
+    assert_eq!(*logins.lock().expect("logins"), 0);
+}
+
+#[test]
+fn sign_out_clears_the_stored_token() {
+    let login = scripted(Script::Ok);
+    let store = MemoryStore::default();
+    store.store("http://127.0.0.1:3030", "refresh-1").unwrap();
+    let app = App::with_store(login, store.clone());
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1100.0, 900.0))
+        .build_ui_state(|ui, app: &mut App<Scripted, MemoryStore>| app.ui(ui), app);
+    harness.run_steps(4);
+    assert_eq!(harness.state().screen(), Screen::Main);
+    harness
+        .query_all(egui_kittest::kittest::by().predicate(|node| {
+            node.label().as_deref() == Some("Sign out") && node.role() == Role::Button
+        }))
+        .next()
+        .expect("sign out")
+        .click();
+    harness.run_steps(2);
+    assert_eq!(harness.state().screen(), Screen::Connect);
+    assert_eq!(store.load("http://127.0.0.1:3030").unwrap(), None);
+}
+
+/// A keychain that cannot be opened. Every call fails, and nothing is stored.
+#[derive(Clone, Copy)]
+struct Closed;
+
+impl TokenStore for Closed {
+    fn store(&self, _: &str, _: &str) -> Option<()> {
+        None
+    }
+    fn load(&self, _: &str) -> Option<Option<String>> {
+        None
+    }
+    fn clear(&self, _: &str) -> Option<()> {
+        None
+    }
 }

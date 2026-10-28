@@ -64,6 +64,25 @@ impl Client {
         Ok(tokens)
     }
 
+    /// Resume from a refresh token the caller kept outside this process.
+    /// One `POST /auth/refresh` replaces it with the pair the daemon returns.
+    pub async fn resume(&mut self, refresh_token: &str) -> Result<(), Error> {
+        self.refresh = Some(refresh_token.to_owned());
+        self.refresh_once().await
+    }
+
+    /// The current refresh token, when a login or refresh has stored one.
+    #[must_use]
+    pub fn refresh_token(&self) -> Option<&str> {
+        self.refresh.as_deref()
+    }
+
+    /// Forget both tokens. The caller also drops whatever it stored.
+    pub fn logout(&mut self) {
+        self.access = None;
+        self.refresh = None;
+    }
+
     /// `GET /torrents`.
     pub async fn torrents(&mut self) -> Result<TorrentList, Error> {
         self.authed_get("torrents").await
