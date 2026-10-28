@@ -4,6 +4,7 @@ import { DhtStats, SessionStats } from "../api-types";
 import { useStatsStore } from "../stores/statsStore";
 import { formatBytes } from "../helper/formatBytes";
 import { formatSecondsToTime } from "../helper/formatSecondsToTime";
+import { SpeedGraph } from "./SpeedGraph";
 
 function dhtNodeCount(stats: DhtStats | null): number | null {
   if (!stats) return null;
@@ -86,6 +87,13 @@ export const StatisticsPage: React.FC = () => {
         Session totals from GET /stats. All-time counters, a share ratio that
         survives restarts, and the piece cache are not exposed by the API.
       </p>
+
+      <div className="mt-6">
+        <SpeedGraph
+          download={stats.download_speed}
+          upload={stats.upload_speed}
+        />
+      </div>
 
       <h3 className="mt-6 mb-2 text-sm font-medium text-secondary">
         Transfer (this session)
