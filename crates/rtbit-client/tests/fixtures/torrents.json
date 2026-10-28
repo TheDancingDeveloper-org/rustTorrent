@@ -1,0 +1,17 @@
+{
+  "torrents": [
+    {
+      "id": 3,
+      "info_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "name": "example",
+      "output_folder": "/data",
+      "total_pieces": 12,
+      "stats": {"progress_bytes": 1},
+      "category": "movies",
+      "tags": ["a"],
+      "added_on": 10,
+      "trackers": ["http://tracker.example/announce"]
+    }
+  ],
+  "total": 1
+}

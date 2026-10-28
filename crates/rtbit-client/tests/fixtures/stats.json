@@ -1,0 +1,26 @@
+{
+  "counters": {
+    "fetched_bytes": 100,
+    "uploaded_bytes": 40,
+    "blocked_incoming": 1,
+    "blocked_outgoing": 2
+  },
+  "download_speed": {"mbps": 1.5, "human_readable": "1.50 MiB/s"},
+  "upload_speed": {"mbps": 0.25, "human_readable": "0.25 MiB/s"},
+  "peers": {
+    "queued": 1,
+    "connecting": 2,
+    "live": 3,
+    "live_tcp": 3,
+    "seen": 4,
+    "dead": 0,
+    "not_needed": 0,
+    "steals": 9
+  },
+  "uptime_seconds": 60,
+  "connections": {
+    "tcp": {"v4": {"attempts": 2, "successes": 1, "errors": 0}, "v6": {"attempts": 0, "successes": 0, "errors": 0}},
+    "utp": {"v4": {"attempts": 0, "successes": 0, "errors": 0}, "v6": {"attempts": 0, "successes": 0, "errors": 0}},
+    "socks": {"v4": {"attempts": 0, "successes": 0, "errors": 0}, "v6": {"attempts": 0, "successes": 0, "errors": 0}}
+  }
+}
