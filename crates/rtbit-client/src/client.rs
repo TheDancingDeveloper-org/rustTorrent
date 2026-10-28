@@ -75,6 +75,24 @@ impl Client {
         self.authed_get("stats").await
     }
 
+    /// `POST /torrents/{id}/start`.
+    pub async fn start_torrent(&mut self, id: u64) -> Result<(), Error> {
+        self.authed_post_empty(&format!("torrents/{id}/start"))
+            .await
+    }
+
+    /// `POST /torrents/{id}/pause`.
+    pub async fn pause_torrent(&mut self, id: u64) -> Result<(), Error> {
+        self.authed_post_empty(&format!("torrents/{id}/pause"))
+            .await
+    }
+
+    /// `POST /torrents/{id}/delete`. Removes the torrent and its files.
+    pub async fn delete_torrent(&mut self, id: u64) -> Result<(), Error> {
+        self.authed_post_empty(&format!("torrents/{id}/delete"))
+            .await
+    }
+
     async fn authed_get<T: DeserializeOwned>(&mut self, path: &str) -> Result<T, Error> {
         let response = self.get_once(path).await?;
         if response.status() != StatusCode::UNAUTHORIZED {
@@ -85,11 +103,32 @@ impl Client {
         decode(self.get_once(path).await?).await
     }
 
+    async fn authed_post_empty(&mut self, path: &str) -> Result<(), Error> {
+        let response = self.post_once(path).await?;
+        if response.status() == StatusCode::UNAUTHORIZED {
+            self.refresh_once().await?;
+            decode_empty(self.post_once(path).await?).await
+        } else {
+            decode_empty(response).await
+        }
+    }
+
     async fn get_once(&self, path: &str) -> Result<reqwest::Response, Error> {
         let token = self.access.as_deref().ok_or(Error::Unauthorised)?;
         let url = self.url(path)?;
         self.http
             .get(url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|err| Error::Unreachable(err.to_string()))
+    }
+
+    async fn post_once(&self, path: &str) -> Result<reqwest::Response, Error> {
+        let token = self.access.as_deref().ok_or(Error::Unauthorised)?;
+        let url = self.url(path)?;
+        self.http
+            .post(url)
             .bearer_auth(token)
             .send()
             .await
@@ -145,4 +184,12 @@ async fn decode<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, E
         .json()
         .await
         .map_err(|err| Error::Unreachable(format!("bad json: {err}")))
+}
+
+async fn decode_empty(response: reqwest::Response) -> Result<(), Error> {
+    let status = response.status();
+    if !status.is_success() {
+        return Err(Error::from_status(status));
+    }
+    Ok(())
 }

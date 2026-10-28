@@ -145,3 +145,74 @@ async fn setup_required_is_not_set_up() {
     let err = client.login("ada", "secret").await.unwrap_err();
     assert!(matches!(err, Error::NotSetUp));
 }
+
+#[tokio::test]
+async fn start_pause_and_delete_post_the_native_routes() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("login.json"), "application/json"),
+        )
+        .mount(&server)
+        .await;
+    for route in [
+        "/torrents/7/start",
+        "/torrents/7/pause",
+        "/torrents/7/delete",
+    ] {
+        Mock::given(method("POST"))
+            .and(path(route))
+            .and(header("authorization", "Bearer access-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    let mut client = Client::new(server.uri()).unwrap();
+    client.login("ada", "secret").await.unwrap();
+    client.start_torrent(7).await.unwrap();
+    client.pause_torrent(7).await.unwrap();
+    client.delete_torrent(7).await.unwrap();
+}
+
+#[tokio::test]
+async fn n_polls_log_in_once() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("login.json"), "application/json"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/torrents"))
+        .and(wiremock::matchers::query_param("with_stats", "true"))
+        .and(header("authorization", "Bearer access-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("torrents.json"), "application/json"),
+        )
+        .expect(3)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/stats"))
+        .and(header("authorization", "Bearer access-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("stats.json"), "application/json"),
+        )
+        .expect(3)
+        .mount(&server)
+        .await;
+
+    let mut client = Client::new(server.uri()).unwrap();
+    client.login("ada", "secret").await.unwrap();
+    for _ in 0..3 {
+        client.torrents_with_stats().await.unwrap();
+        client.stats().await.unwrap();
+    }
+    server.verify().await;
+}

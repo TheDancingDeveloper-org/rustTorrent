@@ -9,7 +9,7 @@ use rtbit_client::{
     Error, PeerCounts, SessionCounters, SessionStats, Speed, Torrent, TorrentList, TorrentState,
     TorrentStats,
 };
-use rtbit_egui::{App, Connection, LoginAttempt, Screen, Snapshot};
+use rtbit_egui::{App, Connection, LoginAttempt, RowAction, Screen, Snapshot};
 
 #[derive(Clone, Copy)]
 enum Script {
@@ -20,18 +20,34 @@ enum Script {
 #[derive(Clone)]
 struct Scripted {
     result: std::sync::Arc<Mutex<Script>>,
+    logins: std::sync::Arc<Mutex<u32>>,
+    actions: std::sync::Arc<Mutex<Vec<(u64, RowAction)>>>,
 }
 
 impl LoginAttempt for Scripted {
     fn login(&self, _url: &str, _username: &str, _password: &str) -> Result<(), Error> {
+        *self.logins.lock().expect("logins") += 1;
         match *self.result.lock().expect("script") {
             Script::Ok => Ok(()),
             Script::Unauthorised => Err(Error::Unauthorised),
         }
     }
 
-    fn snapshot(&self, _url: &str, _username: &str, _password: &str) -> Result<Snapshot, Error> {
+    fn snapshot(&self) -> Result<Snapshot, Error> {
         Ok(sample_snapshot())
+    }
+
+    fn act(&self, id: u64, action: RowAction) -> Result<(), Error> {
+        self.actions.lock().expect("actions").push((id, action));
+        Ok(())
+    }
+}
+
+fn scripted(result: Script) -> Scripted {
+    Scripted {
+        result: std::sync::Arc::new(Mutex::new(result)),
+        logins: std::sync::Arc::new(Mutex::new(0)),
+        actions: std::sync::Arc::new(Mutex::new(Vec::new())),
     }
 }
 
@@ -107,9 +123,7 @@ fn shows(harness: &Harness<'static, App<Scripted>>, text: &str) -> bool {
 
 #[test]
 fn connect_screen_has_url_username_password_and_a_button() {
-    let login = Scripted {
-        result: std::sync::Arc::new(Mutex::new(Script::Ok)),
-    };
+    let login = scripted(Script::Ok);
     let harness = harness(login);
     assert!(shows(&harness, "Daemon URL"));
     assert!(shows(&harness, "Username"));
@@ -127,9 +141,7 @@ fn connect_screen_has_url_username_password_and_a_button() {
 
 #[test]
 fn failed_login_surfaces_the_error_without_a_daemon() {
-    let login = Scripted {
-        result: std::sync::Arc::new(Mutex::new(Script::Unauthorised)),
-    };
+    let login = scripted(Script::Unauthorised);
     let mut harness = harness(login);
     harness
         .query_all(egui_kittest::kittest::by().predicate(|node| {
@@ -155,18 +167,14 @@ fn failed_login_surfaces_the_error_without_a_daemon() {
 
 #[test]
 fn theme_installs_once() {
-    let login = Scripted {
-        result: std::sync::Arc::new(Mutex::new(Script::Ok)),
-    };
+    let login = scripted(Script::Ok);
     let harness = harness(login);
     assert_eq!(harness.state().screen(), Screen::Connect);
 }
 
 #[test]
 fn main_screen_lists_a_row_and_the_speed_labels() {
-    let login = Scripted {
-        result: std::sync::Arc::new(Mutex::new(Script::Ok)),
-    };
+    let login = scripted(Script::Ok);
     let mut harness = harness(login);
     harness
         .query_all(egui_kittest::kittest::by().predicate(|node| {
@@ -193,12 +201,81 @@ fn main_screen_lists_a_row_and_the_speed_labels() {
 
 #[test]
 fn empty_list_says_there_are_no_torrents() {
-    let login = Scripted {
-        result: std::sync::Arc::new(Mutex::new(Script::Ok)),
-    };
+    let login = scripted(Script::Ok);
     let mut harness = harness(login);
     // A snapshot with no rows: replace by driving the screen state directly.
     harness.state_mut().note_empty_for_test();
     harness.run_steps(2);
     assert!(shows(&harness, "No torrents."));
+}
+
+fn click_named(harness: &mut Harness<'static, App<Scripted>>, name: &str) {
+    harness
+        .query_all(egui_kittest::kittest::by().predicate(move |node| {
+            node.label().as_deref() == Some(name) && node.role() == Role::Button
+        }))
+        .next()
+        .unwrap_or_else(|| panic!("{name} button"))
+        .click();
+}
+
+fn on_main(harness: &mut Harness<'static, App<Scripted>>) {
+    click_named(harness, "Connect");
+    for _ in 0..50 {
+        harness.run_steps(1);
+        if harness.state().screen() == Screen::Main {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("never reached the main screen");
+}
+
+#[test]
+fn polls_reuse_the_login() {
+    let login = scripted(Script::Ok);
+    let logins = login.logins.clone();
+    let mut harness = harness(login);
+    on_main(&mut harness);
+    // The poll interval is two seconds, so several frames are still one session.
+    harness.run_steps(6);
+    assert_eq!(*logins.lock().expect("logins"), 1);
+}
+
+#[test]
+fn start_records_the_row_action() {
+    let login = scripted(Script::Ok);
+    let actions = login.actions.clone();
+    let mut harness = harness(login);
+    on_main(&mut harness);
+    harness.state_mut().select_for_test(7);
+    harness.run_steps(1);
+    click_named(&mut harness, "Start");
+    for _ in 0..50 {
+        harness.run_steps(1);
+        if !actions.lock().expect("actions").is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        *actions.lock().expect("actions"),
+        vec![(7, RowAction::Start)]
+    );
+}
+
+#[test]
+fn delete_asks_and_cancel_does_not_act() {
+    let login = scripted(Script::Ok);
+    let actions = login.actions.clone();
+    let mut harness = harness(login);
+    on_main(&mut harness);
+    harness.state_mut().select_for_test(7);
+    harness.run_steps(1);
+    click_named(&mut harness, "Delete");
+    harness.run_steps(2);
+    assert!(shows(&harness, "Delete this torrent and its files?"));
+    click_named(&mut harness, "Cancel");
+    harness.run_steps(4);
+    assert!(actions.lock().expect("actions").is_empty());
 }

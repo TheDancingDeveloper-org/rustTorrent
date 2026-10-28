@@ -6620,6 +6620,7 @@ dependencies = [
  "egui",
  "egui_kittest",
  "fluent2-egui",
+ "fluent2-icons",
  "rtbit-client",
  "tokio",
 ]
