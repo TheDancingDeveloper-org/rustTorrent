@@ -43,6 +43,11 @@ pub struct SessionSettings {
     /// Absent means no global limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed_limits: Option<crate::session::ShareLimits>,
+    /// Outgoing proxy URL, including credentials. Absent means a direct connection.
+    /// The file that holds this is owner-only. Reads that leave the process mask
+    /// the password; this field itself is the value that has to survive a restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

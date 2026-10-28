@@ -96,27 +96,24 @@ impl JsonSessionPersistenceStore {
         // we don't need the write lock technically, but we need to stop concurrent modifications
         let db_content = self.db_content.write().await;
         let tmp_filename = format!("{}.tmp", self.db_filename.to_str().unwrap());
-        let mut tmp = tokio::fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&tmp_filename)
-            .await
-            .with_context(|| format!("error opening {tmp_filename:?}"))?;
-        trace!(?tmp_filename, "opened temp file");
-
         let mut buf = Vec::new();
         serde_json::to_writer(&mut buf, &*db_content).context("error serializing")?;
-
         trace!(?tmp_filename, "serialized DB as JSON");
-        tmp.write_all(&buf)
-            .await
+        // The database now holds the proxy URL, including its password, so the
+        // file is owner-only the same way the other private config files are.
+        write_owner_only(&tmp_filename, &buf)
             .with_context(|| format!("error writing {tmp_filename:?}"))?;
         trace!(?tmp_filename, "wrote to temp file");
 
         tokio::fs::rename(&tmp_filename, &self.db_filename)
             .await
             .context("error renaming persistence file")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&self.db_filename, std::fs::Permissions::from_mode(0o600))
+                .with_context(|| format!("error restricting {:?}", self.db_filename))?;
+        }
         trace!(filename=?self.db_filename, "wrote persistence");
         Ok(())
     }
@@ -468,6 +465,27 @@ impl SessionPersistenceStore for JsonSessionPersistenceStore {
     }
 }
 
+/// Write bytes to a new file that only the owner can read. Used for the session
+/// database because it stores the proxy URL with its password.
+fn write_owner_only(path: &str, bytes: &[u8]) -> anyhow::Result<()> {
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _ = std::fs::remove_file(path);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    use std::io::Write;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,6 +504,7 @@ mod tests {
             max_active_seeds: None,
             part_files: Some(true),
             seed_limits: None,
+            proxy_url: None,
         };
 
         store.store_session_settings(&settings).await.unwrap();
@@ -494,6 +513,49 @@ mod tests {
             .unwrap();
 
         assert_eq!(reopened.load_session_settings().await.unwrap(), settings);
+    }
+
+    #[tokio::test]
+    async fn json_store_round_trips_proxy_url_and_restricts_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let spawner = BlockingSpawner::new(1);
+        let store = JsonSessionPersistenceStore::new(dir.path().to_path_buf(), spawner.clone())
+            .await
+            .unwrap();
+        let secret = "socks5://user:secret@127.0.0.1:1080";
+        let settings = SessionSettings {
+            proxy_url: Some(secret.to_owned()),
+            ..SessionSettings::default()
+        };
+        store.store_session_settings(&settings).await.unwrap();
+
+        let reopened = JsonSessionPersistenceStore::new(dir.path().to_path_buf(), spawner)
+            .await
+            .unwrap();
+        let loaded = reopened.load_session_settings().await.unwrap();
+        // The password stays in the file so a restart can still connect. Masking
+        // happens on the read that leaves the process, not here.
+        assert_eq!(loaded.proxy_url.as_deref(), Some(secret));
+        assert!(!loaded.proxy_url.as_deref().unwrap().contains("***"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.path().join("session.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "session database must be owner-only");
+        }
+
+        let cleared = SessionSettings::default();
+        reopened.store_session_settings(&cleared).await.unwrap();
+        let again =
+            JsonSessionPersistenceStore::new(dir.path().to_path_buf(), BlockingSpawner::new(1))
+                .await
+                .unwrap();
+        assert_eq!(again.load_session_settings().await.unwrap().proxy_url, None);
     }
 
     #[tokio::test]

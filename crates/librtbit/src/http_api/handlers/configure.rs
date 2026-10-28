@@ -22,7 +22,7 @@ use crate::{
 pub async fn h_update_session_ratelimits(
     State(state): State<ApiState>,
     Json(limits): Json<LimitsConfig>,
-) -> Result<impl IntoResponse> {
+) -> axum::response::Response {
     // Goes through the alt-speed-aware setter: while alternative limits are
     // active this updates the saved normal limits instead of the live limiter.
     state
@@ -35,7 +35,7 @@ pub async fn h_update_session_ratelimits(
     if let Some(init_limit) = limits.concurrent_init_limit {
         state.api.session().set_concurrent_init_limit(init_limit);
     }
-    Ok(Json(EmptyJsonResponse {}))
+    Json(EmptyJsonResponse {}).into_response()
 }
 
 #[cfg_attr(feature = "swagger", utoipa::path(
@@ -70,12 +70,15 @@ pub async fn h_get_folders(State(state): State<ApiState>) -> Result<impl IntoRes
 pub async fn h_set_folders(
     State(state): State<ApiState>,
     Json(config): Json<FoldersConfig>,
-) -> Result<impl IntoResponse> {
-    state
+) -> axum::response::Response {
+    match state
         .api
         .api_set_folders(config.download_folder, config.completed_folder)
-        .await?;
-    Ok(Json(EmptyJsonResponse {}))
+        .await
+    {
+        Ok(()) => Json(EmptyJsonResponse {}).into_response(),
+        Err(err) => err.into_response(),
+    }
 }
 
 // --- Downloads settings ---
@@ -97,14 +100,13 @@ pub async fn h_get_downloads(State(state): State<ApiState>) -> Result<impl IntoR
 pub async fn h_set_downloads(
     State(state): State<ApiState>,
     Json(config): Json<DownloadsConfig>,
-) -> Result<impl IntoResponse> {
+) -> axum::response::Response {
     let session = state.api.session();
     session.set_use_part_files(config.incomplete_file_suffix);
-    session
-        .persist_session_settings()
-        .await
-        .map_err(ApiError::from)?;
-    Ok(Json(EmptyJsonResponse {}))
+    if let Err(err) = session.persist_session_settings().await {
+        return ApiError::from(err).into_response();
+    }
+    Json(EmptyJsonResponse {}).into_response()
 }
 
 // --- Advanced library knobs ---
@@ -151,14 +153,27 @@ pub async fn h_get_advanced(State(state): State<ApiState>) -> Result<impl IntoRe
 pub async fn h_set_advanced(
     State(state): State<ApiState>,
     Json(config): Json<AdvancedConfig>,
-) -> Result<impl IntoResponse> {
+) -> axum::response::Response {
+    let connect_timeout = match capped(config.connect_timeout_secs, MAX_CONNECT_TIMEOUT_SECS) {
+        Ok(v) => v,
+        Err(err) => return err.into_response(),
+    };
+    let read_write_timeout =
+        match capped(config.read_write_timeout_secs, MAX_READ_WRITE_TIMEOUT_SECS) {
+            Ok(v) => v,
+            Err(err) => return err.into_response(),
+        };
+    let keep_alive_interval = match capped(config.keep_alive_secs, MAX_KEEP_ALIVE_SECS) {
+        Ok(v) => v,
+        Err(err) => return err.into_response(),
+    };
     let opts = crate::PeerConnectionOptions {
-        connect_timeout: capped(config.connect_timeout_secs, MAX_CONNECT_TIMEOUT_SECS)?,
-        read_write_timeout: capped(config.read_write_timeout_secs, MAX_READ_WRITE_TIMEOUT_SECS)?,
-        keep_alive_interval: capped(config.keep_alive_secs, MAX_KEEP_ALIVE_SECS)?,
+        connect_timeout,
+        read_write_timeout,
+        keep_alive_interval,
     };
     state.api.session().set_peer_opts(opts);
-    Ok(Json(EmptyJsonResponse {}))
+    Json(EmptyJsonResponse {}).into_response()
 }
 
 // --- Network settings (startup only) ---
@@ -254,12 +269,12 @@ pub async fn h_get_network(State(state): State<ApiState>) -> Result<impl IntoRes
     }))
 }
 
-pub async fn h_set_network(Json(update): Json<NetworkConfigUpdate>) -> Result<impl IntoResponse> {
+pub async fn h_set_network(Json(update): Json<NetworkConfigUpdate>) -> axum::response::Response {
     // Nothing here is applied. In particular a request to move the HTTP API
     // listener, or to turn authentication off, is refused before any other
     // field is looked at, and there is no setter that could honour it.
     let message = reject_network_update(&update);
-    Err::<axum::Json<EmptyJsonResponse>, _>(ApiError::from((StatusCode::BAD_REQUEST, message)))
+    ApiError::from((StatusCode::BAD_REQUEST, message)).into_response()
 }
 
 // --- Directory browsing ---
@@ -388,22 +403,33 @@ pub async fn h_get_proxy(State(state): State<ApiState>) -> Result<impl IntoRespo
 pub async fn h_set_proxy(
     State(state): State<ApiState>,
     Json(body): Json<ProxyConfigBody>,
-) -> Result<impl IntoResponse> {
+) -> axum::response::Response {
     let raw = body
         .proxy_url
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty());
-    state
-        .api
-        .session()
-        .set_proxy_url(raw)
-        .map_err(|_| ApiError::from((StatusCode::BAD_REQUEST, "invalid proxy URL")))?;
+    if let Err(err) = state.api.session().set_proxy_url(raw) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        )
+            .into_response();
+    }
+    if let Err(err) = state.api.session().persist_session_settings().await {
+        tracing::warn!("could not save proxy: {err:#}");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "could not save proxy" })),
+        )
+            .into_response();
+    }
     // Peer TCP picks the proxy up live. Trackers, DHT, UDP trackers and LSD
-    // keep the previous address until the process restarts.
-    Ok(Json(serde_json::json!({
+    // keep the previous address until the process restarts. The URL is on disk,
+    // so that restart still has it.
+    Json(serde_json::json!({
         "restart_required": true,
         "message": "Proxy saved. Restart to apply it to trackers, DHT and local discovery. Peer connections use it immediately."
-    })))
+    })).into_response()
 }
 
 pub async fn h_get_ip_filter(State(state): State<ApiState>) -> Result<impl IntoResponse> {

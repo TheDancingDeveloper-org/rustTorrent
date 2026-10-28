@@ -360,7 +360,41 @@ impl Session {
                 .await
                 .context("error initializing session persistence store")?;
 
-            let proxy_url = opts.connect.as_ref().and_then(|s| s.proxy_url.clone());
+            let mut resolved_output_folder = default_output_folder;
+            let mut resolved_completed_folder = opts.completed_folder.clone();
+            let mut max_active_downloads = 0;
+            let mut max_active_seeds = 0;
+            let mut use_part_files = false;
+            let mut seed_limits = crate::session::ShareLimits::default();
+            let mut persisted_proxy: Option<String> = None;
+            if let Some(p) = persistence.as_ref() {
+                match p.load_session_settings().await {
+                    Ok(settings) => {
+                        if let Some(output_folder) = settings.output_folder {
+                            resolved_output_folder = output_folder;
+                        }
+                        if let Some(limits) = settings.seed_limits {
+                            seed_limits = limits;
+                        }
+                        if resolved_completed_folder.is_none() {
+                            resolved_completed_folder = settings.completed_folder;
+                        }
+                        max_active_downloads = encode_limit(settings.max_active_downloads);
+                        max_active_seeds = encode_limit(settings.max_active_seeds);
+                        use_part_files = settings.part_files.unwrap_or(false);
+                        persisted_proxy = settings.proxy_url;
+                    }
+                    Err(e) => warn!("error loading session settings from persistence: {e:#}"),
+                }
+            }
+
+            // A proxy saved in the session outlives a restart. An explicit
+            // option still wins, so tests and one-shot starts are unchanged.
+            let proxy_url = opts
+                .connect
+                .as_ref()
+                .and_then(|s| s.proxy_url.clone())
+                .or(persisted_proxy);
             let proxy_config = match proxy_url.as_deref() {
                 Some(pu) => {
                     let parsed = ProxyConfig::parse(pu).context("error parsing proxy url")?;
@@ -456,32 +490,6 @@ impl Session {
             } else {
                 TagManager::new()
             };
-
-            let mut resolved_output_folder = default_output_folder;
-            let mut resolved_completed_folder = opts.completed_folder.clone();
-            let mut max_active_downloads = 0;
-            let mut max_active_seeds = 0;
-            let mut use_part_files = false;
-            let mut seed_limits = crate::session::ShareLimits::default();
-            if let Some(p) = persistence.as_ref() {
-                match p.load_session_settings().await {
-                    Ok(settings) => {
-                        if let Some(output_folder) = settings.output_folder {
-                            resolved_output_folder = output_folder;
-                        }
-                        if let Some(limits) = settings.seed_limits {
-                            seed_limits = limits;
-                        }
-                        if resolved_completed_folder.is_none() {
-                            resolved_completed_folder = settings.completed_folder;
-                        }
-                        max_active_downloads = encode_limit(settings.max_active_downloads);
-                        max_active_seeds = encode_limit(settings.max_active_seeds);
-                        use_part_files = settings.part_files.unwrap_or(false);
-                    }
-                    Err(e) => warn!("error loading session settings from persistence: {e:#}"),
-                }
-            }
 
             let lsd = {
                 if opts.disable_local_service_discovery || has_proxy {
@@ -1596,6 +1604,8 @@ impl Session {
         let Some(persistence) = self.persistence.as_ref() else {
             return Ok(());
         };
+        // Copy before the await. The proxy URL sits behind a non-Send lock.
+        let proxy_url = self.proxy_url.read().clone();
         persistence
             .store_session_settings(&SessionSettings {
                 output_folder: Some(self.output_folder()),
@@ -1604,6 +1614,7 @@ impl Session {
                 max_active_seeds: self.max_active_seeds(),
                 part_files: Some(self.use_part_files()),
                 seed_limits: Some(self.seed_limits()),
+                proxy_url,
             })
             .await
     }

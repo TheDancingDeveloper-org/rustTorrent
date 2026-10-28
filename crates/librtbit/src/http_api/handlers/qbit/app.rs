@@ -86,7 +86,7 @@ pub(super) async fn h_app_preferences(
 pub(super) async fn h_app_set_preferences(
     State(state): State<Arc<QbitState>>,
     body: Bytes,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     let Ok(form) = serde_urlencoded::from_bytes::<SetPreferencesForm>(&body) else {
         return qbit_error(
             StatusCode::BAD_REQUEST,
