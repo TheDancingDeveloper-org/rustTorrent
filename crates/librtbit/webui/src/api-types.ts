@@ -484,6 +484,13 @@ export interface FoldersConfig {
   completed_folder: string | null;
 }
 
+// Session-wide peer connection timeouts, in seconds. null means the engine default.
+export interface AdvancedConfig {
+  connect_timeout_secs: number | null;
+  read_write_timeout_secs: number | null;
+  keep_alive_secs: number | null;
+}
+
 /** Startup-only peer and discovery settings. `encryption` is null: unsupported. */
 export interface NetworkConfig {
   listen_ip: string | null;
@@ -570,6 +577,8 @@ export interface RtbitAPI {
 
   // Seed limits
   getSeedLimits: () => Promise<SeedLimitsConfig>;
+  getAdvanced: () => Promise<AdvancedConfig>;
+  setAdvanced: (config: AdvancedConfig) => Promise<void>;
   setSeedLimits: (limits: SeedLimitsConfig) => Promise<void>;
 
   // Per-torrent controls

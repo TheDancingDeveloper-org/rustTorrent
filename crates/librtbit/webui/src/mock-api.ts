@@ -8,6 +8,7 @@ import {
   AltSpeedStatus,
   CategoryInfo,
   DhtStats,
+  AdvancedConfig,
   LimitsConfig,
   ListTorrentsResponse,
   PeerStatsSnapshot,
@@ -1049,6 +1050,14 @@ export const MockAPI: RtbitAPI & { getVersion: () => Promise<string> } = {
     return { ratio_limit: null, time_limit_secs: null };
   },
   setSeedLimits: async (_limits: SeedLimitsConfig): Promise<void> => {},
+  getAdvanced: async (): Promise<AdvancedConfig> => {
+    return {
+      connect_timeout_secs: null,
+      read_write_timeout_secs: null,
+      keep_alive_secs: null,
+    };
+  },
+  setAdvanced: async (_config: AdvancedConfig): Promise<void> => {},
 
   // Per-torrent controls
   setTorrentSeedLimits: async (

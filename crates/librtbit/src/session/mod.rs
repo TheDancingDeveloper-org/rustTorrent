@@ -33,7 +33,10 @@ use std::{
     net::{IpAddr, SocketAddr},
     num::NonZeroU16,
     path::{Component, Path, PathBuf},
-    sync::{Arc, atomic::AtomicUsize},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -134,6 +137,11 @@ pub struct Session {
     // Runtime settings
     output_folder: RwLock<PathBuf>,
     peer_opts: PeerConnectionOptions,
+    /// Live overrides of the session peer timeouts, in seconds. 0 means unset
+    /// (the startup value in `peer_opts` applies). Set from the Advanced tab.
+    peer_connect_timeout_secs: AtomicU64,
+    peer_read_write_timeout_secs: AtomicU64,
+    peer_keep_alive_secs: AtomicU64,
     default_storage_factory: Option<BoxStorageFactory>,
     persistence: Option<Arc<dyn SessionPersistenceStore>>,
     trackers: HashSet<url::Url>,
@@ -495,6 +503,15 @@ impl Session {
                 bitv_factory,
                 peer_id,
                 dht,
+                peer_connect_timeout_secs: AtomicU64::new(
+                    peer_opts.connect_timeout.map(|d| d.as_secs()).unwrap_or(0),
+                ),
+                peer_read_write_timeout_secs: AtomicU64::new(
+                    peer_opts.read_write_timeout.map(|d| d.as_secs()).unwrap_or(0),
+                ),
+                peer_keep_alive_secs: AtomicU64::new(
+                    peer_opts.keep_alive_interval.map(|d| d.as_secs()).unwrap_or(0),
+                ),
                 peer_opts,
                 spawner: spawner.clone(),
                 output_folder: RwLock::new(resolved_output_folder),
@@ -644,22 +661,52 @@ impl Session {
         self.dht.as_ref()
     }
 
+    fn live_secs(secs: u64) -> Option<Duration> {
+        if secs == 0 {
+            None
+        } else {
+            Some(Duration::from_secs(secs))
+        }
+    }
+
+    /// Session-wide peer connection timeouts, including live overrides.
+    pub fn peer_opts(&self) -> PeerConnectionOptions {
+        PeerConnectionOptions {
+            connect_timeout: Self::live_secs(
+                self.peer_connect_timeout_secs.load(Ordering::Relaxed),
+            ),
+            read_write_timeout: Self::live_secs(
+                self.peer_read_write_timeout_secs.load(Ordering::Relaxed),
+            ),
+            keep_alive_interval: Self::live_secs(self.peer_keep_alive_secs.load(Ordering::Relaxed)),
+        }
+    }
+
+    /// Replace the session-wide peer connection timeouts. `None` clears a timeout.
+    /// Torrents added afterwards pick these up; running torrents keep theirs.
+    pub fn set_peer_opts(&self, opts: PeerConnectionOptions) {
+        let secs = |d: Option<Duration>| d.map(|d| d.as_secs()).unwrap_or(0);
+        self.peer_connect_timeout_secs
+            .store(secs(opts.connect_timeout), Ordering::Relaxed);
+        self.peer_read_write_timeout_secs
+            .store(secs(opts.read_write_timeout), Ordering::Relaxed);
+        self.peer_keep_alive_secs
+            .store(secs(opts.keep_alive_interval), Ordering::Relaxed);
+    }
+
     pub(super) fn merge_peer_opts(
         &self,
         other: Option<PeerConnectionOptions>,
     ) -> PeerConnectionOptions {
+        let base = self.peer_opts();
         let other = match other {
             Some(o) => o,
-            None => self.peer_opts,
+            None => return base,
         };
         PeerConnectionOptions {
-            connect_timeout: other.connect_timeout.or(self.peer_opts.connect_timeout),
-            read_write_timeout: other
-                .read_write_timeout
-                .or(self.peer_opts.read_write_timeout),
-            keep_alive_interval: other
-                .keep_alive_interval
-                .or(self.peer_opts.keep_alive_interval),
+            connect_timeout: other.connect_timeout.or(base.connect_timeout),
+            read_write_timeout: other.read_write_timeout.or(base.read_write_timeout),
+            keep_alive_interval: other.keep_alive_interval.or(base.keep_alive_interval),
         }
     }
 

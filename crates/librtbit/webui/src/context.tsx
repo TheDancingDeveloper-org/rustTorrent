@@ -6,6 +6,7 @@ import {
   BrowseResponse,
   CategoryInfo,
   DhtStats,
+  AdvancedConfig,
   FoldersConfig,
   DownloadsConfig,
   NetworkConfig,
@@ -142,6 +143,12 @@ export const APIContext = createContext<RtbitAPI>({
     throw new Error("Function not implemented.");
   },
   setSeedLimits: function (_limits: SeedLimitsConfig): Promise<void> {
+    throw new Error("Function not implemented.");
+  },
+  getAdvanced: function (): Promise<AdvancedConfig> {
+    throw new Error("Function not implemented.");
+  },
+  setAdvanced: function (_config: AdvancedConfig): Promise<void> {
     throw new Error("Function not implemented.");
   },
   setTorrentSeedLimits: function (
