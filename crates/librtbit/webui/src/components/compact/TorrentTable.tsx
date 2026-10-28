@@ -16,12 +16,10 @@ import { Spinner } from "../Spinner";
 import { SortIcon } from "../SortIcon";
 import {
   isTorrentVisible,
-  SortDirection,
   torrentTrackerHosts,
 } from "../../helper/torrentFilters";
 import { Button } from "../buttons/Button";
 import { ColumnMenu } from "./ColumnMenu";
-import { loadViewPref, oneOf, saveViewPref } from "../../helper/viewPrefs";
 import { nextSort } from "../../helper/sortToggle";
 import { TorrentContextMenu, ContextMenuState } from "../TorrentContextMenu";
 import { useTorrentLimits } from "../../hooks/useTorrentLimits";
@@ -31,6 +29,7 @@ import { useTorrentStore } from "../../stores/torrentStore";
 import { useErrorStore } from "../../stores/errorStore";
 
 // Sort columns: all sortable column IDs
+// Also the URL sort vocabulary (helper/viewQuery.ts).
 const TABLE_SORT_COLUMNS = [
   "id",
   "name",
@@ -57,27 +56,9 @@ const TABLE_SORT_COLUMNS = [
 ] as const;
 
 export type TableSortColumn = (typeof TABLE_SORT_COLUMNS)[number];
+void TABLE_SORT_COLUMNS;
 
-const DEFAULT_SORT_COLUMN: TableSortColumn = "id";
-const DEFAULT_SORT_DIRECTION: SortDirection = "desc";
 
-interface TableSortPref {
-  column: TableSortColumn;
-  direction: SortDirection;
-}
-
-const isTableSortPref = (value: unknown): value is TableSortPref => {
-  if (typeof value !== "object" || value === null) return false;
-  const { column, direction } = value as Record<string, unknown>;
-  return (
-    oneOf(TABLE_SORT_COLUMNS)(column) &&
-    (direction === "asc" || direction === "desc")
-  );
-};
-const DEFAULT_SORT_PREF: TableSortPref = {
-  column: DEFAULT_SORT_COLUMN,
-  direction: DEFAULT_SORT_DIRECTION,
-};
 const RESIZE_STEP_PX = 16;
 
 function getTableSortValue(
@@ -232,19 +213,9 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
   const torrentLimits = useTorrentLimits(torrentIds, showLimits);
 
   // Local sorting state
-  const [sortColumn, setSortColumnState] = useState<TableSortColumn>(
-    () => loadViewPref("tableSort", DEFAULT_SORT_PREF, isTableSortPref).column,
-  );
-  const [sortDirection, setSortDirectionState] = useState<SortDirection>(
-    () =>
-      loadViewPref("tableSort", DEFAULT_SORT_PREF, isTableSortPref).direction,
-  );
-  useEffect(() => {
-    saveViewPref<TableSortPref>("tableSort", {
-      column: sortColumn,
-      direction: sortDirection,
-    });
-  }, [sortColumn, sortDirection]);
+  const sortColumn = useUIStore((state) => state.sortColumn) as TableSortColumn;
+  const sortDirection = useUIStore((state) => state.sortDirection);
+  const setSort = useUIStore((state) => state.setSort);
 
   // Resize state
   const [resizing, setResizing] = useState<{
@@ -275,10 +246,9 @@ export const TorrentTable: React.FC<TorrentTableProps> = ({
         { column: sortColumn, direction: sortDirection },
         column,
       );
-      setSortColumnState(next.column);
-      setSortDirectionState(next.direction);
+      setSort(next.column, next.direction);
     },
-    [sortColumn, sortDirection],
+    [sortColumn, sortDirection, setSort],
   );
 
   // Sort and filter torrents for virtualization
