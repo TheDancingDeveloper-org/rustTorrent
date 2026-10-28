@@ -730,6 +730,18 @@ impl ManagedTorrent {
                         return Ok(());
                     }
                     let paused = g.state.take().assert_paused();
+                    // Going live is a new seeding interval. The persisted
+                    // completion time is when the payload first finished, which
+                    // can be long before this process started; leaving it in
+                    // place would trip a seeding-time limit on the first policy
+                    // pass after a restart even though the seed just came back.
+                    if paused.chunk_tracker.is_finished() {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        t.shared.completion_on.store(now, Ordering::Relaxed);
+                    }
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     let live = TorrentStateLive::new(paused, tx, token.clone())?;
                     g.state = ManagedTorrentState::Live(live.clone());
