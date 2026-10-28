@@ -6,11 +6,12 @@ use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use rtbit_client::{
-    Error, PeerCounts, SessionCounters, SessionStats, Speed, Torrent, TorrentList, TorrentState,
-    TorrentStats,
+    Error, PeerCounts, PeerList, PieceProgress, SessionCounters, SessionStats, Speed, Torrent,
+    TorrentFile, TorrentList, TorrentState, TorrentStats, TrackerList,
 };
 use rtbit_egui::{
-    AddRequest, AddSource, App, Connection, LoginAttempt, RowAction, Screen, Snapshot,
+    AddRequest, AddSource, App, Connection, DetailSnapshot, LoginAttempt, RowAction, Screen,
+    Snapshot,
 };
 
 #[derive(Clone, Copy)]
@@ -49,6 +50,18 @@ impl LoginAttempt for Scripted {
         self.adds.lock().expect("adds").push(request.clone());
         Ok(())
     }
+
+    fn detail(&self, id: u64) -> Result<DetailSnapshot, Error> {
+        let _ = id;
+        Ok(DetailSnapshot {
+            torrent: detailed_torrent(),
+            trackers: TrackerList { trackers: vec![] },
+            peers: PeerList::default(),
+            pieces: PieceProgress {
+                have: vec![true, false],
+            },
+        })
+    }
 }
 
 fn scripted(result: Script) -> Scripted {
@@ -70,6 +83,7 @@ fn sample_snapshot() -> Snapshot {
         category: Some("movies".into()),
         tags: None,
         trackers: Some(vec!["http://tracker.example/announce".into()]),
+        files: None,
         stats: Some(TorrentStats {
             state: Some(TorrentState::Live),
             progress_bytes: 1024,
@@ -386,4 +400,33 @@ fn a_valid_magnet_records_one_add() {
     assert_eq!(recorded[0].save_path, "/data/incoming");
     assert_eq!(recorded[0].category, "movies");
     assert!(recorded[0].start_paused);
+}
+
+fn detailed_torrent() -> Torrent {
+    let mut torrent = sample_snapshot().torrents.torrents.remove(0);
+    torrent.files = Some(vec![TorrentFile {
+        name: "movie.mkv".into(),
+        components: vec!["movie.mkv".into()],
+        length: 2048,
+        included: true,
+    }]);
+    torrent
+}
+
+/// A selected row shows the file list once the detail poll returns.
+#[test]
+fn selected_row_shows_the_file_name() {
+    let mut harness = harness(scripted(Script::Ok));
+    on_main(&mut harness);
+    harness.run();
+    assert!(shows(&harness, "Select a torrent."));
+    harness.state_mut().select_for_test(7);
+    for _ in 0..30 {
+        harness.run_steps(1);
+        if shows(&harness, "movie.mkv") {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("file name missing after the detail poll");
 }

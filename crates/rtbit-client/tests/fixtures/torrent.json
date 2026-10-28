@@ -1,0 +1,12 @@
+{
+  "id": 7,
+  "info_hash": "abc",
+  "name": "example",
+  "output_folder": "/data",
+  "total_pieces": 10,
+  "files": [
+    {"name": "a.txt", "components": ["a.txt"], "length": 100, "included": true, "attributes": {"padding": false}},
+    {"name": "skip.bin", "components": ["skip.bin"], "length": 50, "included": false, "attributes": {}}
+  ],
+  "extra_daemon_field": true
+}

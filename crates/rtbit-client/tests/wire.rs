@@ -281,3 +281,112 @@ async fn add_torrent_file_posts_the_bytes_without_is_url() {
         .unwrap();
     server.verify().await;
 }
+
+#[tokio::test]
+async fn detail_reads_files_trackers_peers_and_pieces() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("login.json"), "application/json"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/torrents/7"))
+        .and(header("authorization", "Bearer access-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("torrent.json"), "application/json"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/torrents/7/trackers"))
+        .and(header("authorization", "Bearer access-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("trackers.json"), "application/json"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/torrents/7/peer_stats"))
+        .and(wiremock::matchers::query_param("state", "live"))
+        .and(header("authorization", "Bearer access-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("peers.json"), "application/json"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    // 0b1010_0000 then 0b1000_0000: pieces 0, 2 and 8 of 10.
+    Mock::given(method("GET"))
+        .and(path("/torrents/7/haves"))
+        .and(header("accept", "application/octet-stream"))
+        .and(header("authorization", "Bearer access-1"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-bitfield-len", "10")
+                .set_body_raw(vec![0b1010_0000, 0b1000_0000], "application/octet-stream"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut client = Client::new(server.uri()).unwrap();
+    client.login("ada", "secret").await.unwrap();
+    let torrent = client.torrent(7).await.unwrap();
+    let files = torrent.files.expect("files");
+    assert_eq!(files.len(), 2);
+    assert!(files[0].included);
+    assert!(!files[1].included);
+    let trackers = client.trackers(7).await.unwrap();
+    assert_eq!(trackers.trackers[0].seeders, Some(4));
+    let peers = client.peers(7).await.unwrap();
+    assert_eq!(peers.peers[0].addr, "1.2.3.4:6881");
+    assert_eq!(peers.peers[0].fetched_bytes, 20);
+    let pieces = client.haves(7).await.unwrap();
+    assert_eq!(pieces.have_count(), 3);
+    assert!(pieces.have[0] && !pieces.have[1] && pieces.have[8]);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn file_selection_and_tracker_add_post_json() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("login.json"), "application/json"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/torrents/7/update_only_files"))
+        .and(body_json(serde_json::json!({"only_files": [0, 2]})))
+        .and(header("authorization", "Bearer access-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/torrents/7/trackers"))
+        .and(body_json(
+            serde_json::json!({"trackers": ["http://new.example/announce"]}),
+        ))
+        .and(header("authorization", "Bearer access-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut client = Client::new(server.uri()).unwrap();
+    client.login("ada", "secret").await.unwrap();
+    client.update_only_files(7, &[0, 2]).await.unwrap();
+    client
+        .add_trackers(7, &["http://new.example/announce".into()])
+        .await
+        .unwrap();
+    server.verify().await;
+}

@@ -6,7 +6,11 @@ use serde::de::DeserializeOwned;
 use url::Url;
 
 use crate::error::Error;
-use crate::types::{LoginBody, RefreshBody, SessionStats, TokenPair, TorrentList};
+use crate::types::{
+    LoginBody, PieceProgress, RefreshBody, SessionStats, TokenPair, Torrent, TorrentList,
+    TrackerList,
+};
+use serde::Serialize;
 
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// Reserved for a later add-by-file call. Item 1 does not send torrent bytes.
@@ -109,6 +113,55 @@ impl Client {
             .await
     }
 
+    /// `GET /torrents/{id}`. Files, piece count and the download selection.
+    pub async fn torrent(&mut self, id: u64) -> Result<Torrent, Error> {
+        self.authed_get(&format!("torrents/{id}")).await
+    }
+
+    /// `GET /torrents/{id}/trackers`.
+    pub async fn trackers(&mut self, id: u64) -> Result<TrackerList, Error> {
+        self.authed_get(&format!("torrents/{id}/trackers")).await
+    }
+
+    /// `GET /torrents/{id}/peer_stats?state=live`.
+    pub async fn peers(&mut self, id: u64) -> Result<crate::types::PeerList, Error> {
+        let value: serde_json::Value = self
+            .authed_get(&format!("torrents/{id}/peer_stats?state=live"))
+            .await?;
+        Ok(crate::types::PeerList::from_value(&value))
+    }
+
+    /// `GET /torrents/{id}/haves` as the binary bitfield.
+    pub async fn haves(&mut self, id: u64) -> Result<PieceProgress, Error> {
+        let response = self.get_haves_once(id).await?;
+        if response.status() == StatusCode::UNAUTHORIZED {
+            self.refresh_once().await?;
+            decode_haves(self.get_haves_once(id).await?).await
+        } else {
+            decode_haves(response).await
+        }
+    }
+
+    /// `POST /torrents/{id}/update_only_files`. `indices` is the new selection.
+    pub async fn update_only_files(&mut self, id: u64, indices: &[usize]) -> Result<(), Error> {
+        self.authed_post_json(
+            &format!("torrents/{id}/update_only_files"),
+            &OnlyFilesBody {
+                only_files: indices,
+            },
+        )
+        .await
+    }
+
+    /// `POST /torrents/{id}/trackers`. Merges the announce URLs.
+    pub async fn add_trackers(&mut self, id: u64, trackers: &[String]) -> Result<(), Error> {
+        self.authed_post_json(
+            &format!("torrents/{id}/trackers"),
+            &TrackersBody { trackers },
+        )
+        .await
+    }
+
     /// `POST /torrents` with the bytes of a `.torrent` file.
     pub async fn add_torrent_file(
         &mut self,
@@ -149,6 +202,16 @@ impl Client {
         decode(self.get_once(path).await?).await
     }
 
+    async fn authed_post_json(&mut self, path: &str, body: &impl Serialize) -> Result<(), Error> {
+        let response = self.post_json_once(path, body).await?;
+        if response.status() == StatusCode::UNAUTHORIZED {
+            self.refresh_once().await?;
+            decode_empty(self.post_json_once(path, body).await?).await
+        } else {
+            decode_empty(response).await
+        }
+    }
+
     async fn authed_post_empty(&mut self, path: &str) -> Result<(), Error> {
         let response = self.post_once(path).await?;
         if response.status() == StatusCode::UNAUTHORIZED {
@@ -165,6 +228,34 @@ impl Client {
         self.http
             .get(url)
             .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|err| Error::Unreachable(err.to_string()))
+    }
+
+    async fn get_haves_once(&self, id: u64) -> Result<reqwest::Response, Error> {
+        let token = self.access.as_deref().ok_or(Error::Unauthorised)?;
+        let url = self.url(&format!("torrents/{id}/haves"))?;
+        self.http
+            .get(url)
+            .bearer_auth(token)
+            .header(http::header::ACCEPT, "application/octet-stream")
+            .send()
+            .await
+            .map_err(|err| Error::Unreachable(err.to_string()))
+    }
+
+    async fn post_json_once(
+        &self,
+        path: &str,
+        body: &impl Serialize,
+    ) -> Result<reqwest::Response, Error> {
+        let token = self.access.as_deref().ok_or(Error::Unauthorised)?;
+        let url = self.url(path)?;
+        self.http
+            .post(url)
+            .bearer_auth(token)
+            .json(body)
             .send()
             .await
             .map_err(|err| Error::Unreachable(err.to_string()))
@@ -299,4 +390,32 @@ async fn decode_empty(response: reqwest::Response) -> Result<(), Error> {
         return Err(Error::from_status(status));
     }
     Ok(())
+}
+
+#[derive(Serialize)]
+struct OnlyFilesBody<'a> {
+    only_files: &'a [usize],
+}
+
+#[derive(Serialize)]
+struct TrackersBody<'a> {
+    trackers: &'a [String],
+}
+
+async fn decode_haves(response: reqwest::Response) -> Result<PieceProgress, Error> {
+    let status = response.status();
+    if !status.is_success() {
+        return Err(Error::from_status(status));
+    }
+    let len = response
+        .headers()
+        .get("x-bitfield-len")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|err| Error::Unreachable(err.to_string()))?;
+    Ok(PieceProgress::from_bytes(&bytes, len))
 }

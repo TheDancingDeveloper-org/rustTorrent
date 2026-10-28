@@ -9,11 +9,15 @@ use fluent2_egui::office::status_bar::StatusBar;
 use fluent2_egui::office::{TitleBar, WindowAction, window_command};
 use fluent2_egui::theme::{Theme, install};
 use fluent2_egui::tokens::FLUENT;
-use rtbit_client::{Client, Error, SessionStats, TorrentList};
+use rtbit_client::{
+    Client, Error, PeerList, PieceProgress, SessionStats, Torrent, TorrentList, TrackerList,
+};
 
-use crate::screens::{AddDraft, AddRequest, AddSource, RowAction};
+use crate::screens::{
+    AddDraft, AddRequest, AddSource, DetailAction, DetailTab, DetailView, RowAction,
+};
 
-use crate::screens::draw_main;
+use crate::screens::{draw_detail, draw_main};
 use crate::state::{ANY, ListCache, StatusFilter};
 
 /// How often the main screen asks the daemon for the list and the session speeds.
@@ -80,6 +84,27 @@ pub trait LoginAttempt: Send {
         let _ = request;
         Err(Error::Unreachable("no add".into()))
     }
+
+    /// Files, trackers, live peers and piece progress for one torrent.
+    fn detail(&self, id: u64) -> Result<DetailSnapshot, Error> {
+        let _ = id;
+        Err(Error::Unreachable("no detail".into()))
+    }
+
+    /// Change the file selection or attach a tracker.
+    fn detail_act(&self, id: u64, action: &DetailAction) -> Result<(), Error> {
+        let _ = (id, action);
+        Err(Error::Unreachable("no detail action".into()))
+    }
+}
+
+/// One poll of the selected torrent. The list poll does not fetch this.
+#[derive(Clone, Debug)]
+pub struct DetailSnapshot {
+    pub torrent: Torrent,
+    pub trackers: TrackerList,
+    pub peers: PeerList,
+    pub pieces: PieceProgress,
 }
 
 /// The real attempt: `rtbit-client` on a private current-thread runtime.
@@ -163,6 +188,51 @@ impl LoginAttempt for DaemonLogin {
             })
         })
     }
+    fn detail(&self, id: u64) -> Result<DetailSnapshot, Error> {
+        on_session(|session| {
+            session.runtime.block_on(async {
+                let torrent = session.client.torrent(id).await?;
+                let trackers = session.client.trackers(id).await?;
+                let peers = session.client.peers(id).await?;
+                let pieces = session.client.haves(id).await?;
+                Ok(DetailSnapshot {
+                    torrent,
+                    trackers,
+                    peers,
+                    pieces,
+                })
+            })
+        })
+    }
+
+    fn detail_act(&self, id: u64, action: &DetailAction) -> Result<(), Error> {
+        let action = action.clone();
+        on_session(move |session| {
+            session.runtime.block_on(async {
+                match action {
+                    DetailAction::SetIncluded { index, included } => {
+                        // The pane only knows the one file that changed. The
+                        // current selection is the files the last poll marked
+                        // included, with this one flipped.
+                        let torrent = session.client.torrent(id).await?;
+                        let files = torrent.files.unwrap_or_default();
+                        let mut indices: Vec<usize> = files
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, file)| file.included.then_some(i))
+                            .filter(|i| *i != index)
+                            .collect();
+                        if included {
+                            indices.push(index);
+                            indices.sort_unstable();
+                        }
+                        session.client.update_only_files(id, &indices).await
+                    }
+                    DetailAction::AddTracker(url) => session.client.add_trackers(id, &[url]).await,
+                }
+            })
+        })
+    }
 }
 
 fn on_session<T>(call: impl FnOnce(&mut Session) -> Result<T, Error>) -> Result<T, Error> {
@@ -211,6 +281,15 @@ pub struct App<L: LoginAttempt = DaemonLogin> {
     action: Option<ActionFlight>,
     /// An add is in flight. The bar stays quiet until it finishes.
     add_flight: Option<Receiver<Result<(), String>>>,
+    /// Selected torrent's files, trackers, peers and pieces.
+    detail: DetailView,
+    detail_tab: DetailTab,
+    tracker_url: String,
+    detail_poll: Option<DetailPoll>,
+    detail_poll_at: Option<Instant>,
+    /// Torrent the in-flight detail poll is for. A new selection drops it.
+    detail_for: Option<u64>,
+    detail_flight: Option<Receiver<Result<(), String>>>,
 }
 
 impl Default for App<DaemonLogin> {
@@ -253,6 +332,13 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             add_draft: AddDraft::default(),
             action: None,
             add_flight: None,
+            detail: DetailView::default(),
+            detail_tab: DetailTab::Files,
+            tracker_url: String::new(),
+            detail_poll: None,
+            detail_poll_at: None,
+            detail_for: None,
+            detail_flight: None,
         }
     }
 
@@ -339,6 +425,7 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
         }
         self.poll_login();
         self.poll_list();
+        self.poll_detail();
         self.chrome(ui);
     }
 
@@ -443,6 +530,129 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             self.dispatch_add(request);
         }
         self.poll_add();
+        egui::Panel::bottom("rtbit_detail")
+            .resizable(false)
+            .exact_size(180.0)
+            .show(ui, |ui| {
+                self.draw_detail_pane(ui);
+            });
+    }
+
+    /// The pane sits under the grid so a selected row's files stay visible.
+    fn draw_detail_pane(&mut self, ui: &mut egui::Ui) {
+        self.take_detail_action();
+        if self.selected.is_none() {
+            self.detail = DetailView::default();
+        }
+        let action = draw_detail(
+            ui,
+            &self.detail,
+            &mut self.detail_tab,
+            &mut self.tracker_url,
+            self.detail_flight.is_some(),
+        );
+        if let Some(action) = action {
+            self.dispatch_detail(action);
+        }
+    }
+
+    fn dispatch_detail(&mut self, action: DetailAction) {
+        if self.detail_flight.is_some() {
+            return;
+        }
+        let Some(id) = self.selected else { return };
+        let login = self.login.clone();
+        let (tx, rx) = mpsc::channel();
+        let added = matches!(action, DetailAction::AddTracker(_));
+        std::thread::spawn(move || {
+            let outcome = login
+                .detail_act(id, &action)
+                .map_err(|err| login_message(&err));
+            let _ = tx.send(outcome);
+        });
+        self.detail_flight = Some(rx);
+        if added {
+            self.tracker_url.clear();
+        }
+    }
+
+    fn take_detail_action(&mut self) {
+        let Some(rx) = &self.detail_flight else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(())) => {
+                self.detail_flight = None;
+                self.detail_poll_at = None;
+            }
+            Ok(Err(message)) => {
+                self.detail.error = Some(message);
+                self.detail_flight = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.detail_flight = None,
+        }
+    }
+
+    /// Detail endpoints only for the selected torrent, on the same interval
+    /// as the list. A changed selection drops the previous pane.
+    fn poll_detail(&mut self) {
+        self.take_detail_poll();
+        if self.screen != Screen::Main {
+            return;
+        }
+        let Some(id) = self.selected else {
+            self.detail = DetailView::default();
+            self.detail_for = None;
+            return;
+        };
+        if self.detail_for != Some(id) {
+            self.detail = DetailView::default();
+            self.detail_for = Some(id);
+            self.detail_poll = None;
+            self.detail_poll_at = None;
+        }
+        if self.detail_poll.is_some() {
+            return;
+        }
+        let due = self
+            .detail_poll_at
+            .is_none_or(|at| at.elapsed() >= POLL_EVERY);
+        if !due {
+            return;
+        }
+        let login = self.login.clone();
+        let (tx, rx) = mpsc::channel();
+        self.detail_poll = Some(DetailPoll { rx, id });
+        std::thread::spawn(move || {
+            let outcome = login.detail(id).map_err(|err| login_message(&err));
+            let _ = tx.send(outcome);
+        });
+    }
+
+    fn take_detail_poll(&mut self) {
+        let finished = self
+            .detail_poll
+            .as_ref()
+            .and_then(|poll| poll.rx.try_recv().ok().map(|outcome| (poll.id, outcome)));
+        let Some((id, outcome)) = finished else {
+            return;
+        };
+        self.detail_poll = None;
+        self.detail_poll_at = Some(Instant::now());
+        if self.selected != Some(id) {
+            return;
+        }
+        match outcome {
+            Ok(snapshot) => {
+                self.detail.torrent = Some(snapshot.torrent);
+                self.detail.trackers = Some(snapshot.trackers);
+                self.detail.peers = Some(snapshot.peers);
+                self.detail.pieces = Some(snapshot.pieces);
+                self.detail.error = None;
+            }
+            Err(message) => self.detail.error = Some(message),
+        }
     }
 
     /// Post one add. The dialog already checked the magnet and the path.
@@ -558,6 +768,11 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
 
 struct Poll {
     rx: Receiver<Result<Snapshot, String>>,
+}
+
+struct DetailPoll {
+    rx: Receiver<Result<DetailSnapshot, String>>,
+    id: u64,
 }
 
 struct ActionFlight {
