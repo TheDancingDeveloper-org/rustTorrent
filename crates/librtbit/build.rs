@@ -77,8 +77,10 @@ fn main() {
     }
 }
 
-/// Emit `$OUT_DIR/webui_assets.rs`: every file under `dist/` (entry files and
-/// hashed lazy chunks alike) as an `include_bytes!` table the router serves.
+/// Emit `$OUT_DIR/webui_assets.rs`: every file under `dist/` (entry files,
+/// hashed lazy chunks and nested paths alike) as an `include_bytes!` table
+/// the router serves. The generated file lives in `$OUT_DIR`, never the
+/// source tree; `include_bytes!` paths are absolute.
 #[cfg(feature = "webui")]
 fn write_asset_manifest(dist: &Path) -> anyhow::Result<()> {
     let manifest_dir =
@@ -106,7 +108,8 @@ fn write_asset_manifest(dist: &Path) -> anyhow::Result<()> {
         ));
     }
     source.push_str("];\n");
-    let dest = manifest_dir.join("src/http_api/webui_assets.rs");
+    let out_dir = std::env::var("OUT_DIR").context("OUT_DIR")?;
+    let dest = Path::new(&out_dir).join("webui_assets.rs");
     std::fs::write(&dest, source).with_context(|| format!("write {dest:?}"))?;
     Ok(())
 }
@@ -137,15 +140,12 @@ fn collect_assets(
                 .to_str()
                 .context("non-utf8 asset path")?
                 .replace('\\', "/");
-            // include_bytes! resolves relative paths from OUT_DIR
-            // (target/debug/build/<pkg>/out), four levels below the crate root.
+            // The generated module is included from $OUT_DIR, so include_bytes!
+            // must be an absolute path. Only files inside the crate are embedded.
             canonical
                 .strip_prefix(manifest_dir)
                 .with_context(|| format!("{canonical:?} is outside {manifest_dir:?}"))?;
-            // webui_assets.rs is written beside webui.rs, and include_bytes!
-            // resolves relative to that file: src/http_api -> crate root.
-            let include = Path::new("../../webui/dist").join(&rel);
-            let include = include
+            let include = canonical
                 .to_str()
                 .context("non-utf8 asset path")?
                 .replace('\\', "/");

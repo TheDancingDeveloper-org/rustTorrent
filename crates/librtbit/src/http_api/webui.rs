@@ -6,16 +6,19 @@ use axum::{
     routing::get,
 };
 
-include!("webui_assets.rs");
+include!(concat!(env!("OUT_DIR"), "/webui_assets.rs"));
 
 pub fn make_webui_router() -> Router {
+    // One wildcard covers every embedded path, including nested asset
+    // directories and files at the dist root. The handler never touches the
+    // filesystem: an unknown path, including `..`, is a table miss.
     Router::new()
         .route("/", get(|| async { asset_response("index.html") }))
-        .route("/assets/{name}", get(serve_asset))
+        .route("/{*path}", get(serve_path))
 }
 
-async fn serve_asset(axum::extract::Path(name): axum::extract::Path<String>) -> Response {
-    asset_response(&format!("assets/{name}"))
+async fn serve_path(axum::extract::Path(path): axum::extract::Path<String>) -> Response {
+    asset_response(&path)
 }
 
 fn asset_response(path: &str) -> Response {
@@ -121,6 +124,35 @@ mod tests {
                     .unwrap()
                     .is_empty()
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn every_embedded_file_is_served_by_exact_path_and_traversal_is_not() {
+        assert!(
+            WEBUI_ASSETS.iter().any(|asset| asset.path.contains('/')),
+            "the manifest has no nested or root-relative path to exercise"
+        );
+        for asset in WEBUI_ASSETS {
+            let response = get(&format!("/{}", asset.path)).await;
+            assert_eq!(response.status(), StatusCode::OK, "{}", asset.path);
+            assert_eq!(
+                response.headers().get(header::CONTENT_TYPE).unwrap(),
+                asset.content_type,
+                "{}",
+                asset.path
+            );
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(body.as_ref(), asset.bytes, "{}", asset.path);
+        }
+        for path in [
+            "/../Cargo.toml",
+            "/assets/../index.html",
+            "/assets/index.js/..",
+            "/no/such/nested/file.js",
+        ] {
+            let response = get(path).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
         }
     }
 
