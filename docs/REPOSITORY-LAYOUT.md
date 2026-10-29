@@ -16,7 +16,7 @@ similar are kept separate. Architecture notes live in the other files under
 | `benchv2/` | Rust-native benchmark harness comparing rtbit with another client. Outside the workspace, with its own `Cargo.toml`, `Dockerfile` and `docker-compose.yml`. |
 
 All crates and packages share the version in the release notes, currently
-`0.2.0-beta.2`. `scripts/check-repo-hygiene.sh` (run with `make check-repo`) fails
+`0.2.0-beta.3`. `scripts/check-repo-hygiene.sh` (run with `make check-repo`) fails
 if a manifest drifts from it.
 
 ## Container images and compose files

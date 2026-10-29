@@ -1,6 +1,6 @@
 [package]
 name = "rtbit-egui"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 authors = ["AusAgentSmith <admin@rusttorrent.dev>"]
 edition = "2024"
 description = "Native rustTorrent client."

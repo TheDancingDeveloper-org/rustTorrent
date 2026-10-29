@@ -1,6 +1,6 @@
 [package]
 name = "swarmforge-peer-protocol"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 edition = "2024"
 description = "BitTorrent peer wire protocol implementation for the rtbit client"
 license = "Apache-2.0"
