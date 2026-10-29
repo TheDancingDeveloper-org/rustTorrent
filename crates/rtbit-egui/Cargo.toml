@@ -20,7 +20,7 @@ keychain = []
 
 [dependencies]
 eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
-egui = "0.36"
+egui = "0.37"
 fluent2-egui = { git = "https://github.com/TheDancingDeveloper-org/fluent2-egui", rev = "3124ec17385929222bfe1862435acfa297769180" }
 fluent2-icons = { git = "https://github.com/TheDancingDeveloper-org/fluent2-egui", rev = "3124ec17385929222bfe1862435acfa297769180" }
 rtbit-client = { path = "../rtbit-client" }
