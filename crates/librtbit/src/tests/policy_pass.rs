@@ -544,6 +544,26 @@ async fn existing_part_file_is_adopted_with_switch_off() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Poll `session.json` until `ready` is true, or give up after five seconds.
+/// The periodic save rewrites the whole file, so a match means that save
+/// finished its rename rather than a sleep that hopes the timer has run.
+async fn wait_until_persisted(persist: &Path, ready: impl Fn(&str) -> bool) -> anyhow::Result<()> {
+    let path = persist.join("session.json");
+    let started = std::time::Instant::now();
+    loop {
+        if let Ok(text) = std::fs::read_to_string(&path)
+            && ready(&text)
+        {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            started.elapsed() < Duration::from_secs(5),
+            "persistence at {path:?} did not reach the expected state"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 /// A session that saves torrent state every `interval`. Cancelling `kill` stops
 /// the session's tasks without a final save, as a killed process would.
 async fn create_session_saving_every(
@@ -627,10 +647,11 @@ async fn upload_total_saved_by_timer_survives_drop_without_stop() -> anyhow::Res
     seed.shared()
         .uploaded_bytes_base
         .store(total, Ordering::Relaxed);
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    let needle = total.to_string();
+    wait_until_persisted(persist.path(), |text| text.contains(&needle)).await?;
     // Kill without stop(): the session's tasks end with no final save.
     kill.cancel();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
     drop(seed);
     drop(session);
 
@@ -673,8 +694,11 @@ async fn share_limits_saved_on_set_survive_drop_without_stop() -> anyhow::Result
     .await?;
     let seed = add_finished_seed(&session, payload.path(), limits).await?;
     let id = seed.id();
+    // set_share_limits saves at once. Wait until that write is on disk, then
+    // kill: a fixed sleep loses the race when the rename is still in flight.
+    wait_until_persisted(persist.path(), |text| text.contains("7200")).await?;
     kill.cancel();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
     drop(seed);
     drop(session);
 
