@@ -722,8 +722,19 @@ impl ManagedTorrent {
                                     _start(&t, peer_rx, start_paused, session, Some(g), token)
                                 }
                                 Err(err) => {
+                                    let mut g = t.locked.write();
+                                    // A stop during the check cancels it and
+                                    // replaces the initializer. Don't clobber
+                                    // that stopped state with the cancellation.
+                                    if !matches!(
+                                        &g.state,
+                                        ManagedTorrentState::Initializing(i)
+                                            if Arc::ptr_eq(i, &init)
+                                    ) {
+                                        return Ok(());
+                                    }
                                     let result = anyhow::anyhow!("{err:?}");
-                                    t.locked.write().state = ManagedTorrentState::Error(err);
+                                    g.state = ManagedTorrentState::Error(err);
                                     t.state_change_notify.notify_waiters();
                                     Err(result)
                                 }
