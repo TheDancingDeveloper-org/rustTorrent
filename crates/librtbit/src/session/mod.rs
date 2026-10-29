@@ -1229,9 +1229,13 @@ impl Session {
 
         let _e = managed_torrent.shared.span.clone().entered();
 
-        managed_torrent
-            .start(peer_rx, opts.paused)
-            .context("error starting torrent")?;
+        if opts.paused && opts.defer_initial_check {
+            managed_torrent.defer_initial_check();
+        } else {
+            managed_torrent
+                .start(peer_rx, opts.paused)
+                .context("error starting torrent")?;
+        }
 
         if let Some(name) = metadata.info.name() {
             info!(?name, "added torrent");
