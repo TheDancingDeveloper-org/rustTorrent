@@ -353,10 +353,10 @@ fn add_dialog(ctx: &egui::Context, open: &mut bool, draft: &mut AddDraft) -> Opt
     // still holds the previous value when the dialog reads the key. Hold the
     // confirmation for one frame so validation sees the text that was typed.
     let confirm = ctx
-        .data(|data| data.get_temp::<bool>(egui::Id::new("rtbit_add_confirm")))
+        .data(|data| data.get_temp::<bool>(egui::Id::unique("rtbit_add_confirm")))
         .unwrap_or(false);
     if confirm {
-        ctx.data_mut(|data| data.remove::<bool>(egui::Id::new("rtbit_add_confirm")));
+        ctx.data_mut(|data| data.remove::<bool>(egui::Id::unique("rtbit_add_confirm")));
         request = match validate_add(draft) {
             Ok(built) => Some(built),
             Err(message) => {
@@ -406,7 +406,7 @@ fn add_dialog(ctx: &egui::Context, open: &mut bool, draft: &mut AddDraft) -> Opt
         });
     match result {
         DialogResult::Closed(CloseReason::Button(id)) if id == "add" => {
-            ctx.data_mut(|data| data.insert_temp(egui::Id::new("rtbit_add_confirm"), true));
+            ctx.data_mut(|data| data.insert_temp(egui::Id::unique("rtbit_add_confirm"), true));
             *open = true;
         }
         DialogResult::Closed(_) => {

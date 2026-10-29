@@ -19,16 +19,16 @@ default = ["keychain"]
 keychain = []
 
 [dependencies]
-eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
-egui = "0.36"
-fluent2-egui = { git = "https://github.com/TheDancingDeveloper-org/fluent2-egui", rev = "3124ec17385929222bfe1862435acfa297769180" }
-fluent2-icons = { git = "https://github.com/TheDancingDeveloper-org/fluent2-egui", rev = "3124ec17385929222bfe1862435acfa297769180" }
+eframe = { version = "0.37", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
+egui = "0.37"
+fluent2-egui = { git = "https://github.com/TheDancingDeveloper-org/fluent2-egui", tag = "v0.4.0" }
+fluent2-icons = { git = "https://github.com/TheDancingDeveloper-org/fluent2-egui", tag = "v0.4.0" }
 rtbit-client = { path = "../rtbit-client" }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 rfd = { version = "0.16", optional = true, default-features = false, features = ["gtk3"] }
 
 [dev-dependencies]
-egui_kittest = "0.36"
+egui_kittest = "0.37"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 secret-service = { version = "4", default-features = false, features = ["rt-async-io-crypto-rust"] }
