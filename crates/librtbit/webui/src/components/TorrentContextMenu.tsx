@@ -394,6 +394,15 @@ export const TorrentContextMenu: React.FC<TorrentContextMenuProps> = ({
   const handleRemoveTag = (tag: string) =>
     editTags(API.removeTorrentTags, [tag], `Error removing tag "${tag}"`);
 
+  const handleSetTags = async () => {
+    const tags = newTagName
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    setNewTagName("");
+    await editTags(API.setTorrentTags, tags, "Error setting tags");
+  };
+
   const handleCreateAndAssignTag = async () => {
     const name = newTagName.trim();
     if (!name) return;
@@ -843,6 +852,14 @@ export const TorrentContextMenu: React.FC<TorrentContextMenuProps> = ({
                   onClick={handleCreateAndAssignTag}
                 >
                   Add
+                </button>
+                <button
+                  type="button"
+                  className="px-2 py-1 text-sm border border-divider rounded hover:bg-surface-sunken cursor-pointer"
+                  onClick={handleSetTags}
+                  title="Replace every selected torrent's tags with this comma-separated list"
+                >
+                  Set
                 </button>
               </div>
             </div>

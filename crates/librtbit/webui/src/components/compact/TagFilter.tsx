@@ -1,5 +1,5 @@
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
-import { BsTag, BsTagFill, BsPlus, BsTrash } from "react-icons/bs";
+import { BsTag, BsTagFill, BsPlus, BsTrash, BsPencil } from "react-icons/bs";
 import { APIContext } from "../../context";
 import { useUIStore } from "../../stores/uiStore";
 import { useTorrentStore } from "../../stores/torrentStore";
@@ -13,7 +13,10 @@ export const TagFilter: React.FC = () => {
   const [registry, setRegistry] = useState<string[]>([]);
   const [showNewInput, setShowNewInput] = useState(false);
   const [newTagName, setNewTagName] = useState("");
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const editRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -32,6 +35,10 @@ export const TagFilter: React.FC = () => {
   useEffect(() => {
     if (showNewInput && inputRef.current) inputRef.current.focus();
   }, [showNewInput]);
+
+  useEffect(() => {
+    if (editing && editRef.current) editRef.current.focus();
+  }, [editing]);
 
   const counts = useMemo(() => {
     const perTag: Record<string, number> = {};
@@ -68,6 +75,19 @@ export const TagFilter: React.FC = () => {
     }
     setNewTagName("");
     setShowNewInput(false);
+  };
+
+  const handleRename = async (from: string) => {
+    const to = editName.trim();
+    setEditing(null);
+    if (!to || to === from) return;
+    try {
+      await API.renameTag(from, to);
+      setRegistry(await API.getTags());
+      if (tagFilter === from) setTagFilter(to);
+    } catch {
+      // A name already in use stays as it was.
+    }
   };
 
   const handleDelete = async (name: string) => {
@@ -111,6 +131,20 @@ export const TagFilter: React.FC = () => {
           {count}
         </span>
       </button>
+      {onDelete && (
+        <button
+          type="button"
+          onClick={() => {
+            setEditing(label);
+            setEditName(label);
+          }}
+          aria-label={`Rename tag ${label}`}
+          title={`Rename tag ${label}`}
+          className="hidden group-hover:flex items-center justify-center w-6 h-6 text-tertiary hover:text-primary cursor-pointer focus-ring rounded"
+        >
+          <BsPencil className="w-3 h-3" />
+        </button>
+      )}
       {onDelete && (
         <button
           type="button"
@@ -179,14 +213,32 @@ export const TagFilter: React.FC = () => {
           <BsTag className={iconClass} />,
         )}
         {names.map((name) =>
-          row(
-            name,
-            name,
-            counts.perTag[name] ?? 0,
-            tagFilter === name,
-            () => setTagFilter(name),
-            <BsTagFill className={iconClass} />,
-            () => handleDelete(name),
+          editing === name ? (
+            <div key={name} className="px-2.5 py-1">
+              <input
+                ref={editRef}
+                type="text"
+                value={editName}
+                aria-label={`Rename tag ${name}`}
+                onChange={(e) => setEditName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleRename(name);
+                  if (e.key === "Escape") setEditing(null);
+                }}
+                onBlur={() => handleRename(name)}
+                className="w-full px-2 py-1 text-sm bg-surface border border-divider rounded focus-ring focus:border-primary"
+              />
+            </div>
+          ) : (
+            row(
+              name,
+              name,
+              counts.perTag[name] ?? 0,
+              tagFilter === name,
+              () => setTagFilter(name),
+              <BsTagFill className={iconClass} />,
+              () => handleDelete(name),
+            )
           ),
         )}
       </div>

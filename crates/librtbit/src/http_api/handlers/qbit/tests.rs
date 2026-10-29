@@ -20,7 +20,8 @@ use super::{
     h_app_preferences, h_app_set_preferences, h_app_version, h_torrentcreator_add_task,
     h_torrentcreator_delete_task, h_torrentcreator_torrent_file, h_torrents_add_tags,
     h_torrents_create_tags, h_torrents_delete_tags, h_torrents_info, h_torrents_recheck,
-    h_torrents_remove_tags, h_torrents_set_tags, matches_category, origin_allowed, qbit_file_name,
+    h_torrents_remove_tags, h_torrents_rename_tag, h_torrents_set_tags, matches_category,
+    origin_allowed, qbit_file_name,
 };
 
 async fn qbit_state() -> (Arc<QbitState>, Arc<Session>, tempfile::TempDir) {
@@ -1078,6 +1079,12 @@ async fn tag_endpoints_drive_backend_tags() {
     h_torrents_set_tags(st(), form(format!("hashes={hb}&tags=only"))).await;
     assert_eq!(torrent_tags(&b), vec!["only"]);
 
+    // renameTag moves the registry entry and every torrent that carries it.
+    h_torrents_rename_tag(st(), form("from=only&to=renamed".into())).await;
+    assert_eq!(torrent_tags(&b), vec!["renamed"]);
+    assert!(!session.tags().exists("only"));
+    assert!(session.tags().exists("renamed"));
+
     // deleteTags unregisters a tag and strips it from every torrent.
     h_torrents_delete_tags(st(), form("tags=new".into())).await;
     assert!(torrent_tags(&a).is_empty());
@@ -1108,10 +1115,10 @@ async fn tag_endpoints_drive_backend_tags() {
             serde_json::from_slice::<Vec<serde_json::Value>>(&body).unwrap()
         }
     };
-    let only = info("only").await;
+    let only = info("renamed").await;
     assert_eq!(only.len(), 1);
     assert_eq!(only[0]["hash"], hb);
-    assert_eq!(only[0]["tags"], "only");
+    assert_eq!(only[0]["tags"], "renamed");
     let untagged = info("").await;
     assert_eq!(untagged.len(), 1);
     assert_eq!(untagged[0]["hash"], ha);

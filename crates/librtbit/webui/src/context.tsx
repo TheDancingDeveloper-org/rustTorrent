@@ -117,6 +117,9 @@ export const APIContext = createContext<RtbitAPI>({
   deleteTags: function (_tags: string[]): Promise<void> {
     throw new Error("Function not implemented.");
   },
+  renameTag: function (_from: string, _to: string): Promise<void> {
+    throw new Error("Function not implemented.");
+  },
   addTorrentTags: function (_ids: number[], _tags: string[]): Promise<void> {
     throw new Error("Function not implemented.");
   },
@@ -124,6 +127,9 @@ export const APIContext = createContext<RtbitAPI>({
     _ids: number[],
     _tags: string[],
   ): Promise<void> {
+    throw new Error("Function not implemented.");
+  },
+  setTorrentTags: function (_ids: number[], _tags: string[]): Promise<void> {
     throw new Error("Function not implemented.");
   },
   getAltSpeed: function (): Promise<AltSpeedStatus> {

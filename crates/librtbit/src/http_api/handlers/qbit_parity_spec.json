@@ -1050,6 +1050,16 @@
       }
     },
     {
+      "endpoint": "torrents/renameTag",
+      "method": "POST",
+      "status": "partial",
+      "notes": "Renames a registered tag and every torrent that carries it. Form fields from/to (aliases old/new). Not a WebUI API v2 endpoint.",
+      "response": {
+        "content": "text"
+      },
+      "upstream": false
+    },
+    {
       "endpoint": "torrents/resume",
       "method": "POST",
       "status": "full",

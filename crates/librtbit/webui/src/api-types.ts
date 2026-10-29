@@ -575,7 +575,9 @@ export interface RtbitAPI {
   getTags: () => Promise<string[]>;
   createTags: (tags: string[]) => Promise<void>;
   deleteTags: (tags: string[]) => Promise<void>;
+  renameTag: (from: string, to: string) => Promise<void>;
   addTorrentTags: (ids: number[], tags: string[]) => Promise<void>;
+  setTorrentTags: (ids: number[], tags: string[]) => Promise<void>;
   removeTorrentTags: (ids: number[], tags: string[]) => Promise<void>;
 
   // Alt speed
