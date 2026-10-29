@@ -95,7 +95,12 @@ impl JsonSessionPersistenceStore {
     async fn flush(&self) -> anyhow::Result<()> {
         // we don't need the write lock technically, but we need to stop concurrent modifications
         let db_content = self.db_content.write().await;
-        let tmp_filename = format!("{}.tmp", self.db_filename.to_str().unwrap());
+        // A shared `session.json.tmp` loses the race: write_owner_only deletes
+        // whatever is already there, so a second flush can unlink the file the
+        // first flush is about to rename (ENOENT). Each flush owns its temp.
+        static FLUSH_IDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let flush_id = FLUSH_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp_filename = format!("{}.{flush_id}.tmp", self.db_filename.to_str().unwrap());
         let mut buf = Vec::new();
         serde_json::to_writer(&mut buf, &*db_content).context("error serializing")?;
         trace!(?tmp_filename, "serialized DB as JSON");
@@ -464,7 +469,6 @@ impl SessionPersistenceStore for JsonSessionPersistenceStore {
         Ok(())
     }
 }
-
 /// Write bytes to a new file that only the owner can read. Used for the session
 /// database because it stores the proxy URL with its password.
 fn write_owner_only(path: &str, bytes: &[u8]) -> anyhow::Result<()> {
