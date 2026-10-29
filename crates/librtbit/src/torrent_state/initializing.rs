@@ -33,6 +33,9 @@ pub struct TorrentStateInitializing {
     pub(crate) checked_bytes: AtomicU64,
     /// True while the torrent is waiting for a concurrent init semaphore slot.
     pub(crate) queued_for_init: AtomicBool,
+    /// True while the check is deferred until the torrent is started or
+    /// rechecked (a stopped add, or a stop during the check).
+    pub(crate) deferred: AtomicBool,
     previously_errored: bool,
 }
 
@@ -51,6 +54,7 @@ impl TorrentStateInitializing {
             files,
             checked_bytes: AtomicU64::new(0),
             queued_for_init: AtomicBool::new(false),
+            deferred: AtomicBool::new(false),
             previously_errored,
         }
     }
@@ -63,6 +67,11 @@ impl TorrentStateInitializing {
     /// Returns true if this torrent is waiting for a concurrent init slot.
     pub fn is_queued_for_init(&self) -> bool {
         self.queued_for_init.load(Ordering::Relaxed)
+    }
+
+    /// True if the check is deferred until the torrent is started or rechecked.
+    pub fn is_deferred(&self) -> bool {
+        self.deferred.load(Ordering::Relaxed)
     }
 
     async fn validate_fastresume(
@@ -193,7 +202,10 @@ impl TorrentStateInitializing {
         Ok(Some(hp))
     }
 
-    pub async fn check(&self) -> anyhow::Result<TorrentStatePaused> {
+    /// Check the payload. The caller turns the result into the paused state
+    /// with [`Self::make_paused`] while holding the torrent's state lock, so a
+    /// stop during the check keeps the storage handles.
+    pub async fn check(&self) -> anyhow::Result<ChunkTracker> {
         let cancellation_token = self.shared.child_token();
         let id: TorrentIdOrHash = self.shared.info_hash.into();
         let bitv_factory = self
@@ -303,13 +315,19 @@ impl TorrentStateInitializing {
             })
             .await?;
 
-        let paused = TorrentStatePaused {
+        Ok(chunk_tracker)
+    }
+
+    pub(crate) fn make_paused(
+        &self,
+        chunk_tracker: ChunkTracker,
+    ) -> anyhow::Result<TorrentStatePaused> {
+        Ok(TorrentStatePaused {
             shared: self.shared.clone(),
             metadata: self.metadata.clone(),
             files: self.files.take()?,
             chunk_tracker,
             streams: Arc::new(Default::default()),
-        };
-        Ok(paused)
+        })
     }
 }
