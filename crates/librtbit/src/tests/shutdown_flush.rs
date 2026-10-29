@@ -136,9 +136,28 @@ async fn shutdown_flushes_bitfield_and_does_not_kill_utp_dispatcher() -> anyhow:
         bitv.display()
     );
     let bytes = std::fs::read(&bitv)?;
+    // The on-disk format is the 4-byte RTBV magic, a little-endian CRC32 and
+    // one bit per piece. Shutdown itself is not under test here beyond having
+    // written that file.
+    // On-disk magic is ASCII "RBV" plus version 0x02 (see bitv.rs), not the
+    // four letters RTBV. The header is that magic and a little-endian CRC32.
+    const BITV_MAGIC: [u8; 4] = [0x52, 0x42, 0x56, 0x02];
     assert!(
-        bytes.windows(4).any(|w| w == b"RTBV") || !bytes.is_empty(),
-        "persisted bitfield is empty"
+        bytes.len() >= 8 && bytes[..4] == BITV_MAGIC,
+        "persisted bitfield is missing the RTBV magic: {:02x?}",
+        &bytes[..bytes.len().min(8)]
+    );
+    let piece_bytes = handle
+        .with_metadata(|metadata| metadata.lengths().piece_bitfield_bytes())
+        .context("metadata")?;
+    assert_eq!(
+        bytes.len(),
+        8 + piece_bytes,
+        "RTBV header plus one bit per piece"
+    );
+    assert!(
+        bytes[8..].iter().any(|byte| *byte != 0),
+        "the completed torrent's bitfield must have pieces set"
     );
     Ok(())
 }
