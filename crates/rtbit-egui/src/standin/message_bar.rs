@@ -1,56 +1,10 @@
-//! Local stand-in for a fluent2 message bar.
+//! Safe daemon error text.
 //!
-//! A single dismissible strip. Replaced when `surfaces` grows one (design
-//! item 14). The text is already mapped; this widget does not format errors.
+//! The painted bar is `fluent2_egui::surfaces::MessageBar`. This module only
+//! maps a client error onto a fixed sentence so a transport failure never
+//! shows a token, a body or a host detail. A 400 keeps the daemon's
+//! validation sentence, which is already safe.
 
-/// One message the user can dismiss.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct MessageBar {
-    text: String,
-}
-
-impl MessageBar {
-    pub fn new(text: impl Into<String>) -> Self {
-        Self { text: text.into() }
-    }
-
-    pub fn text(&self) -> &str {
-        &self.text
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.text.is_empty()
-    }
-
-    pub fn clear(&mut self) {
-        self.text.clear();
-    }
-
-    pub fn set(&mut self, text: impl Into<String>) {
-        self.text = text.into();
-    }
-
-    /// Draw the bar. Returns true when the user dismisses it.
-    pub fn show(&mut self, ui: &mut egui::Ui) -> bool {
-        if self.text.is_empty() {
-            return false;
-        }
-        let mut dismissed = false;
-        ui.horizontal(|ui| {
-            ui.colored_label(egui::Color32::from_rgb(196, 43, 28), &self.text);
-            if ui.button("Dismiss").clicked() {
-                dismissed = true;
-            }
-        });
-        if dismissed {
-            self.text.clear();
-        }
-        dismissed
-    }
-}
-
-/// Words for a daemon error. Never includes a token or a raw response body.
-/// A 400 whose message is a plain validation sentence shows that sentence.
 pub fn map_error(err: &rtbit_client::Error) -> String {
     match err {
         rtbit_client::Error::Unreachable(_) => "The daemon is unreachable.".to_owned(),

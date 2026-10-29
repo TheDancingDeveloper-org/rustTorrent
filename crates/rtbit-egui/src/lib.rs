@@ -12,5 +12,5 @@ pub use keychain::{MemoryStore, OsKeychain, TokenStore};
 pub use screens::{
     AddRequest, AddSource, RowAction, RssView, SettingsChanges, SettingsDraft, SettingsTab,
 };
-pub use standin::message_bar::{MessageBar, map_error};
+pub use standin::message_bar::map_error;
 pub use state::{ListCache, StatusFilter};
