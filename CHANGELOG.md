@@ -9,11 +9,15 @@ upgrade notes in each release describe what to back up and check.
 
 ## [Unreleased]
 
+## [0.2.0-beta.3] - 2026-10-29
+
 ### Changed
 
 - The native client's file list is a tree, the daemon error bar is the Fluent
   message bar, and the status filter is a navigation pane. Error text stays the
   fixed safe sentences.
+- The published container image no longer needs the desktop workspace crates
+  to build. This release does not include Indexarr or the native client.
 
 ## [0.2.0-beta.1] - 2026-10-21
 
@@ -302,7 +306,8 @@ persistent session directory before upgrading.
 - The Docker build and web UI were consolidated so the shipped interface is
   built from the reviewed source tree.
 
-[Unreleased]: https://github.com/TheDancingDeveloper-org/rustTorrent/compare/v0.2.0-beta.1...HEAD
+[Unreleased]: https://github.com/TheDancingDeveloper-org/rustTorrent/compare/v0.2.0-beta.3...HEAD
+[0.2.0-beta.3]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.2.0-beta.3
 [0.2.0-beta.1]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.2.0-beta.1
 [0.1.0-rc.5]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.1.0-rc.5
 [0.1.0-rc.4]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.1.0-rc.4

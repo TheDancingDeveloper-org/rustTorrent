@@ -1,6 +1,6 @@
 [package]
 name = "swarmforge-buffers"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 edition = "2024"
 description = "Utils to work with byte buffers in librtbit source code"
 license = "Apache-2.0"

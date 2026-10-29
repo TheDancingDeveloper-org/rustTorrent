@@ -6698,7 +6698,7 @@ dependencies = [
 
 [[package]]
 name = "rtbit"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "anyhow",
  "bytes",
@@ -6732,7 +6732,7 @@ dependencies = [
 
 [[package]]
 name = "rtbit-client"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "http",
  "reqwest",
@@ -6746,7 +6746,7 @@ dependencies = [
 
 [[package]]
 name = "rtbit-desktop"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "anyhow",
  "directories",
@@ -6778,11 +6778,11 @@ dependencies = [
 
 [[package]]
 name = "rtbit-desktop-menu"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 
 [[package]]
 name = "rtbit-egui"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "eframe",
  "egui",
@@ -7910,7 +7910,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -7998,7 +7998,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-bencode"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "anyhow",
  "arrayvec",
@@ -8013,7 +8013,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-buffers"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "bytes",
  "serde",
@@ -8023,14 +8023,14 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-clone-to-owned"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "bytes",
 ]
 
 [[package]]
 name = "swarmforge-core"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8059,7 +8059,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-dht"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
@@ -8091,7 +8091,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-lsd"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "anyhow",
  "atoi 3.1.1",
@@ -8111,7 +8111,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-peer-protocol"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "anyhow",
  "bitvec",
@@ -8131,7 +8131,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-sha1-wrapper"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "assert_cfg",
  "aws-lc-rs",
@@ -8141,7 +8141,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-tracker-comms"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -8168,7 +8168,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-upnp"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "anyhow",
  "bstr",
@@ -8189,7 +8189,7 @@ dependencies = [
 
 [[package]]
 name = "swarmforge-upnp-serve"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "anyhow",
  "axum",
