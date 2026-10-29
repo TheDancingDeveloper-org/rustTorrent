@@ -10,8 +10,9 @@ WORKDIR /src/
 
 ENV OPENSSL_STATIC=1
 
-# Remove desktop workspace member (excluded by .dockerignore, needs glib)
-RUN sed -i '/"desktop\/src-tauri"/d' Cargo.toml
+# Desktop members are excluded by .dockerignore (they need glib and a GUI
+# toolchain). Drop them so the workspace manifest still loads.
+RUN sed -i '/"desktop\/src-tauri"/d; /"desktop\/menu"/d' Cargo.toml
 
 RUN --mount=type=cache,target=/usr/local/cargo/git/db \
     --mount=type=cache,target=/usr/local/cargo/registry/cache \
