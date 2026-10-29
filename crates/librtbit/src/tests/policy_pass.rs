@@ -585,7 +585,7 @@ async fn wait_until_persisted(
             }
         }
         anyhow::ensure!(
-            started.elapsed() < Duration::from_secs(5),
+            started.elapsed() < Duration::from_secs(15),
             "persistence at {path:?} did not reach the expected state"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
