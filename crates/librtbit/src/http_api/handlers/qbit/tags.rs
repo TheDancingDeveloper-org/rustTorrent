@@ -97,6 +97,31 @@ pub(super) async fn h_torrents_remove_tags(
     edit_torrent_tags(&state, &body, TagEdit::Remove).await
 }
 
+#[derive(Deserialize, Default)]
+pub(super) struct RenameTagForm {
+    #[serde(default, alias = "old")]
+    pub(super) from: String,
+    #[serde(default, alias = "new")]
+    pub(super) to: String,
+}
+
+/// Rename a tag in the registry and on every torrent that carries it.
+pub(super) async fn h_torrents_rename_tag(
+    State(state): State<Arc<QbitState>>,
+    body: Bytes,
+) -> &'static str {
+    let form: RenameTagForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
+    if let Err(error) = state
+        .api_state
+        .api
+        .api_rename_tag(&form.from, &form.to)
+        .await
+    {
+        warn!(%error, "qbit compat: error renaming tag");
+    }
+    "Ok."
+}
+
 pub(super) async fn h_torrents_set_tags(
     State(state): State<Arc<QbitState>>,
     body: Bytes,

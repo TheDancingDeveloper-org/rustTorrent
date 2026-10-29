@@ -62,6 +62,20 @@ impl TagManager {
         self.tags.read().contains(tag)
     }
 
+    /// Rename a registered tag. Returns false when `from` is not registered or
+    /// `to` already is. Does not touch per-torrent sets.
+    pub fn rename(&self, from: &str, to: &str) -> bool {
+        let mut all = self.tags.write();
+        if !all.remove(from) {
+            return false;
+        }
+        if !all.insert(to.to_owned()) {
+            all.insert(from.to_owned());
+            return false;
+        }
+        true
+    }
+
     pub fn snapshot(&self) -> BTreeSet<String> {
         self.tags.read().clone()
     }
@@ -87,5 +101,19 @@ mod tests {
         assert!(mgr.delete(&normalize_tags(["a", "zz"])));
         assert!(!mgr.exists("a"));
         assert!(!mgr.delete(&normalize_tags(["zz"])));
+    }
+
+    #[test]
+    fn rename_moves_a_registered_tag() {
+        let mgr = TagManager::new();
+        mgr.create(&normalize_tags(["a"]));
+        assert!(!mgr.rename("missing", "b"));
+        assert!(!mgr.rename("a", "a") || mgr.exists("a"));
+        assert!(mgr.rename("a", "b"));
+        assert!(!mgr.exists("a"));
+        assert!(mgr.exists("b"));
+        mgr.create(&normalize_tags(["c"]));
+        assert!(!mgr.rename("b", "c"));
+        assert!(mgr.exists("b"));
     }
 }

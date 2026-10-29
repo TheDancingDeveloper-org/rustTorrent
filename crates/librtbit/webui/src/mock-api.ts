@@ -973,6 +973,15 @@ export const MockAPI: RtbitAPI & { getVersion: () => Promise<string> } = {
     }
   },
 
+  renameTag: async (from: string, to: string): Promise<void> => {
+    await new Promise((r) => setTimeout(r, 30));
+    mockTags.delete(from);
+    mockTags.add(to);
+    for (const own of torrentTags.values()) {
+      if (own.delete(from)) own.add(to);
+    }
+  },
+
   addTorrentTags: async (ids: number[], tags: string[]): Promise<void> => {
     await new Promise((r) => setTimeout(r, 30));
     for (const id of ids) {
@@ -991,6 +1000,15 @@ export const MockAPI: RtbitAPI & { getVersion: () => Promise<string> } = {
       const own = torrentTags.get(id);
       if (!own) continue;
       for (const tag of tags) own.delete(tag);
+    }
+  },
+
+  setTorrentTags: async (ids: number[], tags: string[]): Promise<void> => {
+    await new Promise((r) => setTimeout(r, 30));
+    for (const id of ids) {
+      const own = new Set(tags.map((t) => t.trim()).filter(Boolean));
+      torrentTags.set(id, own);
+      for (const tag of own) mockTags.add(tag);
     }
   },
 

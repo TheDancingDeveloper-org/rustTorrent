@@ -799,6 +799,41 @@ impl Api {
         .await
     }
 
+    /// Rename a tag everywhere: the registry and every torrent that carries it.
+    pub async fn api_rename_tag(&self, from: &str, to: &str) -> Result<EmptyJsonResponse> {
+        let from = from.trim();
+        let to = to.trim();
+        if from.is_empty() || to.is_empty() {
+            return Err(ApiError::from((
+                StatusCode::BAD_REQUEST,
+                "tag name is required",
+            )));
+        }
+        if from == to {
+            return Ok(Default::default());
+        }
+        if !self.session.tags().rename(from, to) {
+            return Err(ApiError::from((StatusCode::CONFLICT, "cannot rename tag")));
+        }
+        let affected: Vec<ManagedTorrentHandle> = self.session.with_torrents(|iter| {
+            iter.filter(|(_, handle)| {
+                let mut own = handle.shared().tags.write();
+                if !own.remove(from) {
+                    return false;
+                }
+                own.insert(to.to_owned());
+                true
+            })
+            .map(|(_, handle)| handle.clone())
+            .collect()
+        });
+        for handle in affected {
+            self.session.try_update_persistence_metadata(&handle).await;
+        }
+        self.persist_tags().await?;
+        Ok(Default::default())
+    }
+
     /// Replace a torrent's tag set, registering any tags that are new.
     pub async fn api_set_torrent_tags(
         &self,

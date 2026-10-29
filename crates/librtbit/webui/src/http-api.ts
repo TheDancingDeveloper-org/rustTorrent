@@ -146,10 +146,12 @@ const postTagForm = async (
   path: string,
   ids: number[],
   tags: string[],
+  extra?: Record<string, string>,
 ): Promise<void> => {
   const body = new URLSearchParams();
   if (ids.length > 0) body.set("hashes", ids.join("|"));
-  body.set("tags", tags.join(","));
+  if (tags.length > 0 || extra === undefined) body.set("tags", tags.join(","));
+  if (extra) for (const [k, v] of Object.entries(extra)) body.set(k, v);
   const url = apiUrl + path;
   const response = await fetch(url, {
     method: "POST",
@@ -551,11 +553,22 @@ export const API: RtbitAPI & { getVersion: () => Promise<string> } = {
   deleteTags: (tags: string[]): Promise<void> => {
     return postTagForm("/api/v2/torrents/deleteTags", [], tags);
   },
+  renameTag: (from: string, to: string): Promise<void> => {
+    return postTagForm(
+      "/api/v2/torrents/renameTag",
+      [],
+      [],
+      { from, to },
+    );
+  },
   addTorrentTags: (ids: number[], tags: string[]): Promise<void> => {
     return postTagForm("/api/v2/torrents/addTags", ids, tags);
   },
   removeTorrentTags: (ids: number[], tags: string[]): Promise<void> => {
     return postTagForm("/api/v2/torrents/removeTags", ids, tags);
+  },
+  setTorrentTags: (ids: number[], tags: string[]): Promise<void> => {
+    return postTagForm("/api/v2/torrents/setTags", ids, tags);
   },
 
   // Alt speed

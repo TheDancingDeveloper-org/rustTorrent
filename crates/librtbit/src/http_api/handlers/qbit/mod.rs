@@ -618,6 +618,7 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
         .route("/addTags", post(h_torrents_add_tags))
         .route("/removeTags", post(h_torrents_remove_tags))
         .route("/setTags", post(h_torrents_set_tags))
+        .route("/renameTag", post(h_torrents_rename_tag))
         .route("/categories", get(h_categories))
         .route("/createCategory", post(h_create_category))
         .route("/editCategory", post(h_edit_category))
