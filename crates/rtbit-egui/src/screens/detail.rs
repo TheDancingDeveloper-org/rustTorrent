@@ -1,13 +1,17 @@
 //! Detail pane for the selected torrent.
 //!
-//! fluent2-egui has no tree view (design §6), so files are a flat list with
-//! the path as the name. Tabs are `surfaces::TabList`. The piece bar is a
-//! local stand-in: one coloured segment per piece, capped so a large torrent
-//! does not draw tens of thousands of rects.
+//! Files are a `data::TreeView`: folders are path prefixes and leaves are
+//! file indices. Tabs are `surfaces::TabList`. The piece bar is a local
+//! stand-in: one coloured segment per piece, capped so a large torrent does
+//! not draw tens of thousands of rects.
 
-use fluent2_egui::controls::{Appearance, Button, Checkbox, Input};
+use std::collections::BTreeMap;
+
+use fluent2_egui::controls::{Appearance, Button, CheckState, Input};
+use fluent2_egui::data::tree_view::{Children, TreeNode, TreeState, TreeView};
 use fluent2_egui::surfaces::TabList;
-use rtbit_client::{PeerList, PieceProgress, Torrent, TrackerList};
+use fluent2_egui::{Icon, IconName};
+use rtbit_client::{PeerList, PieceProgress, Torrent, TorrentFile, TrackerList};
 
 /// How many piece segments the bar will draw. Wider torrents are sampled.
 const PIECE_CAP: usize = 400;
@@ -57,6 +61,9 @@ pub struct DetailView {
 pub enum DetailAction {
     /// Toggle one file in or out of the download selection.
     SetIncluded { index: usize, included: bool },
+    /// Set every listed file the same way. A folder checkbox uses this so the
+    /// files under it move together.
+    SetIncludedMany { indices: Vec<usize>, included: bool },
     /// Attach one announce URL.
     AddTracker(String),
 }
@@ -68,6 +75,7 @@ pub fn draw_detail(
     view: &DetailView,
     tab: &mut DetailTab,
     tracker_url: &mut String,
+    tree: &mut TreeState<i64>,
     busy: bool,
 ) -> Option<DetailAction> {
     let mut action = None;
@@ -94,7 +102,7 @@ pub fn draw_detail(
     ui.separator();
     match *tab {
         DetailTab::Files => {
-            if let Some(next) = files(ui, torrent, busy) {
+            if let Some(next) = files(ui, torrent, tree, busy) {
                 action = Some(next);
             }
         }
@@ -109,7 +117,12 @@ pub fn draw_detail(
     action
 }
 
-fn files(ui: &mut egui::Ui, torrent: &Torrent, busy: bool) -> Option<DetailAction> {
+fn files(
+    ui: &mut egui::Ui,
+    torrent: &Torrent,
+    tree: &mut TreeState<i64>,
+    busy: bool,
+) -> Option<DetailAction> {
     let Some(files) = &torrent.files else {
         ui.label("No file list.");
         return None;
@@ -118,29 +131,181 @@ fn files(ui: &mut egui::Ui, torrent: &Torrent, busy: bool) -> Option<DetailActio
         ui.label("No files.");
         return None;
     }
+    let index = FileIndex::build(files);
     let mut action = None;
-    for (index, file) in files.iter().enumerate() {
-        ui.horizontal(|ui| {
-            let mut on = file.included;
-            let before = on;
-            ui.add_enabled_ui(!busy, |ui| {
-                ui.add(Checkbox::bool(&mut on, ""));
+    ui.add_enabled_ui(!busy, |ui| {
+        let response = TreeView::new("rtbit_files")
+            .label("Files")
+            .show(ui, tree, |parent, out| {
+                let children = match parent {
+                    None => index.roots.as_slice(),
+                    Some(key) => index.children.get(key).map(Vec::as_slice).unwrap_or(&[]),
+                };
+                for node in children {
+                    out.push(node_of(node, files, &index));
+                }
             });
-            if on != before && action.is_none() {
-                action = Some(DetailAction::SetIncluded {
-                    index,
-                    included: on,
-                });
-            }
-            let path = if file.components.is_empty() {
-                file.name.clone()
-            } else {
-                file.components.join("/")
-            };
-            ui.label(path);
-        });
-    }
+        if let Some(key) = response.check_toggled {
+            action = toggle_action(key, files, &index);
+        }
+    });
     action
+}
+
+/// A folder (`key` negative) or a file (`key` is the file index).
+struct Node {
+    key: i64,
+    label: String,
+    folder: bool,
+}
+
+struct FileIndex {
+    roots: Vec<Node>,
+    children: BTreeMap<i64, Vec<Node>>,
+    /// File indices under each folder, including nested ones.
+    members: BTreeMap<i64, Vec<usize>>,
+}
+
+impl FileIndex {
+    fn build(files: &[TorrentFile]) -> Self {
+        let mut folders: BTreeMap<Vec<String>, i64> = BTreeMap::new();
+        let mut children: BTreeMap<i64, Vec<Node>> = BTreeMap::new();
+        let mut members: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+        let mut roots: Vec<Node> = Vec::new();
+        let mut next_folder: i64 = -1;
+        for (index, file) in files.iter().enumerate() {
+            let parts = parts_of(file);
+            let (dirs, name) = match parts.split_last() {
+                Some((name, dirs)) => (dirs, name.clone()),
+                None => (&[][..], file.name.clone()),
+            };
+            let mut parent: Option<i64> = None;
+            let mut prefix: Vec<String> = Vec::new();
+            for dir in dirs {
+                prefix.push(dir.clone());
+                let key = if let Some(existing) = folders.get(&prefix) {
+                    *existing
+                } else {
+                    let key = next_folder;
+                    next_folder -= 1;
+                    folders.insert(prefix.clone(), key);
+                    let node = Node {
+                        key,
+                        label: dir.clone(),
+                        folder: true,
+                    };
+                    match parent {
+                        Some(parent_key) => children.entry(parent_key).or_default().push(node),
+                        None => roots.push(node),
+                    }
+                    key
+                };
+                members.entry(key).or_default().push(index);
+                parent = Some(key);
+            }
+            let node = Node {
+                key: i64::try_from(index).unwrap_or(i64::MAX),
+                label: name,
+                folder: false,
+            };
+            match parent {
+                Some(parent_key) => children.entry(parent_key).or_default().push(node),
+                None => roots.push(node),
+            }
+        }
+        Self {
+            roots,
+            children,
+            members,
+        }
+    }
+}
+
+fn parts_of(file: &TorrentFile) -> Vec<String> {
+    if file.components.is_empty() {
+        if file.name.is_empty() {
+            Vec::new()
+        } else {
+            vec![file.name.clone()]
+        }
+    } else {
+        file.components.clone()
+    }
+}
+
+/// A folder checkbox sets every file under it. Mixed or unchecked becomes
+/// included; a fully checked folder becomes excluded. A file toggles itself.
+fn toggle_action(key: i64, files: &[TorrentFile], index: &FileIndex) -> Option<DetailAction> {
+    if key < 0 {
+        let members = index.members.get(&key)?;
+        let included = folder_check(members, files) != CheckState::Checked;
+        let indices: Vec<usize> = members
+            .iter()
+            .copied()
+            .filter(|file_index| {
+                files
+                    .get(*file_index)
+                    .is_some_and(|file| file.included != included)
+            })
+            .collect();
+        if indices.is_empty() {
+            None
+        } else {
+            Some(DetailAction::SetIncludedMany { indices, included })
+        }
+    } else {
+        let file_index = usize::try_from(key).ok()?;
+        let file = files.get(file_index)?;
+        Some(DetailAction::SetIncluded {
+            index: file_index,
+            included: !file.included,
+        })
+    }
+}
+
+fn node_of(node: &Node, files: &[TorrentFile], index: &FileIndex) -> TreeNode<i64> {
+    if node.folder {
+        let members = index
+            .members
+            .get(&node.key)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let checked = folder_check(members, files);
+        TreeNode::new(node.key, node.label.clone())
+            .children(Children::Some)
+            .icon(Icon::new(IconName::Folder))
+            .checked(checked)
+    } else {
+        let included = files
+            .get(usize::try_from(node.key).unwrap_or(usize::MAX))
+            .is_some_and(|file| file.included);
+        TreeNode::new(node.key, node.label.clone())
+            .icon(Icon::new(IconName::Document))
+            .checked(if included {
+                CheckState::Checked
+            } else {
+                CheckState::Unchecked
+            })
+    }
+}
+
+fn folder_check(members: &[usize], files: &[TorrentFile]) -> CheckState {
+    let mut on = 0;
+    let mut off = 0;
+    for index in members {
+        match files.get(*index) {
+            Some(file) if file.included => on += 1,
+            Some(_) => off += 1,
+            None => {}
+        }
+    }
+    if on > 0 && off > 0 {
+        CheckState::Mixed
+    } else if on > 0 {
+        CheckState::Checked
+    } else {
+        CheckState::Unchecked
+    }
 }
 
 fn trackers(
@@ -272,4 +437,80 @@ fn sample(have: &[bool]) -> Vec<bool> {
         out.push(have[start..end].iter().any(|bit| *bit));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rtbit_client::Torrent;
+
+    fn file(name: &str, components: &[&str], included: bool) -> TorrentFile {
+        TorrentFile {
+            name: name.into(),
+            components: components.iter().map(|part| (*part).to_owned()).collect(),
+            length: 1,
+            included,
+        }
+    }
+
+    fn torrent(files: Vec<TorrentFile>) -> Torrent {
+        Torrent {
+            id: Some(1),
+            info_hash: "a".repeat(40),
+            name: Some("Example".into()),
+            output_folder: "/tmp".into(),
+            total_pieces: 1,
+            category: None,
+            tags: None,
+            trackers: None,
+            stats: None,
+            files: Some(files),
+        }
+    }
+
+    #[test]
+    fn a_folder_toggle_sets_every_file_under_it() {
+        let files = vec![
+            file("a.mkv", &["Season", "a.mkv"], false),
+            file("b.mkv", &["Season", "b.mkv"], true),
+            file("root.txt", &["root.txt"], false),
+        ];
+        let torrent = torrent(files.clone());
+        let files = torrent.files.as_deref().unwrap();
+        let index = FileIndex::build(files);
+        let season = index
+            .roots
+            .iter()
+            .find(|node| node.label == "Season")
+            .expect("season folder");
+        assert!(season.folder);
+        let action = toggle_action(season.key, files, &index).expect("folder action");
+        match action {
+            DetailAction::SetIncludedMany { indices, included } => {
+                assert!(included, "a mixed folder becomes included");
+                assert_eq!(indices, vec![0]);
+            }
+            other => panic!("folder toggle must cover its files, got {other:?}"),
+        }
+        // Once every file under the folder is included, the same click excludes them all.
+        let all_on = vec![
+            file("a.mkv", &["Season", "a.mkv"], true),
+            file("b.mkv", &["Season", "b.mkv"], true),
+            file("root.txt", &["root.txt"], false),
+        ];
+        let index = FileIndex::build(&all_on);
+        let season = index
+            .roots
+            .iter()
+            .find(|node| node.label == "Season")
+            .expect("season folder");
+        let action = toggle_action(season.key, &all_on, &index).expect("folder action");
+        match action {
+            DetailAction::SetIncludedMany { indices, included } => {
+                assert!(!included);
+                assert_eq!(indices, vec![0, 1]);
+            }
+            other => panic!("expected every nested file, got {other:?}"),
+        }
+    }
 }

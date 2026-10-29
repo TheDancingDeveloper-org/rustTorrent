@@ -930,6 +930,37 @@ fn an_unreachable_daemon_shows_a_mapped_message_without_the_detail() {
     assert!(shows_mem(&harness, "Dismiss"));
 }
 
+/// Picking a status in the navigation pane hides rows that do not match.
+#[test]
+fn the_status_filter_hides_rows_that_do_not_match() {
+    let mut harness = harness(scripted(Script::Ok));
+    on_main(&mut harness);
+    harness.run();
+    assert!(shows(&harness, "Example torrent"));
+    // NavigationView items are tabs. click_tab is the detail strip, so click
+    // the status tab by its AccessKit label.
+    click_status(&mut harness, "Paused");
+    harness.run_steps(2);
+    assert!(
+        !shows(&harness, "Example torrent"),
+        "a live torrent must leave the grid when the filter is Paused"
+    );
+    assert!(shows(&harness, "No torrents match the filter."));
+    click_status(&mut harness, "All");
+    harness.run_steps(2);
+    assert!(shows(&harness, "Example torrent"));
+}
+
+fn click_status(harness: &mut Harness<'static, App<Scripted>>, name: &str) {
+    harness
+        .query_all(egui_kittest::kittest::by().predicate(move |node| {
+            node.label().as_deref() == Some(name) && node.role() == Role::Tab
+        }))
+        .next()
+        .unwrap_or_else(|| panic!("{name} status tab"))
+        .click();
+}
+
 /// The detail pane's four tabs are reachable and each names its content.
 #[test]
 fn detail_tabs_name_files_trackers_peers_and_pieces() {
@@ -980,7 +1011,13 @@ fn click_tab(harness: &mut Harness<'static, App<Scripted>>, label: &str) {
         .collect();
     // The harness is 1400 tall so the 180px detail pane is on screen. A list
     // whose center sits past that is clipped and its clicks never land.
-    let Some(rect) = rects.into_iter().find(|rect| rect.center().y < 1400.0) else {
+    // NavigationView is also a TabList, and it sits above the detail pane.
+    // The detail strip is the lowest list still inside the window.
+    let Some(rect) = rects
+        .into_iter()
+        .filter(|rect| rect.center().y < 1400.0)
+        .max_by(|a, b| a.center().y.total_cmp(&b.center().y))
+    else {
         panic!("detail tab list is outside the window");
     };
     let slice = rect.width() / DETAIL.len() as f32;

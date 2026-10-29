@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use fluent2_egui::controls::{Appearance, Button, Input};
 use fluent2_egui::data::DataGridState;
+use fluent2_egui::data::tree_view::TreeState;
 use fluent2_egui::office::status_bar::StatusBar;
 use fluent2_egui::office::{TitleBar, WindowAction, window_command};
 use fluent2_egui::theme::{Theme, install};
@@ -335,22 +336,10 @@ impl LoginAttempt for DaemonLogin {
             session.runtime.block_on(async {
                 match action {
                     DetailAction::SetIncluded { index, included } => {
-                        // The pane only knows the one file that changed. The
-                        // current selection is the files the last poll marked
-                        // included, with this one flipped.
-                        let torrent = session.client.torrent(id).await?;
-                        let files = torrent.files.unwrap_or_default();
-                        let mut indices: Vec<usize> = files
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(i, file)| file.included.then_some(i))
-                            .filter(|i| *i != index)
-                            .collect();
-                        if included {
-                            indices.push(index);
-                            indices.sort_unstable();
-                        }
-                        session.client.update_only_files(id, &indices).await
+                        post_inclusion(&mut session.client, id, &[index], included).await
+                    }
+                    DetailAction::SetIncludedMany { indices, included } => {
+                        post_inclusion(&mut session.client, id, &indices, included).await
                     }
                     DetailAction::AddTracker(url) => session.client.add_trackers(id, &[url]).await,
                 }
@@ -433,8 +422,8 @@ pub struct App<L: LoginAttempt = DaemonLogin, S: TokenStore = OsKeychain> {
     confirm_password: String,
     /// Shown under the form after a failed attempt. Empty when there is none.
     error: String,
-    /// Dismissible stand-in under the command bar. One message at a time.
-    notice: crate::MessageBar,
+    /// Dismissible error bar under the title bar. Empty when there is none.
+    notice: String,
     /// Refresh token last written to the keychain, so a rotation is stored once.
     stored_refresh: Option<String>,
     /// Status check in flight before the connect screen decides on setup.
@@ -467,6 +456,8 @@ pub struct App<L: LoginAttempt = DaemonLogin, S: TokenStore = OsKeychain> {
     /// Selected torrent's files, trackers, peers and pieces.
     detail: DetailView,
     detail_tab: DetailTab,
+    /// Expanded folders in the file tree. The shell owns it.
+    file_tree: TreeState<i64>,
     tracker_url: String,
     detail_poll: Option<DetailPoll>,
     detail_poll_at: Option<Instant>,
@@ -511,7 +502,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             setup_token: String::new(),
             confirm_password: String::new(),
             error: String::new(),
-            notice: crate::MessageBar::default(),
+            notice: String::new(),
             stored_refresh: None,
             status_flight: None,
             status_known: false,
@@ -535,6 +526,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             add_flight: None,
             detail: DetailView::default(),
             detail_tab: DetailTab::Files,
+            file_tree: TreeState::default(),
             tracker_url: String::new(),
             detail_poll: None,
             detail_poll_at: None,
@@ -566,7 +558,7 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             setup_token: String::new(),
             confirm_password: String::new(),
             error: String::new(),
-            notice: crate::MessageBar::default(),
+            notice: String::new(),
             stored_refresh: None,
             status_flight: None,
             status_known: false,
@@ -590,6 +582,7 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             add_flight: None,
             detail: DetailView::default(),
             detail_tab: DetailTab::Files,
+            file_tree: TreeState::default(),
             tracker_url: String::new(),
             detail_poll: None,
             detail_poll_at: None,
@@ -627,7 +620,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
     /// Record a message the user can read, on the screen and in the bar.
     fn fail(&mut self, message: impl Into<String>) {
         let message = message.into();
-        self.notice.set(message.clone());
+        self.notice = message.clone();
         self.error = message;
     }
 
@@ -812,7 +805,18 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             egui::vec2(ui.available_width(), body),
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
-                self.notice.show(ui);
+                if !self.notice.is_empty() {
+                    let text = self.notice.clone();
+                    let bar = fluent2_egui::surfaces::MessageBar::new(
+                        fluent2_egui::surfaces::Intent::Error,
+                        text,
+                    )
+                    .dismissible()
+                    .show(ui);
+                    if bar.dismissed {
+                        self.notice.clear();
+                    }
+                }
                 match self.screen {
                     Screen::Connect => self.connect_screen(ui),
                     Screen::Setup => self.setup_screen(ui),
@@ -1065,6 +1069,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             &self.detail,
             &mut self.detail_tab,
             &mut self.tracker_url,
+            &mut self.file_tree,
             self.detail_flight.is_some(),
         );
         if let Some(action) = action {
@@ -1478,4 +1483,29 @@ struct ActionFlight {
 
 fn login_message(err: &Error) -> String {
     crate::map_error(err)
+}
+
+/// The pane reports which files changed. The posted selection is every file
+/// the last poll marked included, with those files set to `included`.
+async fn post_inclusion(
+    client: &mut Client,
+    id: u64,
+    changed: &[usize],
+    included: bool,
+) -> Result<(), Error> {
+    let torrent = client.torrent(id).await?;
+    let files = torrent.files.unwrap_or_default();
+    let changed_set: std::collections::BTreeSet<usize> = changed.iter().copied().collect();
+    let mut indices: Vec<usize> = files
+        .iter()
+        .enumerate()
+        .filter_map(|(i, file)| file.included.then_some(i))
+        .filter(|i| !changed_set.contains(i))
+        .collect();
+    if included {
+        indices.extend(changed.iter().copied());
+        indices.sort_unstable();
+        indices.dedup();
+    }
+    client.update_only_files(id, &indices).await
 }
