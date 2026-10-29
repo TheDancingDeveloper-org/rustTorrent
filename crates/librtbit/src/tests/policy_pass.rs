@@ -8,6 +8,7 @@ use std::{
 };
 
 use anyhow::Context;
+use serde::Deserialize;
 use tempfile::TempDir;
 use tokio::time::{Duration, timeout};
 
@@ -544,17 +545,44 @@ async fn existing_part_file_is_adopted_with_switch_off() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Poll `session.json` until `ready` is true, or give up after five seconds.
-/// The periodic save rewrites the whole file, so a match means that save
-/// finished its rename rather than a sleep that hopes the timer has run.
-async fn wait_until_persisted(persist: &Path, ready: impl Fn(&str) -> bool) -> anyhow::Result<()> {
+/// One torrent as written to `session.json`. Only the fields these tests wait
+/// for are read; the rest of the file is ignored.
+#[derive(Deserialize)]
+struct PersistedTorrent {
+    #[serde(default)]
+    uploaded_bytes: u64,
+    #[serde(default)]
+    share_limits: Option<PersistedShareLimits>,
+}
+
+#[derive(Deserialize)]
+struct PersistedShareLimits {
+    #[serde(default)]
+    max_seeding_time: Option<Duration>,
+}
+
+/// Poll `session.json` until `ready` is true of a torrent, or five seconds pass.
+/// The save renames the file into place, so a missing or partial file is retried.
+/// Fields are parsed, not matched as substrings: a digit run in `added_on` or
+/// the info hash must not count.
+async fn wait_until_persisted(
+    persist: &Path,
+    ready: impl Fn(&PersistedTorrent) -> bool,
+) -> anyhow::Result<()> {
     let path = persist.join("session.json");
     let started = std::time::Instant::now();
     loop {
-        if let Ok(text) = std::fs::read_to_string(&path)
-            && ready(&text)
+        if let Ok(bytes) = std::fs::read(&path)
+            && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
+            && let Some(torrents) = value.get("torrents").and_then(|entry| entry.as_object())
         {
-            return Ok(());
+            for torrent in torrents.values() {
+                if let Ok(parsed) = serde_json::from_value::<PersistedTorrent>(torrent.clone())
+                    && ready(&parsed)
+                {
+                    return Ok(());
+                }
+            }
         }
         anyhow::ensure!(
             started.elapsed() < Duration::from_secs(5),
@@ -647,8 +675,7 @@ async fn upload_total_saved_by_timer_survives_drop_without_stop() -> anyhow::Res
     seed.shared()
         .uploaded_bytes_base
         .store(total, Ordering::Relaxed);
-    let needle = total.to_string();
-    wait_until_persisted(persist.path(), |text| text.contains(&needle)).await?;
+    wait_until_persisted(persist.path(), |torrent| torrent.uploaded_bytes == total).await?;
     // Kill without stop(): the session's tasks end with no final save.
     kill.cancel();
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -696,7 +723,14 @@ async fn share_limits_saved_on_set_survive_drop_without_stop() -> anyhow::Result
     let id = seed.id();
     // set_share_limits saves at once. Wait until that write is on disk, then
     // kill: a fixed sleep loses the race when the rename is still in flight.
-    wait_until_persisted(persist.path(), |text| text.contains("7200")).await?;
+    wait_until_persisted(persist.path(), |torrent| {
+        torrent
+            .share_limits
+            .as_ref()
+            .and_then(|limits| limits.max_seeding_time)
+            == Some(Duration::from_secs(7200))
+    })
+    .await?;
     kill.cancel();
     tokio::time::sleep(Duration::from_millis(50)).await;
     drop(seed);
