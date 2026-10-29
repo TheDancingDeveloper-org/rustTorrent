@@ -6847,6 +6847,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rtbit-fluent-mockup"
+version = "0.2.0-beta.3"
+dependencies = [
+ "eframe",
+ "egui",
+ "fluent2-egui",
+ "fluent2-icons",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "winit",
+]
+
+[[package]]
 name = "rusqlite"
 version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
