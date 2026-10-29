@@ -133,6 +133,10 @@ pub struct Session {
 
     // Lifecycle management
     cancellation_token: CancellationToken,
+    /// Child of `cancellation_token` that owns the TCP/uTP listeners.
+    /// Cancelled in `stop` only after torrents have paused, so the uTP
+    /// dispatcher is not torn down while the accept loop is still running.
+    listener_cancellation_token: CancellationToken,
     _cancellation_token_drop_guard: DropGuard,
 
     // Runtime settings
@@ -259,12 +263,17 @@ impl Session {
                 None => None,
             };
 
+            // The listener token is a child of the session token, but it is only
+            // cancelled after torrents have been paused. Cancelling it here would
+            // drop the uTP socket (and kill its dispatcher) while task_listener is
+            // still in accept(), which logs "error accepting uTP: dispatcher dead".
+            let listener_token = token.child_token();
             let listen_result = if let Some(listen_opts) = opts.listen.take() {
                 Some(
                     listen_opts
                         .start(
                             opts.root_span.as_ref().and_then(|s| s.id()),
-                            token.child_token(),
+                            listener_token.clone(),
                             bind_device.as_ref(),
                         )
                         .await
@@ -535,6 +544,7 @@ impl Session {
                 db: RwLock::new(Default::default()),
                 _cancellation_token_drop_guard: token.clone().drop_guard(),
                 cancellation_token: token,
+                listener_cancellation_token: listener_token,
                 announce_port: AnnouncePort::new(
                     listen_result
                         .as_ref()
@@ -800,6 +810,10 @@ impl Session {
                 debug!("error pausing torrent: {e:#}");
             }
         }
+        // Torrents (and their bitfield flushers) are paused above. Only now
+        // stop the listeners: this drops the uTP socket after the accept loop
+        // observes cancellation, instead of the other way around.
+        self.listener_cancellation_token.cancel();
         self.cancellation_token.cancel();
         // this sucks, but hopefully will be enough
         tokio::time::sleep(Duration::from_secs(1)).await;

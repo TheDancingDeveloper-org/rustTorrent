@@ -590,6 +590,14 @@ impl TorrentStateLive {
     }
 
     pub fn pause(&self) -> anyhow::Result<TorrentStatePaused> {
+        // Flush while the bitfield's flusher task is still alive. The bitfield
+        // is moved into the paused state below and dropped later, possibly after
+        // session shutdown has cancelled background tasks; a drop-time flush
+        // then fails with "flusher task is dead" and the last pieces are lost.
+        {
+            let mut g = self.lock_write("pause_flush");
+            g.try_flush_bitv(&self.shared, false);
+        }
         self.cancellation_token.cancel();
 
         let mut g = self.lock_write("pause");
