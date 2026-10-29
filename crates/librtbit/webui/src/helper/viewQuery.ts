@@ -169,20 +169,29 @@ export function viewsEqual(a: ViewQuery, b: ViewQuery): boolean {
 }
 
 type HistoryLike = {
+  pushState: (data: unknown, unused: string, url?: string | URL | null) => void;
   replaceState: (data: unknown, unused: string, url?: string | URL | null) => void;
 };
 
 type LocationLike = { pathname: string; search: string };
 
-/** Write the view into the current URL without adding a history entry. */
+export type ViewHistoryMode = "push" | "replace";
+
+/**
+ * Write the view into the current URL. `push` (the default) adds a history
+ * entry so the back and forward buttons move between views. `replace` updates
+ * the current entry, used when the view is being restored from the URL.
+ */
 export function writeViewQuery(
   view: ViewQuery,
   location: LocationLike = window.location,
   history: HistoryLike = window.history,
+  mode: ViewHistoryMode = "push",
 ): void {
   const query = formatViewQuery(view);
   const next = query === "" ? location.pathname : `${location.pathname}?${query}`;
   const current = `${location.pathname}${location.search}`;
   if (next === current) return;
-  history.replaceState(null, "", next);
+  const write = mode === "replace" ? history.replaceState : history.pushState;
+  write.call(history, null, "", next);
 }

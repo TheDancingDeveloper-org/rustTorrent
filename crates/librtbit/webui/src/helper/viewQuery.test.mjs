@@ -50,18 +50,38 @@ test("formatViewQuery omits defaults and round-trips", () => {
   assert.equal(viewsEqual(parseViewQuery(`?${encoded}`), view), true);
 });
 
-test("writeViewQuery replaces the query and skips a no-op", () => {
-  const calls = [];
+test("writeViewQuery pushes a history entry and skips a no-op", () => {
+  const pushed = [];
+  const replaced = [];
   const location = { pathname: "/ui", search: "" };
   const history = {
-    replaceState: (_data, _unused, url) => calls.push(String(url)),
+    pushState: (_data, _unused, url) => pushed.push(String(url)),
+    replaceState: (_data, _unused, url) => replaced.push(String(url)),
   };
   writeViewQuery(
     { ...DEFAULT_VIEW_QUERY, search: "iso", status: "completed" },
     location,
     history,
   );
-  assert.deepEqual(calls, ["/ui?q=iso&status=completed"]);
+  assert.deepEqual(pushed, ["/ui?q=iso&status=completed"]);
+  assert.deepEqual(replaced, []);
   writeViewQuery(DEFAULT_VIEW_QUERY, { pathname: "/ui", search: "" }, history);
-  assert.equal(calls.length, 1);
+  assert.equal(pushed.length, 1);
+});
+
+test("writeViewQuery can replace the current entry", () => {
+  const pushed = [];
+  const replaced = [];
+  const history = {
+    pushState: (_data, _unused, url) => pushed.push(String(url)),
+    replaceState: (_data, _unused, url) => replaced.push(String(url)),
+  };
+  writeViewQuery(
+    { ...DEFAULT_VIEW_QUERY, sortColumn: "name" },
+    { pathname: "/", search: "" },
+    history,
+    "replace",
+  );
+  assert.deepEqual(replaced, ["/?sort=name"]);
+  assert.deepEqual(pushed, []);
 });

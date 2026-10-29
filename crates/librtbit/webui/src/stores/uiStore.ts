@@ -9,7 +9,9 @@ import {
 import {
   DEFAULT_VIEW_QUERY,
   parseViewQuery,
+  viewsEqual,
   writeViewQuery,
+  type ViewHistoryMode,
   type ViewQuery,
 } from "../helper/viewQuery";
 
@@ -20,9 +22,9 @@ const initialView: ViewQuery =
     ? DEFAULT_VIEW_QUERY
     : parseViewQuery(window.location.search);
 
-function publishView(patch: Partial<ViewQuery>): void {
+function viewFromState(patch: Partial<ViewQuery> = {}): ViewQuery {
   const state = useUIStore.getState();
-  writeViewQuery({
+  return {
     search: state.searchQuery,
     status: state.statusFilter,
     category: state.categoryFilter,
@@ -31,7 +33,37 @@ function publishView(patch: Partial<ViewQuery>): void {
     sortColumn: state.sortColumn,
     sortDirection: state.sortDirection,
     ...patch,
+  };
+}
+
+function publishView(
+  patch: Partial<ViewQuery>,
+  mode: ViewHistoryMode = "push",
+): void {
+  writeViewQuery(viewFromState(patch), window.location, window.history, mode);
+}
+
+/** Apply the URL's view to the store. Used on load and on back/forward. */
+export function applyViewFromLocation(
+  search: string = window.location.search,
+): void {
+  const next = parseViewQuery(search);
+  const state = useUIStore.getState();
+  if (viewsEqual(next, viewFromState())) return;
+  useUIStore.setState({
+    searchQuery: next.search,
+    statusFilter: next.status,
+    categoryFilter: next.category,
+    trackerFilter: next.tracker,
+    tagFilter: next.tag,
+    sortColumn: next.sortColumn,
+    sortDirection: next.sortDirection,
   });
+  void state;
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("popstate", () => applyViewFromLocation());
 }
 
 function getDefaultViewMode(): "full" | "compact" {
