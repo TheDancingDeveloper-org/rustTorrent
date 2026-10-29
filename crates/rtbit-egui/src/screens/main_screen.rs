@@ -1,15 +1,17 @@
-//! Main screen: a hand-laid filter sidebar and a virtualised torrent grid.
+//! Main screen: a navigation pane for status and a virtualised torrent grid.
 //!
-//! fluent2-egui has no navigation view and no split view (design §6), so the
-//! sidebar is an egui `SidePanel`. The grid is `data::DataGrid`, which
-//! virtualises, so this screen does not cap the list.
+//! Status is `data::NavigationView`. Category, tracker and the speed readout
+//! stay as buttons under the pane: their labels come from the daemon, and a
+//! navigation item key has to be a static string. The grid is `data::DataGrid`,
+//! which virtualises, so this screen does not cap the list.
 
+use fluent2_egui::IconName;
 use fluent2_egui::controls::{Appearance, Button, Checkbox, Input};
 use fluent2_egui::data::data_grid::{Align, Column, ColumnWidth};
+use fluent2_egui::data::nav_view::{NavState, NavigationView};
 use fluent2_egui::data::{DataGrid, DataGridSize, DataGridState, RowId, SelectionMode};
 use fluent2_egui::office::command_bar::{CommandBar, CommandItem};
 use fluent2_egui::surfaces::{CloseReason, Dialog, DialogResult};
-use fluent2_icons::Icon;
 use rtbit_client::Torrent;
 
 use crate::format;
@@ -97,25 +99,25 @@ pub fn draw_main(
     let items = [
         CommandItem {
             key: "add",
-            icon: Icon::Add,
+            icon: IconName::Add,
             label: "Add",
             priority: 100,
         },
         CommandItem {
             key: "start",
-            icon: Icon::ArrowClockwise,
+            icon: IconName::ArrowClockwise,
             label: "Start",
             priority: 90,
         },
         CommandItem {
             key: "pause",
-            icon: Icon::Dismiss,
+            icon: IconName::Dismiss,
             label: "Pause",
             priority: 80,
         },
         CommandItem {
             key: "delete",
-            icon: Icon::Delete,
+            icon: IconName::Delete,
             label: "Delete",
             priority: 70,
         },
@@ -135,13 +137,22 @@ pub fn draw_main(
         }
     }
 
-    egui::Panel::left("rtbit_sidebar")
-        .resizable(false)
-        .exact_size(196.0)
-        .show(ui, |ui| {
-            sidebar(ui, cache, status, category, tracker);
-        });
-    egui::CentralPanel::default_margins().show(ui, |ui| {
+    let mut nav = NavState {
+        selected: Some(status_key(*status).to_owned()),
+        ..NavState::default()
+    };
+    let view = NavigationView::new("rtbit_status")
+        .title("Torrents")
+        .item("all", IconName::Home, "All")
+        .item("live", IconName::ArrowClockwise, "Live")
+        .item("paused", IconName::Dismiss, "Paused")
+        .item("error", IconName::ErrorCircle, "Error")
+        .item("initializing", IconName::ArrowClockwise, "Initializing");
+    if let Some(key) = nav.selected.clone() {
+        *status = status_from_key(&key);
+    }
+    view.show(ui, &mut nav, |ui| {
+        filters(ui, cache, category, tracker);
         if let Some(error) = &cache.error {
             ui.colored_label(egui::Color32::from_rgb(196, 43, 28), error);
             ui.add_space(4.0);
@@ -160,42 +171,44 @@ pub fn draw_main(
         let result = Dialog::new("rtbit_delete")
             .title("Delete torrent")
             .actions(|actions| {
-                actions.primary("Delete");
-                actions.secondary("Cancel");
+                actions.primary("delete", "Delete");
+                actions.secondary("cancel", "Cancel");
             })
             .show(ui.ctx(), rows.confirm_delete, |ui| {
                 ui.label("Delete this torrent and its files?");
             });
-        if let DialogResult::Closed(CloseReason::Button("Delete")) = result {
+        if let DialogResult::Closed(CloseReason::Button(id)) = result
+            && id == "delete"
+        {
             out.action = Some(RowAction::Delete);
         }
     }
     out
 }
 
-fn sidebar(
-    ui: &mut egui::Ui,
-    cache: &ListCache,
-    status: &mut StatusFilter,
-    category: &mut String,
-    tracker: &mut String,
-) {
+fn status_key(status: StatusFilter) -> &'static str {
+    match status {
+        StatusFilter::All => "all",
+        StatusFilter::Live => "live",
+        StatusFilter::Paused => "paused",
+        StatusFilter::Error => "error",
+        StatusFilter::Initializing => "initializing",
+    }
+}
+
+fn status_from_key(key: &str) -> StatusFilter {
+    match key {
+        "live" => StatusFilter::Live,
+        "paused" => StatusFilter::Paused,
+        "error" => StatusFilter::Error,
+        "initializing" => StatusFilter::Initializing,
+        _ => StatusFilter::All,
+    }
+}
+
+fn filters(ui: &mut egui::Ui, cache: &ListCache, category: &mut String, tracker: &mut String) {
     ui.add_space(8.0);
     ui.label("Status");
-    for filter in StatusFilter::ALL {
-        let on = *status == filter;
-        if ui
-            .add(Button::new(filter.label()).appearance(if on {
-                Appearance::Primary
-            } else {
-                Appearance::Secondary
-            }))
-            .clicked()
-        {
-            *status = filter;
-        }
-    }
-    ui.add_space(12.0);
     choice(ui, "Category", category, &cache.categories());
     ui.add_space(8.0);
     choice(ui, "Tracker", tracker, &cache.trackers());
@@ -354,8 +367,8 @@ fn add_dialog(ctx: &egui::Context, open: &mut bool, draft: &mut AddDraft) -> Opt
     let result = Dialog::new("rtbit_add")
         .title("Add torrent")
         .actions(|actions| {
-            actions.primary("Add torrent");
-            actions.secondary("Cancel");
+            actions.primary("add", "Add torrent");
+            actions.secondary("cancel", "Cancel");
         })
         .show(ctx, open, |ui| {
             ui.add(Input::new(&mut draft.magnet).label("Magnet link"));
@@ -388,7 +401,7 @@ fn add_dialog(ctx: &egui::Context, open: &mut bool, draft: &mut AddDraft) -> Opt
             }
         });
     match result {
-        DialogResult::Closed(CloseReason::Button("Add torrent")) => {
+        DialogResult::Closed(CloseReason::Button(id)) if id == "add" => {
             ctx.data_mut(|data| data.insert_temp(egui::Id::new("rtbit_add_confirm"), true));
             *open = true;
         }

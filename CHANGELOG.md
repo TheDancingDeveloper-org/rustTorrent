@@ -9,6 +9,12 @@ upgrade notes in each release describe what to back up and check.
 
 ## [Unreleased]
 
+### Changed
+
+- The native client's file list is a tree, the daemon error bar is the Fluent
+  message bar, and the status filter is a navigation pane. Error text stays the
+  fixed safe sentences.
+
 ## [0.2.0-beta.1] - 2026-10-21
 
 ### Added

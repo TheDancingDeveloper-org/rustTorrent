@@ -980,7 +980,13 @@ fn click_tab(harness: &mut Harness<'static, App<Scripted>>, label: &str) {
         .collect();
     // The harness is 1400 tall so the 180px detail pane is on screen. A list
     // whose center sits past that is clipped and its clicks never land.
-    let Some(rect) = rects.into_iter().find(|rect| rect.center().y < 1400.0) else {
+    // NavigationView is also a TabList, and it sits above the detail pane.
+    // The detail strip is the lowest list still inside the window.
+    let Some(rect) = rects
+        .into_iter()
+        .filter(|rect| rect.center().y < 1400.0)
+        .max_by(|a, b| a.center().y.total_cmp(&b.center().y))
+    else {
         panic!("detail tab list is outside the window");
     };
     let slice = rect.width() / DETAIL.len() as f32;
