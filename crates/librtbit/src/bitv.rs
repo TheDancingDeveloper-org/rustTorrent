@@ -106,6 +106,9 @@ impl DiskBackedBitV {
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<DiskFlushRequest>();
         let flush_filename = filename.clone();
+        // Detached on purpose: the task must outlive the session's cancellation
+        // token so a torrent paused during shutdown can still flush. It exits
+        // when every sender (the bitfield) is dropped.
         librtbit_core::spawn_utils::spawn(
             debug_span!("diskbitv-flusher", ?filename),
             format!("DiskBackedBitV::flusher {filename:?}"),
