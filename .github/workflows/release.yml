@@ -5,6 +5,9 @@ on:
     tags: ['v*']
   # Manual re-publish of an existing tag, and the stable-release step of
   # promote-release.yml, which calls this workflow once the stable tag exists.
+  # Dispatch from the default branch to re-run a tag whose release failed:
+  # the sign and channel jobs take packaging/scripts from the dispatching
+  # commit, so a fix to the release tooling needs no new or moved tag.
   workflow_dispatch:
     inputs:
       tag:
@@ -142,6 +145,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.tag || github.ref_name }}
+      # The release tooling (packaging/scripts) comes from the workflow's own
+      # commit, not the tag: a manual re-run of an existing tag then uses the
+      # fixed scripts from the default branch, while the artefacts stay those
+      # built from the tag. On a tag push the two are the same commit.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: release-tooling
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-artifacts
@@ -163,7 +174,7 @@ jobs:
       # Authenticode-sign the .exe with an RFC 3161 timestamp before anything
       # hashes it: this rewrites SHA256SUMS so the attestation and the cosign
       # signature below both cover the signed bytes.
-      - name: Authenticode-sign the Windows executable
+      - name: Authenticode-sign the Windows executables
         env:
           RUSTTORRENT_AUTHENTICODE_PFX_B64: ${{ secrets.RUSTTORRENT_AUTHENTICODE_PFX_B64 }}
           RUSTTORRENT_AUTHENTICODE_PFX_PASSWORD: ${{ secrets.RUSTTORRENT_AUTHENTICODE_PFX_PASSWORD }}
@@ -171,7 +182,7 @@ jobs:
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
           test -n "$tag"
-          bash packaging/scripts/sign-windows.sh "$tag" release-artifacts
+          bash release-tooling/packaging/scripts/sign-windows.sh "$tag" release-artifacts
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -224,6 +235,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.tag || github.ref_name }}
+      # The release tooling (packaging/scripts) comes from the workflow's own
+      # commit, not the tag: a manual re-run of an existing tag then uses the
+      # fixed scripts from the default branch, while the artefacts stay those
+      # built from the tag. On a tag push the two are the same commit.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: release-tooling
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-artifacts-signed
@@ -270,7 +289,7 @@ jobs:
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
           test -n "$tag"
-          packaging/scripts/verify-release.sh "$tag" release-artifacts
+          bash release-tooling/packaging/scripts/verify-release.sh "$tag" release-artifacts
       - name: Render AUR PKGBUILD
         shell: bash
         run: |

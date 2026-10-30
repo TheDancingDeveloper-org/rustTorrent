@@ -1,8 +1,10 @@
 name: Release dry run
 
 # Exercise the build that `release.yml` runs on a tag, without publishing
-# anything: no deploy, no Authenticode signature, no attestation, no cosign
-# signature, no GitHub release and no release secrets. This exists so that a
+# anything: no deploy, no attestation, no cosign signature, no GitHub release
+# and no release secrets. It Authenticode-signs the Windows executables with a
+# throwaway self-signed certificate minted per run, so the signing script runs
+# on every change to the release tooling; the real key is used only on tags. This exists so that a
 # release tag is not the first time the packaging path sees a change to the
 # release tooling (WI-2070).
 #
@@ -169,3 +171,48 @@ jobs:
           path: release-artifacts/
           if-no-files-found: error
           retention-days: 7
+      # Run the real signing script against every staged .exe with a throwaway
+      # self-signed certificate, then check each signature and its RFC 3161
+      # timestamp. Catches signing-path breakage (such as a second executable)
+      # before a tag does.
+      - name: Ensure osslsigncode is available
+        shell: bash
+        run: |
+          if command -v osslsigncode >/dev/null 2>&1; then
+            exit 0
+          fi
+          sudo=""
+          if [[ "$(id -u)" != 0 ]]; then
+            sudo="sudo -n"
+          fi
+          if ! { $sudo apt-get update -qq && $sudo apt-get install -y --no-install-recommends osslsigncode; }; then
+            echo "::error::osslsigncode is missing and could not be installed; add it to the runner image"
+            exit 1
+          fi
+      - name: Authenticode-sign with a throwaway certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.tag.outputs.tag }}"
+          umask 077
+          cert=$(mktemp -d "$RUNNER_TEMP/dry-run-cert.XXXXXX")
+          trap 'rm -rf "$cert"' EXIT
+          openssl req -x509 -newkey rsa:3072 -nodes -days 1 \
+            -subj "/CN=rustTorrent release dry run" \
+            -addext "extendedKeyUsage=codeSigning" \
+            -keyout "$cert/key.pem" -out "$cert/cert.pem"
+          pass=$(openssl rand -hex 16)
+          openssl pkcs12 -export -inkey "$cert/key.pem" -in "$cert/cert.pem" \
+            -passout "fd:3" -out "$cert/key.pfx" 3<<<"$pass"
+          RUSTTORRENT_AUTHENTICODE_PFX_B64=$(base64 -w0 "$cert/key.pfx") \
+          RUSTTORRENT_AUTHENTICODE_PFX_PASSWORD="$pass" \
+            bash packaging/scripts/sign-windows.sh "$tag" release-artifacts
+          tsa_ca="${AUTHENTICODE_TSA_CAFILE:-/etc/ssl/certs/ca-certificates.crt}"
+          count=0
+          for exe in release-artifacts/rtbit*-"$tag"-windows-x86_64.exe; do
+            osslsigncode verify -CAfile "$cert/cert.pem" -TSA-CAfile "$tsa_ca" -in "$exe" | tee "$cert/verify.log"
+            grep -q '^Timestamp Server Signature verification: ok' "$cert/verify.log"
+            count=$((count + 1))
+          done
+          test "$count" -eq 2 || { echo "::error::expected 2 signed executables, verified $count"; exit 1; }
+          (cd release-artifacts && sha256sum -c "SHA256SUMS-$tag.txt")
