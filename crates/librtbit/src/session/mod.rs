@@ -50,7 +50,8 @@ use crate::{
     merge_streams::merge_streams,
     peer_connection::PeerConnectionOptions,
     session_persistence::{
-        SessionPersistenceStore, SessionSettings, json::JsonSessionPersistenceStore,
+        NetworkSettings, SessionPersistenceStore, SessionSettings,
+        json::JsonSessionPersistenceStore,
     },
     session_stats::SessionStats,
     spawn_utils::BlockingSpawner,
@@ -168,6 +169,8 @@ pub struct Session {
     ip_filter_text: parking_lot::RwLock<String>,
     /// Full proxy URL, credentials included. Never log or return this.
     proxy_url: parking_lot::RwLock<Option<String>>,
+    /// Network settings saved for the next start. Not applied to this process.
+    pending_network: parking_lot::RwLock<Option<NetworkSettings>>,
     pub allowlist: Option<IpRanges>,
     /// IPs banned at runtime (WebUI `transfer/banPeers`); not persisted.
     banned_peers: RwLock<HashSet<IpAddr>>,
@@ -202,6 +205,29 @@ pub struct Session {
 
     // Alternative ("turtle mode") speed limits state.
     pub(crate) alt_speed: crate::alt_speed::AltSpeedState,
+}
+
+/// Apply network settings saved from the web UI to the startup options. A
+/// listen address or port only changes an enabled listener; it never turns
+/// listening on.
+fn apply_network_settings(opts: &mut SessionOptions, net: &NetworkSettings) {
+    if let Some(listen) = opts.listen.as_mut() {
+        if let Some(ip) = net.listen_ip {
+            listen.listen_addr.set_ip(ip);
+        }
+        if let Some(port) = net.listen_port {
+            listen.listen_addr.set_port(port);
+        }
+        if let Some(upnp) = net.upnp_port_forward {
+            listen.enable_upnp_port_forwarding = upnp;
+        }
+    }
+    if let Some(dht) = net.dht_enabled {
+        opts.disable_dht = !dht;
+    }
+    if let Some(lsd) = net.lsd_enabled {
+        opts.disable_local_service_discovery = !lsd;
+    }
 }
 
 impl Session {
@@ -263,62 +289,6 @@ impl Session {
                 None => None,
             };
 
-            // The listener token is a child of the session token, but it is only
-            // cancelled after torrents have been paused. Cancelling it here would
-            // drop the uTP socket (and kill its dispatcher) while task_listener is
-            // still in accept(), which logs "error accepting uTP: dispatcher dead".
-            let listener_token = token.child_token();
-            let listen_result = if let Some(listen_opts) = opts.listen.take() {
-                Some(
-                    listen_opts
-                        .start(
-                            opts.root_span.as_ref().and_then(|s| s.id()),
-                            listener_token.clone(),
-                            bind_device.as_ref(),
-                        )
-                        .await
-                        .context("error starting listeners")?,
-                )
-            } else {
-                None
-            };
-
-            let has_proxy = opts.connect.as_ref().and_then(|s| s.proxy_url.as_ref()).is_some();
-
-            let dht = if opts.disable_dht || has_proxy {
-                if has_proxy && !opts.disable_dht {
-                    warn!("DHT disabled: SOCKS proxy configured (DHT uses UDP which cannot be proxied)");
-                }
-                None
-            } else {
-                let dht = if opts.disable_dht_persistence {
-                    DhtBuilder::with_config(DhtConfig {
-                        bootstrap_addrs: opts.dht_bootstrap_addrs.clone(),
-                        cancellation_token: Some(token.child_token()),
-                        bind_device: bind_device.as_ref(),
-                        ..Default::default()
-                    })
-                    .await
-                    .context("error initializing DHT")?
-                } else {
-                    let pdht_config = opts.dht_config.take().unwrap_or_default();
-                    PersistentDht::create(
-                        Some(pdht_config),
-                        Some(token.clone()),
-                        bind_device.as_ref(),
-                    )
-                    .await
-                    .context("error initializing persistent DHT")?
-                };
-
-                Some(dht)
-            };
-            let peer_opts = opts
-                .connect
-                .as_ref()
-                .and_then(|p| p.peer_opts)
-                .unwrap_or_default();
-
             async fn persistence_factory(
                 opts: &SessionOptions,
                 spawner: BlockingSpawner,
@@ -378,6 +348,7 @@ impl Session {
             let mut use_part_files = false;
             let mut seed_limits = crate::session::ShareLimits::default();
             let mut persisted_proxy: Option<String> = None;
+            let mut pending_network: Option<NetworkSettings> = None;
             if let Some(p) = persistence.as_ref() {
                 match p.load_session_settings().await {
                     Ok(settings) => {
@@ -394,10 +365,74 @@ impl Session {
                         max_active_seeds = encode_limit(settings.max_active_seeds);
                         use_part_files = settings.part_files.unwrap_or(false);
                         persisted_proxy = settings.proxy_url;
+                        pending_network = settings.network;
                     }
                     Err(e) => warn!("error loading session settings from persistence: {e:#}"),
                 }
             }
+
+            // Network settings saved from the web UI win over the startup
+            // options. They exist to change what the next start does.
+            if let Some(net) = pending_network {
+                apply_network_settings(&mut opts, &net);
+            }
+
+            // The listener token is a child of the session token, but it is only
+            // cancelled after torrents have been paused. Cancelling it here would
+            // drop the uTP socket (and kill its dispatcher) while task_listener is
+            // still in accept(), which logs "error accepting uTP: dispatcher dead".
+            let listener_token = token.child_token();
+            let listen_result = if let Some(listen_opts) = opts.listen.take() {
+                Some(
+                    listen_opts
+                        .start(
+                            opts.root_span.as_ref().and_then(|s| s.id()),
+                            listener_token.clone(),
+                            bind_device.as_ref(),
+                        )
+                        .await
+                        .context("error starting listeners")?,
+                )
+            } else {
+                None
+            };
+
+            let has_proxy = opts.connect.as_ref().and_then(|s| s.proxy_url.as_ref()).is_some();
+
+            let dht = if opts.disable_dht || has_proxy {
+                if has_proxy && !opts.disable_dht {
+                    warn!("DHT disabled: SOCKS proxy configured (DHT uses UDP which cannot be proxied)");
+                }
+                None
+            } else {
+                let dht = if opts.disable_dht_persistence {
+                    DhtBuilder::with_config(DhtConfig {
+                        bootstrap_addrs: opts.dht_bootstrap_addrs.clone(),
+                        cancellation_token: Some(token.child_token()),
+                        bind_device: bind_device.as_ref(),
+                        ..Default::default()
+                    })
+                    .await
+                    .context("error initializing DHT")?
+                } else {
+                    let pdht_config = opts.dht_config.take().unwrap_or_default();
+                    PersistentDht::create(
+                        Some(pdht_config),
+                        Some(token.clone()),
+                        bind_device.as_ref(),
+                    )
+                    .await
+                    .context("error initializing persistent DHT")?
+                };
+
+                Some(dht)
+            };
+            let peer_opts = opts
+                .connect
+                .as_ref()
+                .and_then(|p| p.peer_opts)
+                .unwrap_or_default();
+
 
             // A proxy saved in the session outlives a restart. An explicit
             // option still wins, so tests and one-shot starts are unchanged.
@@ -577,6 +612,7 @@ impl Session {
                 blocklist: parking_lot::RwLock::new(blocklist),
                 ip_filter_text: parking_lot::RwLock::new(String::new()),
                 proxy_url: parking_lot::RwLock::new(proxy_url),
+                pending_network: parking_lot::RwLock::new(pending_network),
                 allowlist,
                 banned_peers: Default::default(),
                 lsd,
@@ -1627,6 +1663,7 @@ impl Session {
         };
         // Copy before the await. The proxy URL sits behind a non-Send lock.
         let proxy_url = self.proxy_url.read().clone();
+        let network = *self.pending_network.read();
         persistence
             .store_session_settings(&SessionSettings {
                 output_folder: Some(self.output_folder()),
@@ -1636,8 +1673,38 @@ impl Session {
                 part_files: Some(self.use_part_files()),
                 seed_limits: Some(self.seed_limits()),
                 proxy_url,
+                network,
             })
             .await
+    }
+
+    /// Network settings saved for the next start, if any.
+    pub fn pending_network(&self) -> Option<NetworkSettings> {
+        *self.pending_network.read()
+    }
+
+    /// Merge `update` into the saved network settings. Takes effect at the
+    /// next start; call [`Self::persist_session_settings`] to keep it.
+    pub fn set_pending_network(&self, update: NetworkSettings) -> NetworkSettings {
+        let mut guard = self.pending_network.write();
+        let mut merged = guard.unwrap_or_default();
+        if update.listen_ip.is_some() {
+            merged.listen_ip = update.listen_ip;
+        }
+        if update.listen_port.is_some() {
+            merged.listen_port = update.listen_port;
+        }
+        if update.dht_enabled.is_some() {
+            merged.dht_enabled = update.dht_enabled;
+        }
+        if update.lsd_enabled.is_some() {
+            merged.lsd_enabled = update.lsd_enabled;
+        }
+        if update.upnp_port_forward.is_some() {
+            merged.upnp_port_forward = update.upnp_port_forward;
+        }
+        *guard = (!merged.is_empty()).then_some(merged);
+        merged
     }
 
     /// Get the default download/output folder.
@@ -1940,6 +2007,40 @@ fn apply_file_renames(metadata: TorrentMetadata, renames: &[(usize, PathBuf)]) -
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn saved_network_settings_override_startup_options() {
+        let mut opts = super::SessionOptions {
+            listen: Some(crate::ListenerOptions::default()),
+            ..Default::default()
+        };
+        super::apply_network_settings(
+            &mut opts,
+            &super::NetworkSettings {
+                listen_ip: Some("127.0.0.1".parse().unwrap()),
+                listen_port: Some(6881),
+                dht_enabled: Some(false),
+                lsd_enabled: Some(false),
+                upnp_port_forward: Some(true),
+            },
+        );
+        let listen = opts.listen.as_ref().unwrap();
+        assert_eq!(listen.listen_addr, "127.0.0.1:6881".parse().unwrap());
+        assert!(listen.enable_upnp_port_forwarding);
+        assert!(opts.disable_dht);
+        assert!(opts.disable_local_service_discovery);
+
+        // A port never turns a disabled listener on.
+        let mut off = super::SessionOptions::default();
+        super::apply_network_settings(
+            &mut off,
+            &super::NetworkSettings {
+                listen_port: Some(6881),
+                ..Default::default()
+            },
+        );
+        assert!(off.listen.is_none());
+    }
+
     use buffers::ByteBuf;
     use itertools::Itertools;
     use librtbit_core::torrent_metainfo::{TorrentMetaV1, torrent_from_bytes};
