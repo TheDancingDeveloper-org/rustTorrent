@@ -1,6 +1,6 @@
 [package]
 name = "swarmforge-sha1-wrapper"
-version = "0.2.0-beta.3"
+version = "0.2.0-beta.4"
 edition = "2024"
 description = "Pluggable SHA1/SHA256 abstraction for the rtbit BitTorrent client"
 license = "Apache-2.0"

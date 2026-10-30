@@ -20,7 +20,7 @@ if $resume && [[ -n "$publish_flag" ]]; then
   exit 2
 fi
 
-version="0.2.0-beta.3"
+version="0.2.0-beta.4"
 
 # Pre-release versions (a '-' suffix such as 0.1.0-rc.1) are never published to
 # crates.io from this script. Exit 0 so a release pipeline that calls it for every

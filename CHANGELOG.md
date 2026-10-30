@@ -9,6 +9,32 @@ upgrade notes in each release describe what to back up and check.
 
 ## [Unreleased]
 
+## [0.2.0-beta.4] - 2026-10-30
+
+### Added
+
+- The native client (`rtbit-egui`) is packaged in the release for Linux and
+  Windows: a `.deb` and a Windows executable are attached to the GitHub
+  release. It stores credentials in the OS keychain on Linux only.
+
+### Changed
+
+- The native GUI runs on fluent2-egui 0.4.2 and egui 0.37, and popups now
+  render above modal dialogs.
+- Tags can be renamed, and one tag can be replaced in bulk across torrents.
+- The web UI keeps torrent filters, sort and search in the URL history, and
+  serves every built asset, including lazy page chunks.
+
+### Fixed
+
+- Adding a stopped torrent through the qbit API, and stopping a torrent that
+  is still checking, no longer leave it in the wrong state. A cancelled check
+  no longer overwrites a stopped torrent.
+- Torrents are stopped before the bitfield flusher and the uTP dispatcher
+  shut down.
+- Each session flush writes its own temp file, so concurrent flushes do not
+  clobber one another.
+
 ## [0.2.0-beta.3] - 2026-10-29
 
 ### Changed
@@ -306,7 +332,8 @@ persistent session directory before upgrading.
 - The Docker build and web UI were consolidated so the shipped interface is
   built from the reviewed source tree.
 
-[Unreleased]: https://github.com/TheDancingDeveloper-org/rustTorrent/compare/v0.2.0-beta.3...HEAD
+[Unreleased]: https://github.com/TheDancingDeveloper-org/rustTorrent/compare/v0.2.0-beta.4...HEAD
+[0.2.0-beta.4]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.2.0-beta.4
 [0.2.0-beta.3]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.2.0-beta.3
 [0.2.0-beta.1]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.2.0-beta.1
 [0.1.0-rc.5]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.1.0-rc.5
