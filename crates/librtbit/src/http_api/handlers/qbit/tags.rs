@@ -109,17 +109,25 @@ pub(super) struct RenameTagForm {
 pub(super) async fn h_torrents_rename_tag(
     State(state): State<Arc<QbitState>>,
     body: Bytes,
-) -> &'static str {
+) -> Response {
     let form: RenameTagForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
-    if let Err(error) = state
+    match state
         .api_state
         .api
         .api_rename_tag(&form.from, &form.to)
         .await
     {
-        warn!(%error, "qbit compat: error renaming tag");
+        Ok(_) => (StatusCode::OK, "Ok.").into_response(),
+        Err(error) => {
+            warn!(%error, "qbit compat: error renaming tag");
+            match error.status() {
+                StatusCode::BAD_REQUEST => {
+                    qbit_error(StatusCode::BAD_REQUEST, format!("{error:#}"))
+                }
+                _ => qbit_error(StatusCode::CONFLICT, format!("{error:#}")),
+            }
+        }
     }
-    "Ok."
 }
 
 pub(super) async fn h_torrents_set_tags(

@@ -136,15 +136,15 @@ async fn shutdown_flushes_bitfield_and_does_not_kill_utp_dispatcher() -> anyhow:
         bitv.display()
     );
     let bytes = std::fs::read(&bitv)?;
-    // The on-disk format is the 4-byte RTBV magic, a little-endian CRC32 and
+    // The on-disk format is the 4-byte RBV\x02 magic, a little-endian CRC32 and
     // one bit per piece. Shutdown itself is not under test here beyond having
     // written that file.
     // On-disk magic is ASCII "RBV" plus version 0x02 (see bitv.rs), not the
-    // four letters RTBV. The header is that magic and a little-endian CRC32.
+    // four letters "RBV\x02". The header is that magic and a little-endian CRC32.
     const BITV_MAGIC: [u8; 4] = [0x52, 0x42, 0x56, 0x02];
     assert!(
         bytes.len() >= 8 && bytes[..4] == BITV_MAGIC,
-        "persisted bitfield is missing the RTBV magic: {:02x?}",
+        "persisted bitfield is missing the RBV magic: {:02x?}",
         &bytes[..bytes.len().min(8)]
     );
     let piece_bytes = handle
@@ -153,7 +153,7 @@ async fn shutdown_flushes_bitfield_and_does_not_kill_utp_dispatcher() -> anyhow:
     assert_eq!(
         bytes.len(),
         8 + piece_bytes,
-        "RTBV header plus one bit per piece"
+        "RBV header plus one bit per piece"
     );
     assert!(
         bytes[8..].iter().any(|byte| *byte != 0),
