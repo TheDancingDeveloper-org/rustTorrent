@@ -42,6 +42,10 @@ else
     # Virtual workspace manifests have no [package] version to compare.
     grep -q '^\[package\]' "$manifest" || continue
     v="$(sed -n 's/^version = "\(.*\)"/\1/p' "$manifest" | head -1)"
+    # Members that inherit take the root [workspace.package] version.
+    if [[ -z "$v" ]] && grep -q '^version\.workspace = true' "$manifest"; then
+      v="$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+    fi
     [[ "$v" == "$rtbit_version" ]] || fail "$manifest version '$v' does not match rtbit '$rtbit_version'"
   done < <(find . -name Cargo.toml -not -path './target/*' -not -path '*/node_modules/*' -not -path './.git/*')
   desktop_version="$(sed -n 's/^  "version": "\(.*\)",/\1/p' desktop/package.json | head -1)"

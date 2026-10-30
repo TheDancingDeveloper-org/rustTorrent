@@ -27,24 +27,27 @@ image="docker.io/library/rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705
 case "$mode" in
   linux)
     command -v docker >/dev/null 2>&1 || { echo "::error::docker is required for the native client Linux build"; exit 1; }
-    # Its own target dir, so the container's build never mixes with the
-    # daemon's host build. The container runs as root; the tree is handed
-    # back to the runner user before it exits.
-    docker run --rm \
-      -v "$PWD:/src" -w /src \
+    # The runner may itself run in a container that talks to the host's
+    # docker daemon, so a bind mount of $PWD would name a path the daemon
+    # cannot see. Copy the tree in and the binary out with docker cp instead.
+    cid="$(docker create -w /src \
       -e CARGO_TARGET_DIR=/src/target/egui-linux \
       -e CARGO_PROFILE_RELEASE_GITHUB_LTO \
       -e CARGO_PROFILE_RELEASE_GITHUB_CODEGEN_UNITS \
       -e CARGO_PROFILE_RELEASE_GITHUB_STRIP \
-      -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
       "$image" bash -euo pipefail -c '
-        trap "chown -R \"\$HOST_UID:\$HOST_GID\" /src/target/egui-linux" EXIT
         apt-get update -qq
         apt-get install -y --no-install-recommends pkg-config \
           libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev \
           libxrandr-dev libxi-dev libgl1-mesa-dev libegl1-mesa-dev
         cargo build --locked --profile release-github -p rtbit-egui
-      '
+      ')"
+    trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+    tar -c --exclude=./target --exclude=./.git --exclude='*/node_modules' \
+      --transform 's,^\.,src,' . | docker cp - "$cid:/"
+    docker start -a "$cid"
+    mkdir -p target/egui-linux/release-github
+    docker cp "$cid:/src/target/egui-linux/release-github/rtbit-egui" target/egui-linux/release-github/rtbit-egui
     bin=target/egui-linux/release-github/rtbit-egui
     test -s "$bin"
     VERSION="${tag#v}" ARCH=amd64 BINARY="$bin" \
