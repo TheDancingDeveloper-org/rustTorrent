@@ -1,0 +1,30 @@
+# nfpm config for the rtbit-egui (native client) .deb.
+# Built in CI by packaging/scripts/build-egui.sh from the release-github
+# binary; VERSION, ARCH and BINARY are set by the caller.
+name: rtbit-egui
+arch: "${ARCH}"
+platform: linux
+version: "${VERSION}"
+section: net
+priority: optional
+maintainer: "AusAgentSmith <admin@rusttorrent.dev>"
+description: |
+  Native desktop client for the rustTorrent daemon.
+vendor: rusttorrent
+homepage: https://github.com/TheDancingDeveloper-org/rustTorrent
+license: "Apache-2.0"
+depends:
+  - libc6
+  - libgl1
+  - libegl1
+  - libwayland-client0
+  - libxkbcommon0
+  - libx11-6
+
+contents:
+  - src: "${BINARY}"
+    dst: /usr/bin/rtbit-egui
+    # nfpm only expands environment variables in src when asked to.
+    expand: true
+    file_info:
+      mode: 0755

@@ -66,6 +66,22 @@ jobs:
           export CARGO_PROFILE_RELEASE_GITHUB_CODEGEN_UNITS=1
           export CARGO_PROFILE_RELEASE_GITHUB_STRIP=symbols
           cargo build --profile release-github -p rtbit --target x86_64-pc-windows-gnu --no-default-features --features default-tls
+      # The native client (crates/rtbit-egui). Linux builds in a pinned
+      # container with the wayland/X11/GL -dev packages, Windows cross-builds
+      # with cargo-zigbuild; see packaging/scripts/build-egui.sh. Neither
+      # changes the shared runner's apt or dpkg state.
+      - name: Build native client artifacts
+        shell: bash
+        run: |
+          export CARGO_PROFILE_RELEASE_GITHUB_LTO=fat
+          export CARGO_PROFILE_RELEASE_GITHUB_CODEGEN_UNITS=1
+          export CARGO_PROFILE_RELEASE_GITHUB_STRIP=symbols
+          tag="${{ inputs.tag || github.ref_name }}"
+          test -n "$tag"
+          rm -rf target/egui-stage
+          bash packaging/scripts/build-egui.sh linux "$tag" target/egui-stage
+          bash packaging/scripts/build-egui.sh windows "$tag" target/egui-stage
+          bash packaging/scripts/build-egui.sh sbom "$tag" target/egui-stage
       - name: Stage and checksum artifacts
         shell: bash
         run: |
@@ -104,6 +120,8 @@ jobs:
             --format json --spec-version 1.5 \
             --override-filename rtbit-sbom
           mv crates/rtbit/rtbit-sbom.json "release-artifacts/rtbit-$tag-sbom.cdx.json"
+          # Native client binaries, .deb and SBOM, named rtbit-egui-<tag>-*.
+          cp target/egui-stage/rtbit-egui-* release-artifacts/
           (cd release-artifacts && sha256sum rtbit-*) > "release-artifacts/SHA256SUMS-$tag.txt"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
