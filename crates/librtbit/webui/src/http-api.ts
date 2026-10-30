@@ -13,6 +13,7 @@ import {
   FoldersConfig,
   DownloadsConfig,
   NetworkConfig,
+  NetworkSettings,
   IndexarrIdentityStatus,
   IndexarrRecentResponse,
   IndexarrSearchResponse,
@@ -640,6 +641,9 @@ export const API: RtbitAPI & { getVersion: () => Promise<string> } = {
   },
   getNetworkConfig: (): Promise<NetworkConfig> => {
     return makeRequest("GET", "/session/network");
+  },
+  setNetworkConfig: (settings: NetworkSettings): Promise<void> => {
+    return makeRequest("POST", "/session/network", settings, true);
   },
   browseDirectory: (path?: string): Promise<BrowseResponse> => {
     const params = new URLSearchParams();

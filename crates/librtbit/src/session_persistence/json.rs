@@ -509,6 +509,13 @@ mod tests {
             part_files: Some(true),
             seed_limits: None,
             proxy_url: None,
+            network: Some(super::super::NetworkSettings {
+                listen_ip: Some("127.0.0.1".parse().unwrap()),
+                listen_port: Some(6881),
+                dht_enabled: Some(false),
+                lsd_enabled: None,
+                upnp_port_forward: Some(true),
+            }),
         };
 
         store.store_session_settings(&settings).await.unwrap();

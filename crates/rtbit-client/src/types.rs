@@ -448,7 +448,7 @@ pub struct AdvancedConfig {
     pub keep_alive_secs: Option<u64>,
 }
 
-/// `GET /session/network`. Writes are refused by the daemon: these are fixed at startup.
+/// `GET /session/network`. A POST saves values for the next start; they never apply live.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
 pub struct NetworkConfig {
     pub listen_ip: Option<String>,

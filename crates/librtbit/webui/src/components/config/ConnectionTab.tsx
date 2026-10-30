@@ -1,7 +1,9 @@
-import React, { useContext, useEffect, useState } from "react";
+import React, { useCallback, useContext, useEffect, useState } from "react";
 import { useStatsStore } from "../../stores/statsStore";
 import { APIContext } from "../../context";
 import { RestartNotes } from "./SettingNotes";
+import { NetworkSettingsForm } from "./NetworkSettingsForm";
+import { Fieldset } from "../forms/Fieldset";
 import {
   ConnectionStatSingle,
   ConnectionStatsPerFamily,
@@ -57,11 +59,12 @@ export const ConnectionTab: React.FC = () => {
   const API = useContext(APIContext);
   const [network, setNetwork] = useState<NetworkConfig | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     API.getNetworkConfig()
       .then(setNetwork)
       .catch(() => setNetwork(null));
   }, [API]);
+  useEffect(load, [load]);
 
   return (
     <div className="py-2">
@@ -113,13 +116,29 @@ export const ConnectionTab: React.FC = () => {
         </div>
       </div>
 
+      {network && (
+        <div className="mt-6">
+          <Fieldset label="Peer listener">
+            <p className="text-sm text-secondary mb-2">
+              The values above are what is running now. Saved values apply at
+              the next start and replace the --listen-ip, --listen-port and
+              --disable-upnp-port-forward flags.
+            </p>
+            <NetworkSettingsForm
+              network={network}
+              fields={["listen", "upnp"]}
+              onSaved={load}
+            />
+          </Fieldset>
+        </div>
+      )}
       <div className="mt-6">
         <RestartNotes tab="connections" />
       </div>
       <div className="mt-4 text-secondary text-xs">
-        These values are informational. Changing the peer port, bind address,
-        UPnP port forward or encryption needs a restart, and a restart is how
-        they are set. The web UI bind address is not editable here.
+        Peer exchange is always on and encryption mode is not supported, so
+        those two are informational. The web UI bind address is not editable
+        here.
       </div>
     </div>
   );

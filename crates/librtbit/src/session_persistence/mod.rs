@@ -48,6 +48,32 @@ pub struct SessionSettings {
     /// the password; this field itself is the value that has to survive a restart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy_url: Option<String>,
+    /// Peer listener and discovery settings saved from the web UI. They are
+    /// applied at the next start and override the command-line values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<NetworkSettings>,
+}
+
+/// Startup-only network settings. Each absent field keeps the value the
+/// process was started with.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NetworkSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listen_ip: Option<std::net::IpAddr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listen_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dht_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lsd_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upnp_port_forward: Option<bool>,
+}
+
+impl NetworkSettings {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
