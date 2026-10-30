@@ -1121,7 +1121,9 @@ export const MockAPI: RtbitAPI & { getVersion: () => Promise<string> } = {
     upnp_port_forward: true,
     encryption: null,
     http_api_listen: ":3030",
+    pending: null,
   }),
+  setNetworkConfig: async () => {},
   browseDirectory: async (path?: string) => ({
     current: path ?? "/",
     parent:

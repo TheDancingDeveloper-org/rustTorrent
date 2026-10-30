@@ -12,6 +12,7 @@ import {
   FoldersConfig,
   DownloadsConfig,
   NetworkConfig,
+  NetworkSettings,
   LimitsConfig,
   RtbitAPI,
   SeedLimits,
@@ -217,6 +218,9 @@ export const APIContext = createContext<RtbitAPI>({
     throw new Error("Function not implemented.");
   },
   getNetworkConfig: function (): Promise<NetworkConfig> {
+    throw new Error("Function not implemented.");
+  },
+  setNetworkConfig: function (_settings: NetworkSettings): Promise<void> {
     throw new Error("Function not implemented.");
   },
   browseDirectory: function (_path?: string): Promise<BrowseResponse> {

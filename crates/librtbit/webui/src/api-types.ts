@@ -511,6 +511,17 @@ export interface NetworkConfig {
   upnp_port_forward: boolean;
   encryption: string | null;
   http_api_listen: string;
+  // Values saved for the next start. Null when nothing is saved.
+  pending?: NetworkSettings | null;
+}
+
+// Startup-only network settings. Saved now, applied after a restart.
+export interface NetworkSettings {
+  listen_ip?: string | null;
+  listen_port?: number | null;
+  dht_enabled?: boolean | null;
+  lsd_enabled?: boolean | null;
+  upnp_port_forward?: boolean | null;
 }
 
 // Directory browsing
@@ -614,5 +625,6 @@ export interface RtbitAPI {
   getDownloadsConfig: () => Promise<DownloadsConfig>;
   setDownloadsConfig: (config: DownloadsConfig) => Promise<void>;
   getNetworkConfig: () => Promise<NetworkConfig>;
+  setNetworkConfig: (settings: NetworkSettings) => Promise<void>;
   browseDirectory: (path?: string) => Promise<BrowseResponse>;
 }

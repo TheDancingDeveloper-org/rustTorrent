@@ -1,8 +1,9 @@
-import React, { useContext, useEffect, useState } from "react";
+import React, { useCallback, useContext, useEffect, useState } from "react";
 import { APIContext } from "../../context";
 import { DhtStats, NetworkConfig } from "../../api-types";
 import { Spinner } from "../Spinner";
 import { RestartNotes } from "./SettingNotes";
+import { NetworkSettingsForm } from "./NetworkSettingsForm";
 
 const InfoRow = ({ label, value }: { label: string; value: string }) => (
   <div className="flex items-center">
@@ -21,14 +22,26 @@ export const DHTTab: React.FC = () => {
   const [network, setNetwork] = useState<NetworkConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadNetwork = useCallback(() => {
     API.getNetworkConfig()
       .then(setNetwork)
       .catch(() => setNetwork(null));
+  }, [API]);
+
+  useEffect(() => {
+    loadNetwork();
     API.getDhtStats()
       .then(setDhtStats)
       .catch(() => setError("DHT is disabled or unavailable"));
-  }, [API]);
+  }, [API, loadNetwork]);
+
+  const form = network && (
+    <NetworkSettingsForm
+      network={network}
+      fields={["dht", "lsd"]}
+      onSaved={loadNetwork}
+    />
+  );
 
   if (error && !network) {
     return <div className="text-secondary py-2">{error}</div>;
@@ -45,6 +58,7 @@ export const DHTTab: React.FC = () => {
           label="Local discovery"
           value={network?.lsd_enabled ? "On" : "Off"}
         />
+        {form}
         <RestartNotes tab="dht" />
       </div>
     );
@@ -76,10 +90,11 @@ export const DHTTab: React.FC = () => {
         label="Local discovery"
         value={network ? (network.lsd_enabled ? "On" : "Off") : "unavailable"}
       />
+      {form}
       <RestartNotes tab="dht" />
       <div className="mt-4 text-secondary text-xs">
-        DHT and local service discovery are fixed at startup
-        (--disable-dht, --disable-lsd). A change needs a restart.
+        DHT and local service discovery start with the session. A saved value
+        applies at the next start and replaces --disable-dht and --disable-lsd.
       </div>
     </div>
   );

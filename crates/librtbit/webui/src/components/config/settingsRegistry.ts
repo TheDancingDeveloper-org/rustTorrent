@@ -32,7 +32,8 @@ export interface SettingDefinition {
 // once (--disable-upnp-port-forward), peer exchange has no switch, encryption
 // mode is not implemented, the HTTP API listener is bound at startup, and the
 // persistence location is read only in main() at startup. There is no runtime
-// setter for any of them. The HTTP bind address is display-only: changing it
+// setter for any of them. The peer port, bind IP, UPnP, DHT and LSD can be
+// saved from the UI (POST /session/network) and apply at the next start. The HTTP bind address is display-only: changing it
 // here is refused so the web UI cannot be exposed without authentication. The download folder is different: api_set_folders
 // applies it live, so it is not marked.
 export const SETTINGS: readonly SettingDefinition[] = [
@@ -79,21 +80,21 @@ export const SETTINGS: readonly SettingDefinition[] = [
     tab: "connections",
     label: "Listen port",
     restartRequired: true,
-    description: "Set with --listen-port.",
+    description: "Saved here or set with --listen-port. A saved value wins.",
   },
   {
     id: "listen-ip",
     tab: "connections",
     label: "Bind address (peer listener)",
     restartRequired: true,
-    description: "Set with --listen-ip.",
+    description: "Saved here or set with --listen-ip. A saved value wins.",
   },
   {
     id: "upnp-port-forward",
     tab: "connections",
     label: "UPnP port forward",
     restartRequired: true,
-    description: "On unless --disable-upnp-port-forward is set.",
+    description: "Saved here, or off with --disable-upnp-port-forward. A saved value wins.",
   },
   {
     id: "pex-enabled",
@@ -142,14 +143,14 @@ export const SETTINGS: readonly SettingDefinition[] = [
     tab: "dht",
     label: "DHT enabled",
     restartRequired: true,
-    description: "Turned off with --disable-dht.",
+    description: "Saved here, or off with --disable-dht. A saved value wins.",
   },
   {
     id: "lsd-enabled",
     tab: "dht",
     label: "Local service discovery (LSD)",
     restartRequired: true,
-    description: "Turned off with --disable-lsd.",
+    description: "Saved here, or off with --disable-lsd. A saved value wins.",
   },
 
   { id: "current-password", tab: "security", label: "Current Password" },
