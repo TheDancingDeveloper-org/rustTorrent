@@ -310,12 +310,65 @@ impl Client {
         self.authed_post_json("torrents/seed_limits", body).await
     }
 
-    /// `GET /rss/feeds` and `GET /rss/items`. Rules are not read in v1.
+    /// `GET /rss/feeds`, `GET /rss/items` and `GET /rss/rules`.
     pub async fn rss(&mut self) -> Result<crate::types::RssSnapshot, Error> {
         Ok(crate::types::RssSnapshot {
             feeds: self.authed_get("rss/feeds").await?,
             items: self.authed_get("rss/items").await?,
+            rules: self.rss_rules().await?,
         })
+    }
+
+    /// `GET /rss/rules`.
+    pub async fn rss_rules(&mut self) -> Result<Vec<crate::types::RssRule>, Error> {
+        self.authed_get("rss/rules").await
+    }
+
+    /// `POST /rss/rules`. The daemon picks the id. A pattern that does not
+    /// compile is a 400 whose message says why.
+    pub async fn add_rss_rule(&mut self, body: &crate::types::RssRuleBody) -> Result<(), Error> {
+        self.authed_post_json("rss/rules", body).await
+    }
+
+    /// `PUT /rss/rules/{id}`. Replaces the whole rule.
+    pub async fn update_rss_rule(
+        &mut self,
+        id: &str,
+        body: &crate::types::RssRuleBody,
+    ) -> Result<(), Error> {
+        let path = format!("rss/rules/{}", urlencoding_minimal(id));
+        let response = self
+            .send_json_once(reqwest::Method::PUT, &path, Some(body))
+            .await?;
+        if response.status() == StatusCode::UNAUTHORIZED {
+            self.refresh_once().await?;
+            decode_empty(
+                self.send_json_once(reqwest::Method::PUT, &path, Some(body))
+                    .await?,
+            )
+            .await
+        } else {
+            decode_empty(response).await
+        }
+    }
+
+    /// `DELETE /rss/rules/{id}`.
+    pub async fn delete_rss_rule(&mut self, id: &str) -> Result<(), Error> {
+        let path = format!("rss/rules/{}", urlencoding_minimal(id));
+        let none: Option<&()> = None;
+        let response = self
+            .send_json_once(reqwest::Method::DELETE, &path, none)
+            .await?;
+        if response.status() == StatusCode::UNAUTHORIZED {
+            self.refresh_once().await?;
+            decode_empty(
+                self.send_json_once(reqwest::Method::DELETE, &path, none)
+                    .await?,
+            )
+            .await
+        } else {
+            decode_empty(response).await
+        }
     }
 
     /// `POST /rss/items/{id}/download`. The daemon adds the item's URL as a torrent.
@@ -427,6 +480,24 @@ impl Client {
             .post(url)
             .bearer_auth(token)
             .json(body)
+            .send()
+            .await
+            .map_err(|err| Error::Unreachable(err.to_string()))
+    }
+
+    async fn send_json_once(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&impl Serialize>,
+    ) -> Result<reqwest::Response, Error> {
+        let token = self.access.as_deref().ok_or(Error::Unauthorised)?;
+        let url = self.url(path)?;
+        let mut request = self.http.request(method, url).bearer_auth(token);
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        request
             .send()
             .await
             .map_err(|err| Error::Unreachable(err.to_string()))

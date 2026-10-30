@@ -38,6 +38,15 @@ impl std::fmt::Display for PatternError {
     }
 }
 
+/// The regex crate's syntax errors span several lines (pattern, caret, reason).
+/// Keep the reason only, so an API client can show it as one sentence.
+fn one_line(err: &regex::Error) -> String {
+    let text = err.to_string();
+    let last = text.lines().map(str::trim).rfind(|line| !line.is_empty());
+    let reason = last.unwrap_or("");
+    reason.strip_prefix("error: ").unwrap_or(reason).to_owned()
+}
+
 /// A pattern that has passed the size and compile checks.
 #[derive(Debug, Clone)]
 pub struct BoundedPattern {
@@ -56,7 +65,7 @@ impl BoundedPattern {
         if bytes > MAX_REGEX_BYTES {
             return Err(PatternError::TooLong { bytes });
         }
-        let compiled = Regex::new(source).map_err(|e| PatternError::Invalid(e.to_string()))?;
+        let compiled = Regex::new(source).map_err(|e| PatternError::Invalid(one_line(&e)))?;
         Ok(Self {
             source: source.to_string(),
             compiled,
@@ -300,6 +309,10 @@ mod tests {
             BoundedPattern::compile("(unclosed"),
             Err(PatternError::Invalid(_))
         ));
+        let err = BoundedPattern::compile("(unclosed")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "invalid regex: unclosed group");
     }
 
     #[test]

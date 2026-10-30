@@ -11,13 +11,13 @@ use fluent2_egui::office::{TitleBar, WindowAction, window_command};
 use fluent2_egui::theme::{Theme, install};
 use fluent2_egui::tokens::FLUENT;
 use rtbit_client::{
-    AuthStatus, Client, Error, PeerList, PieceProgress, RssSnapshot, SessionStats,
+    AuthStatus, Client, Error, PeerList, PieceProgress, RssRuleBody, RssSnapshot, SessionStats,
     SettingsSnapshot, Torrent, TorrentList, TrackerList,
 };
 
 use crate::screens::{
-    AddDraft, AddRequest, AddSource, DetailAction, DetailTab, DetailView, RowAction, RssView,
-    SettingsChanges, SettingsDraft, SettingsTab,
+    AddDraft, AddRequest, AddSource, DetailAction, DetailTab, DetailView, RowAction, RssAction,
+    RssView, RuleEditor, SettingsChanges, SettingsDraft, SettingsTab,
 };
 
 use crate::keychain::{OsKeychain, TokenStore};
@@ -158,13 +158,26 @@ pub trait LoginAttempt: Send {
         Err(Error::Unreachable("no settings".into()))
     }
 
-    /// Feeds and items. Rules are not loaded.
+    /// Feeds, items and auto-download rules.
     fn load_rss(&self) -> Result<RssSnapshot, Error> {
         Err(Error::Unreachable("no rss".into()))
     }
 
     /// Ask the daemon to add one item as a torrent.
     fn download_rss(&self, id: &str) -> Result<(), Error> {
+        let _ = id;
+        Err(Error::Unreachable("no rss".into()))
+    }
+
+    /// Add a rule (`id` is `None`) or replace one. A pattern the daemon cannot
+    /// compile comes back as a 400 whose message says why.
+    fn save_rss_rule(&self, id: Option<&str>, body: &RssRuleBody) -> Result<(), Error> {
+        let _ = (id, body);
+        Err(Error::Unreachable("no rss".into()))
+    }
+
+    /// Delete one rule.
+    fn delete_rss_rule(&self, id: &str) -> Result<(), Error> {
         let _ = id;
         Err(Error::Unreachable("no rss".into()))
     }
@@ -392,6 +405,33 @@ impl LoginAttempt for DaemonLogin {
             })
         })
     }
+
+    fn load_rss(&self) -> Result<RssSnapshot, Error> {
+        on_session(|session| session.runtime.block_on(session.client.rss()))
+    }
+
+    fn download_rss(&self, id: &str) -> Result<(), Error> {
+        on_session(|session| {
+            session
+                .runtime
+                .block_on(session.client.download_rss_item(id))
+        })
+    }
+
+    fn save_rss_rule(&self, id: Option<&str>, body: &RssRuleBody) -> Result<(), Error> {
+        on_session(|session| {
+            session.runtime.block_on(async {
+                match id {
+                    Some(id) => session.client.update_rss_rule(id, body).await,
+                    None => session.client.add_rss_rule(body).await,
+                }
+            })
+        })
+    }
+
+    fn delete_rss_rule(&self, id: &str) -> Result<(), Error> {
+        on_session(|session| session.runtime.block_on(session.client.delete_rss_rule(id)))
+    }
 }
 
 fn on_session<T>(call: impl FnOnce(&mut Session) -> Result<T, Error>) -> Result<T, Error> {
@@ -471,6 +511,9 @@ pub struct App<L: LoginAttempt = DaemonLogin, S: TokenStore = OsKeychain> {
     rss_load: Option<Receiver<Result<RssSnapshot, String>>>,
     rss_download: Option<Receiver<Result<(), String>>>,
     rss_error: String,
+    rss_editor: RuleEditor,
+    /// A rule save (`true`) or delete (`false`) in flight.
+    rss_rule_op: Option<(bool, Receiver<Result<(), String>>)>,
     settings_tab: SettingsTab,
     settings_draft: SettingsDraft,
     settings_load: Option<Receiver<Result<SettingsSnapshot, String>>>,
@@ -541,6 +584,8 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             rss_load: None,
             rss_download: None,
             rss_error: String::new(),
+            rss_editor: RuleEditor::default(),
+            rss_rule_op: None,
             settings_tab: SettingsTab::General,
             settings_draft: SettingsDraft::default(),
             settings_load: None,
@@ -598,6 +643,8 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             rss_load: None,
             rss_download: None,
             rss_error: String::new(),
+            rss_editor: RuleEditor::default(),
+            rss_rule_op: None,
             settings_tab: SettingsTab::General,
             settings_draft: SettingsDraft::default(),
             settings_load: None,
@@ -1436,9 +1483,19 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
                 self.screen = Screen::Main;
             }
         });
-        let busy = self.rss_load.is_some() || self.rss_download.is_some();
-        if let Some(id) = crate::screens::draw_rss(ui, &self.rss_view, busy, &self.rss_error) {
-            self.download_rss(&id);
+        let busy =
+            self.rss_load.is_some() || self.rss_download.is_some() || self.rss_rule_op.is_some();
+        match crate::screens::draw_rss(
+            ui,
+            &self.rss_view,
+            &mut self.rss_editor,
+            busy,
+            &self.rss_error,
+        ) {
+            Some(RssAction::Download(id)) => self.download_rss(&id),
+            Some(RssAction::SaveRule { id, body }) => self.save_rss_rule(id, body),
+            Some(RssAction::DeleteRule(id)) => self.delete_rss_rule(id),
+            None => {}
         }
     }
 
@@ -1476,6 +1533,60 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => self.rss_download = None,
             }
         }
+        if let Some((save, rx)) = &self.rss_rule_op {
+            let save = *save;
+            match rx.try_recv() {
+                Ok(Ok(())) => {
+                    self.rss_rule_op = None;
+                    if save {
+                        self.rss_editor.saved();
+                    }
+                    self.rss_error.clear();
+                    self.open_rss();
+                }
+                Ok(Err(message)) => {
+                    self.rss_rule_op = None;
+                    if save {
+                        self.rss_editor.refused(message);
+                    } else {
+                        self.rss_error = message;
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.rss_rule_op = None,
+            }
+        }
+    }
+
+    fn save_rss_rule(&mut self, id: Option<String>, body: RssRuleBody) {
+        if self.rss_rule_op.is_some() {
+            return;
+        }
+        let login = self.login.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let outcome = login
+                .save_rss_rule(id.as_deref(), &body)
+                .map_err(|err| login_message(&err));
+            let _ = tx.send(outcome);
+        });
+        self.rss_rule_op = Some((true, rx));
+    }
+
+    fn delete_rss_rule(&mut self, id: String) {
+        if self.rss_rule_op.is_some() {
+            return;
+        }
+        let login = self.login.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let outcome = login
+                .delete_rss_rule(&id)
+                .map_err(|err| login_message(&err));
+            let _ = tx.send(outcome);
+        });
+        self.rss_rule_op = Some((false, rx));
+        self.rss_error.clear();
     }
 
     fn download_rss(&mut self, id: &str) {
