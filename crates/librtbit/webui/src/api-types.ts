@@ -513,6 +513,10 @@ export interface NetworkConfig {
   http_api_listen: string;
   // Values saved for the next start. Null when nothing is saved.
   pending?: NetworkSettings | null;
+  // What this start did with the saved values. Null when nothing was saved.
+  pending_status?: "applied" | "ignored" | "fell_back" | null;
+  // False when persistence is off and nothing can be saved.
+  can_save?: boolean;
 }
 
 // Startup-only network settings. Saved now, applied after a restart.
@@ -522,6 +526,8 @@ export interface NetworkSettings {
   dht_enabled?: boolean | null;
   lsd_enabled?: boolean | null;
   upnp_port_forward?: boolean | null;
+  // Forget every saved value first, so the next start uses the startup flags.
+  reset?: boolean;
 }
 
 // Directory browsing

@@ -100,7 +100,7 @@ pub use listen::{ListenerMode, ListenerOptions};
 pub use peer_connection::PeerConnectionOptions;
 pub use session::{
     AddTorrent, AddTorrentOptions, AddTorrentResponse, ListOnlyResponse, SUPPORTED_SCHEMES,
-    Session, SessionOptions, SessionPersistenceConfig,
+    SavedNetworkStatus, Session, SessionOptions, SessionPersistenceConfig,
 };
 pub use stream_connect::ConnectionOptions;
 pub use torrent_state::{

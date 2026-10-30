@@ -315,6 +315,11 @@ pub struct SessionOptions {
     /// all remembered torrents will continue where they left off.
     pub persistence: Option<SessionPersistenceConfig>,
 
+    /// Do not apply the network settings saved from the web UI at this
+    /// start; use `listen`, `disable_dht` and `disable_local_service_discovery`
+    /// as given. The saved values are kept.
+    pub ignore_saved_network: bool,
+
     /// How often a running session saves each torrent's state (upload totals, share
     /// limits, queue flags), so a kill loses at most this much. `None` means 60
     /// seconds. Has no effect without persistence.
