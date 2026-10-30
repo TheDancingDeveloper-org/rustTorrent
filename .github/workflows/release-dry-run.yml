@@ -84,6 +84,22 @@ jobs:
           export CARGO_PROFILE_RELEASE_GITHUB_CODEGEN_UNITS=1
           export CARGO_PROFILE_RELEASE_GITHUB_STRIP=symbols
           cargo build --profile release-github -p rtbit --target x86_64-pc-windows-gnu --no-default-features --features default-tls
+      # The native client (crates/rtbit-egui). Linux builds in a pinned
+      # container with the wayland/X11/GL -dev packages, Windows cross-builds
+      # with cargo-zigbuild; see packaging/scripts/build-egui.sh. Neither
+      # changes the shared runner's apt or dpkg state.
+      - name: Build native client artifacts
+        shell: bash
+        run: |
+          export CARGO_PROFILE_RELEASE_GITHUB_LTO=fat
+          export CARGO_PROFILE_RELEASE_GITHUB_CODEGEN_UNITS=1
+          export CARGO_PROFILE_RELEASE_GITHUB_STRIP=symbols
+          tag="${{ steps.tag.outputs.tag }}"
+          test -n "$tag"
+          rm -rf target/egui-stage
+          bash packaging/scripts/build-egui.sh linux "$tag" target/egui-stage
+          bash packaging/scripts/build-egui.sh windows "$tag" target/egui-stage
+          bash packaging/scripts/build-egui.sh sbom "$tag" target/egui-stage
       - name: Stage and checksum artifacts
         shell: bash
         run: |
@@ -122,6 +138,8 @@ jobs:
             --format json --spec-version 1.5 \
             --override-filename rtbit-sbom
           mv crates/rtbit/rtbit-sbom.json "release-artifacts/rtbit-$tag-sbom.cdx.json"
+          # Native client binaries, .deb and SBOM, named rtbit-egui-<tag>-*.
+          cp target/egui-stage/rtbit-egui-* release-artifacts/
           (cd release-artifacts && sha256sum rtbit-*) > "release-artifacts/SHA256SUMS-$tag.txt"
       - name: Verify the staged set
         shell: bash
@@ -135,10 +153,16 @@ jobs:
             "rtbit-$tag-x86_64.rpm" \
             "rtbit-$tag-service-files.tar.gz" \
             "rtbit-$tag-vendor.tar.xz" \
-            "rtbit-$tag-sbom.cdx.json"; do
+            "rtbit-$tag-sbom.cdx.json" \
+            "rtbit-egui-$tag-linux-x86_64" \
+            "rtbit-egui-$tag-amd64.deb" \
+            "rtbit-egui-$tag-windows-x86_64.exe" \
+            "rtbit-egui-$tag-sbom.cdx.json"; do
             test -s "release-artifacts/$file" || { echo "::error::missing $file"; exit 1; }
           done
           (cd release-artifacts && sha256sum -c "SHA256SUMS-$tag.txt")
+          # The native client .deb must carry its binary.
+          dpkg-deb --contents "release-artifacts/rtbit-egui-$tag-amd64.deb" | grep -q ' ./usr/bin/rtbit-egui$'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-dry-run-${{ steps.tag.outputs.tag }}-${{ github.sha }}
