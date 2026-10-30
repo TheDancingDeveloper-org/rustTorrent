@@ -21,8 +21,8 @@ keychain = []
 [dependencies]
 eframe = { version = "0.37", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
 egui = "0.37"
-fluent2-egui = { git = "https://github.com/TheDancingDeveloper-org/fluent2-egui", tag = "v0.4.1" }
-fluent2-icons = { git = "https://github.com/TheDancingDeveloper-org/fluent2-egui", tag = "v0.4.1" }
+fluent2-egui = { git = "https://github.com/TheDancingDeveloper-org/fluent2-egui", tag = "v0.4.2" }
+fluent2-icons = { git = "https://github.com/TheDancingDeveloper-org/fluent2-egui", tag = "v0.4.2" }
 rtbit-client = { path = "../rtbit-client" }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 rfd = { version = "0.16", optional = true, default-features = false, features = ["gtk3"] }
