@@ -60,6 +60,8 @@ workflow; see [RELEASING.md](../RELEASING.md).
 Release notes are checked in as `docs/releases/<tag>.md`; the GitHub release
 workflow uses that file verbatim and uploads the binaries and checksums.
 
+Re-dispatching a release for an existing tag replaces its assets, so the `.exe` hashes change.
+
 GitHub marks a tag whose semantic version contains `alpha`, `beta`, or `rc` as a
 pre-release, and any other tag as a stable release.
 The Docker image must keep `org.opencontainers.image.source` set to
