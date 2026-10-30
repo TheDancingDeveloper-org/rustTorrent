@@ -2660,8 +2660,8 @@ checksum = "98de4bbd547a563b716d8dfa9aad1cb19bfab00f4fa09a6a4ed21dbcf44ce9c4"
 
 [[package]]
 name = "fluent2-egui"
-version = "0.4.1"
-source = "git+https://github.com/TheDancingDeveloper-org/fluent2-egui?tag=v0.4.1#e914e0bfa416b6f4ddbc852975f89590181661b4"
+version = "0.4.2"
+source = "git+https://github.com/TheDancingDeveloper-org/fluent2-egui?tag=v0.4.2#f609a080b886cd669e94a689bf6bbda84f10560c"
 dependencies = [
  "egui",
  "egui_extras",
@@ -2674,13 +2674,13 @@ dependencies = [
 
 [[package]]
 name = "fluent2-icons"
-version = "0.4.1"
-source = "git+https://github.com/TheDancingDeveloper-org/fluent2-egui?tag=v0.4.1#e914e0bfa416b6f4ddbc852975f89590181661b4"
+version = "0.4.2"
+source = "git+https://github.com/TheDancingDeveloper-org/fluent2-egui?tag=v0.4.2#f609a080b886cd669e94a689bf6bbda84f10560c"
 
 [[package]]
 name = "fluent2-tokens"
-version = "0.4.1"
-source = "git+https://github.com/TheDancingDeveloper-org/fluent2-egui?tag=v0.4.1#e914e0bfa416b6f4ddbc852975f89590181661b4"
+version = "0.4.2"
+source = "git+https://github.com/TheDancingDeveloper-org/fluent2-egui?tag=v0.4.2#f609a080b886cd669e94a689bf6bbda84f10560c"
 
 [[package]]
 name = "flume"
