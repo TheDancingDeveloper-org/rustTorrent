@@ -5,11 +5,11 @@ rusttorrent.dev website. The historical Forgejo/Woodpecker path is retired.
 
 ## Versioning
 
-The current pre-release is `0.2.0-beta.3`.
+The current pre-release is `0.2.0-beta.4`.
 
 - Crate version: `crates/rtbit/Cargo.toml`
-- Release tag: `v0.2.0-beta.3`
-- Docker tag: `ghcr.io/thedancingdeveloper-org/rusttorrent:v0.2.0-beta.3`
+- Release tag: `v0.2.0-beta.4`
+- Docker tag: `ghcr.io/thedancingdeveloper-org/rusttorrent:v0.2.0-beta.4`
 
 ## Branching model
 

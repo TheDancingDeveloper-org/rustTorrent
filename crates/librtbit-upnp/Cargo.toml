@@ -1,6 +1,6 @@
 [package]
 name = "swarmforge-upnp"
-version = "0.2.0-beta.3"
+version = "0.2.0-beta.4"
 edition = "2024"
 description = "UPnP port forwarding client for the rtbit BitTorrent client"
 license = "Apache-2.0"
