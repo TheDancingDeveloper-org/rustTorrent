@@ -4,7 +4,9 @@
 
 use std::sync::Mutex;
 
+#[cfg(target_os = "linux")]
 const SERVICE: &str = "dev.rusttorrent.rtbit";
+#[cfg(target_os = "linux")]
 const SCHEMA: &str = "dev.rusttorrent.rtbit";
 
 /// Where a refresh token is kept between launches.
@@ -23,6 +25,7 @@ pub trait TokenStore: Clone + Send + Sync + 'static {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OsKeychain;
 
+#[cfg(target_os = "linux")]
 impl TokenStore for OsKeychain {
     fn store(&self, base_url: &str, refresh_token: &str) -> Option<()> {
         linux_call(base_url, |collection, attributes| {
@@ -86,12 +89,18 @@ fn linux_call<T>(
 
 /// No OS keychain on this platform. The shell asks for the password.
 #[cfg(not(target_os = "linux"))]
-fn linux_call<T>(
-    base_url: &str,
-    call: impl FnOnce(&(), std::collections::HashMap<&str, &str>) -> Option<T>,
-) -> Option<T> {
-    let _ = (base_url, call);
-    None
+impl TokenStore for OsKeychain {
+    fn store(&self, _: &str, _: &str) -> Option<()> {
+        None
+    }
+
+    fn load(&self, _: &str) -> Option<Option<String>> {
+        None
+    }
+
+    fn clear(&self, _: &str) -> Option<()> {
+        None
+    }
 }
 
 fn account(base_url: &str) -> String {
