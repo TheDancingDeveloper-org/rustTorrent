@@ -14,8 +14,8 @@ pub use http::StatusCode;
 pub use types::{
     AdvancedConfig, AltSpeedConfig, AltSpeedSchedule, AltSpeedStatus, AuthStatus, ConnectionFamily,
     ConnectionKindStats, Connections, DownloadsConfig, FoldersConfig, IpFilterConfig, LiveSpeeds,
-    NetworkConfig, PeerCounts, PeerList, PeerView, PieceProgress, ProxyConfig, RateLimits, Role,
-    RssFeed, RssItem, RssSnapshot, SeedLimits, SessionCounters, SessionStats, SettingsSnapshot,
-    Speed, TokenPair, Torrent, TorrentFile, TorrentList, TorrentState, TorrentStats, TrackerList,
-    TrackerState, TrackerStatus,
+    NetworkConfig, NetworkSettings, PeerCounts, PeerList, PeerView, PieceProgress, ProxyConfig,
+    RateLimits, Role, RssFeed, RssItem, RssSnapshot, SavedNetworkStatus, SeedLimits,
+    SessionCounters, SessionStats, SettingsSnapshot, Speed, TokenPair, Torrent, TorrentFile,
+    TorrentList, TorrentState, TorrentStats, TrackerList, TrackerState, TrackerStatus,
 };

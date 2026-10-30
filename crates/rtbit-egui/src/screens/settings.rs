@@ -1,16 +1,30 @@
 //! Settings, five tabs: General, Connection, Speed, Folders, Seeding.
 //!
 //! Bodies match the daemon handlers the web settings dialog already calls.
-//! Connection listen, DHT, peer exchange, discovery and port forwarding are
-//! fixed at startup, so this screen shows them and does not post them.
+//! Listen address and port, UPnP, DHT and local discovery are saved for the
+//! next start (`POST /session/network`) and never change the running process,
+//! so the Connection tab marks them restart-required and shows the saved values
+//! next to the running ones. Peer exchange has no switch and stays read-only.
 //! A proxy password is never drawn from a log; the field starts empty and a
 //! save sends it only when the user typed one.
 
-use fluent2_egui::controls::{Appearance, Button, Checkbox, Input};
+use fluent2_egui::controls::{Appearance, Badge, BadgeColor, Button, Checkbox, Input};
+use fluent2_egui::surfaces::{Intent, MessageBar};
 use rtbit_client::{
     AdvancedConfig, AltSpeedConfig, AltSpeedSchedule, DownloadsConfig, FoldersConfig,
-    IpFilterConfig, ProxyConfig, RateLimits, SeedLimits, SettingsSnapshot,
+    IpFilterConfig, NetworkConfig, NetworkSettings, ProxyConfig, RateLimits, SavedNetworkStatus,
+    SeedLimits, SettingsSnapshot,
 };
+
+/// What the settings screen asked for this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsAction {
+    None,
+    /// Post every edited section.
+    Save,
+    /// Forget the saved network values, so the next start uses the startup flags.
+    UseStartupFlags,
+}
 
 /// Which of the five tabs is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -58,6 +72,8 @@ pub struct SettingsDraft {
     pub lsd: bool,
     pub upnp: bool,
     pub http_listen: String,
+    /// Shown under the network form after a network save. Set by the app.
+    pub network_notice: String,
     /// Masked URL from the daemon. Not posted back: it may contain `***`.
     pub proxy_shown: String,
     /// A new proxy URL. Empty means "leave the saved proxy alone".
@@ -97,6 +113,7 @@ impl std::fmt::Debug for SettingsDraft {
             .field("lsd", &self.lsd)
             .field("upnp", &self.upnp)
             .field("http_listen", &self.http_listen)
+            .field("network_notice", &self.network_notice)
             .field("proxy_shown", &mask_proxy(&self.proxy_shown))
             .field("proxy_edit", &mask_proxy(&self.proxy_edit))
             .field("clear_proxy", &self.clear_proxy)
@@ -142,21 +159,18 @@ fn mask_proxy(url: &str) -> String {
 impl SettingsDraft {
     /// Fill the fields from a daemon read. A blank number means "engine default" or "off".
     pub fn from_snapshot(snap: &SettingsSnapshot) -> Self {
+        let net = NetworkStart::of(&snap.network);
         Self {
             incomplete_suffix: snap.downloads.incomplete_file_suffix,
             connect_timeout: opt_num(snap.advanced.connect_timeout_secs),
             read_write_timeout: opt_num(snap.advanced.read_write_timeout_secs),
             keep_alive: opt_num(snap.advanced.keep_alive_secs),
-            listen_ip: snap.network.listen_ip.clone().unwrap_or_default(),
-            listen_port: snap
-                .network
-                .listen_port
-                .map(|p| p.to_string())
-                .unwrap_or_default(),
-            dht: snap.network.dht_enabled,
+            listen_ip: net.listen_ip,
+            listen_port: net.listen_port,
+            dht: net.dht,
             pex: snap.network.pex_enabled,
-            lsd: snap.network.lsd_enabled,
-            upnp: snap.network.upnp_port_forward,
+            lsd: net.lsd,
+            upnp: net.upnp,
             http_listen: snap.network.http_api_listen.clone(),
             proxy_shown: snap.proxy.proxy_url.clone().unwrap_or_default(),
             ip_filter: snap.ip_filter.filter.clone(),
@@ -210,6 +224,20 @@ impl SettingsDraft {
         };
         if advanced != base.advanced {
             out.advanced = Some(advanced);
+        }
+
+        if base.network.can_save {
+            let shown = NetworkStart::of(&base.network);
+            let edited = NetworkStart {
+                listen_ip: self.listen_ip.clone(),
+                listen_port: self.listen_port.clone(),
+                upnp: self.upnp,
+                dht: self.dht,
+                lsd: self.lsd,
+            };
+            if edited != shown {
+                out.network = Some(network_body(&edited, &base.network)?);
+            }
         }
 
         if self.clear_proxy {
@@ -291,6 +319,8 @@ impl SettingsDraft {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SettingsChanges {
     pub downloads: Option<DownloadsConfig>,
+    /// Saved for the next start. Includes `reset` for "Use startup flags".
+    pub network: Option<NetworkSettings>,
     pub advanced: Option<AdvancedConfig>,
     pub proxy: Option<ProxyConfig>,
     pub ip_filter: Option<IpFilterConfig>,
@@ -305,6 +335,7 @@ pub struct SettingsChanges {
 impl SettingsChanges {
     pub fn is_empty(&self) -> bool {
         self.downloads.is_none()
+            && self.network.is_none()
             && self.advanced.is_none()
             && self.proxy.is_none()
             && self.ip_filter.is_none()
@@ -315,6 +346,167 @@ impl SettingsChanges {
             && self.schedule.is_none()
             && self.seed_limits.is_none()
     }
+}
+
+impl SettingsChanges {
+    /// Only the network reset: forget every saved network value.
+    pub fn use_startup_flags() -> Self {
+        Self {
+            network: Some(NetworkSettings {
+                reset: Some(true),
+                ..NetworkSettings::default()
+            }),
+            ..Self::default()
+        }
+    }
+}
+
+/// The network form's fields as they start: a saved value, else what is running.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NetworkStart {
+    listen_ip: String,
+    listen_port: String,
+    upnp: bool,
+    dht: bool,
+    lsd: bool,
+}
+
+impl NetworkStart {
+    fn of(net: &NetworkConfig) -> Self {
+        let pending = net.pending.clone().unwrap_or_default();
+        Self {
+            listen_ip: pending
+                .listen_ip
+                .or_else(|| net.listen_ip.clone())
+                .unwrap_or_default(),
+            listen_port: pending
+                .listen_port
+                .or(net.listen_port)
+                .map(|p| p.to_string())
+                .unwrap_or_default(),
+            upnp: pending.upnp_port_forward.unwrap_or(net.upnp_port_forward),
+            dht: pending.dht_enabled.unwrap_or(net.dht_enabled),
+            lsd: pending.lsd_enabled.unwrap_or(net.lsd_enabled),
+        }
+    }
+}
+
+/// The POST body for an edited network form. An empty IP clears a saved one,
+/// so the startup flag applies again; the other fields are sent with it.
+fn network_body(edited: &NetworkStart, net: &NetworkConfig) -> Result<NetworkSettings, String> {
+    if let Some(err) = listen_ip_error(&edited.listen_ip) {
+        return Err(err.to_owned());
+    }
+    let port = parse_port(&edited.listen_port).ok_or_else(|| PORT_ERROR.to_owned())?;
+    let ip = edited.listen_ip.trim();
+    let saved_ip = net.pending.as_ref().and_then(|p| p.listen_ip.as_ref());
+    Ok(NetworkSettings {
+        listen_ip: (!ip.is_empty()).then(|| ip.to_owned()),
+        listen_port: Some(port),
+        dht_enabled: Some(edited.dht),
+        lsd_enabled: Some(edited.lsd),
+        upnp_port_forward: Some(edited.upnp),
+        reset: (ip.is_empty() && saved_ip.is_some()).then_some(true),
+    })
+}
+
+const PORT_ERROR: &str = "Enter a port from 1 to 65535.";
+
+fn parse_port(text: &str) -> Option<u16> {
+    text.trim().parse::<u16>().ok().filter(|p| *p >= 1)
+}
+
+/// A blocking problem with the typed listen IP. Empty keeps the startup flag.
+pub fn listen_ip_error(ip: &str) -> Option<&'static str> {
+    let value = ip.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value.contains('%') {
+        return Some(
+            "IPv6 zones (%interface) are not supported. Leave the zone off, or pick the interface with --bind-device.",
+        );
+    }
+    let bare = value.trim_start_matches('[').trim_end_matches(']');
+    match bare.parse::<std::net::IpAddr>() {
+        Ok(_) => None,
+        Err(_) => Some("Enter a valid IPv4 or IPv6 address."),
+    }
+}
+
+/// Legal values that are often a mistake. Shown, never blocking.
+pub fn network_warnings(ip: &str, port: &str) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if parse_port(port).is_some_and(|p| p < 1024) {
+        out.push(
+            "Ports below 1024 need root or CAP_NET_BIND_SERVICE. If the daemon cannot bind it, it falls back to the startup flags.",
+        );
+    }
+    match ip.trim().trim_start_matches('[').trim_end_matches(']') {
+        "::" => out.push(":: listens for peers on every interface, IPv4 and IPv6."),
+        "0.0.0.0" => {
+            out.push("0.0.0.0 listens for peers on every IPv4 interface and none on IPv6.")
+        }
+        _ => {}
+    }
+    out
+}
+
+/// One saved value next to what the process runs with now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SavedRow {
+    pub label: &'static str,
+    pub running: String,
+    pub saved: String,
+}
+
+impl SavedRow {
+    pub fn differs(&self) -> bool {
+        self.running != self.saved
+    }
+}
+
+/// A row for each saved value. Empty when nothing is saved.
+pub fn saved_vs_running(net: &NetworkConfig) -> Vec<SavedRow> {
+    let Some(p) = &net.pending else {
+        return Vec::new();
+    };
+    let on_off = |v: bool| if v { "On" } else { "Off" }.to_owned();
+    let mut rows = Vec::new();
+    if let Some(ip) = &p.listen_ip {
+        rows.push(SavedRow {
+            label: "Listen IP",
+            running: net.listen_ip.clone().unwrap_or_else(|| "off".into()),
+            saved: ip.clone(),
+        });
+    }
+    if let Some(port) = p.listen_port {
+        rows.push(SavedRow {
+            label: "Listen port",
+            running: net
+                .listen_port
+                .map_or_else(|| "off".into(), |p| p.to_string()),
+            saved: port.to_string(),
+        });
+    }
+    for (label, running, saved) in [
+        (
+            "UPnP port forward",
+            net.upnp_port_forward,
+            p.upnp_port_forward,
+        ),
+        ("DHT", net.dht_enabled, p.dht_enabled),
+        ("Local discovery", net.lsd_enabled, p.lsd_enabled),
+    ] {
+        if let Some(saved) = saved {
+            rows.push(SavedRow {
+                label,
+                running: on_off(running),
+                saved: on_off(saved),
+            });
+        }
+    }
+    rows
 }
 
 fn opt_num<T: ToString>(value: Option<T>) -> String {
@@ -349,14 +541,15 @@ fn parse_opt_f64(text: &str) -> Result<Option<f64>, String> {
         .map_err(|_| "Ratio limit must be a number.".to_owned())
 }
 
-/// Draw the open tab. Returns true when Save was clicked.
+/// Draw the open tab and say which button was clicked.
 pub fn draw_settings(
     ui: &mut egui::Ui,
     tab: &mut SettingsTab,
     draft: &mut SettingsDraft,
     busy: bool,
     error: &str,
-) -> bool {
+) -> SettingsAction {
+    let mut action = SettingsAction::None;
     ui.heading("Settings");
     ui.horizontal(|ui| {
         for candidate in SettingsTab::ALL {
@@ -377,21 +570,31 @@ pub fn draw_settings(
     ui.add_space(8.0);
     match *tab {
         SettingsTab::General => general(ui, draft),
-        SettingsTab::Connection => connection(ui, draft),
+        SettingsTab::Connection => {
+            if connection(ui, draft, busy) {
+                action = SettingsAction::UseStartupFlags;
+            }
+        }
         SettingsTab::Speed => speed(ui, draft),
         SettingsTab::Folders => folders(ui, draft),
         SettingsTab::Seeding => seeding(ui, draft),
     }
     ui.add_space(12.0);
-    let save = ui
+    if ui
         .add_enabled(!busy, Button::new("Save").appearance(Appearance::Primary))
-        .clicked();
+        .clicked()
+    {
+        action = SettingsAction::Save;
+    }
     if !error.is_empty() {
         ui.add_space(8.0);
-        ui.colored_label(egui::Color32::from_rgb(196, 43, 28), error);
+        ui.colored_label(ERROR_RED, error);
     }
-    save
+    action
 }
+
+const ERROR_RED: egui::Color32 = egui::Color32::from_rgb(196, 43, 28);
+const WARNING_AMBER: egui::Color32 = egui::Color32::from_rgb(188, 75, 9);
 
 fn general(ui: &mut egui::Ui, draft: &mut SettingsDraft) {
     ui.add(Checkbox::bool(
@@ -405,21 +608,11 @@ fn general(ui: &mut egui::Ui, draft: &mut SettingsDraft) {
     number(ui, "Keep-alive", &mut draft.keep_alive);
 }
 
-fn connection(ui: &mut egui::Ui, draft: &mut SettingsDraft) {
-    ui.label("Listen address, DHT, peer exchange, local discovery and port forwarding are fixed at startup.");
-    ui.label(format!(
-        "Listen {} {}",
-        if draft.listen_ip.is_empty() {
-            "any".to_owned()
-        } else {
-            draft.listen_ip.clone()
-        },
-        draft.listen_port
-    ));
-    ui.add_enabled(false, Checkbox::bool(&mut draft.dht, "DHT"));
+/// Returns true when "Use startup flags" was clicked.
+fn connection(ui: &mut egui::Ui, draft: &mut SettingsDraft, busy: bool) -> bool {
+    let reset = network(ui, draft, busy);
     ui.add_enabled(false, Checkbox::bool(&mut draft.pex, "Peer exchange"));
-    ui.add_enabled(false, Checkbox::bool(&mut draft.lsd, "Local discovery"));
-    ui.add_enabled(false, Checkbox::bool(&mut draft.upnp, "Port forwarding"));
+    ui.label("Peer exchange is always on.");
     if !draft.http_listen.is_empty() {
         ui.label(format!("HTTP listen {}", draft.http_listen));
     }
@@ -440,6 +633,113 @@ fn connection(ui: &mut egui::Ui, draft: &mut SettingsDraft) {
             .label("IP filter")
             .id_salt("ip_filter"),
     );
+    reset
+}
+
+/// The startup-only network form. Returns true when "Use startup flags" was clicked.
+fn network(ui: &mut egui::Ui, draft: &mut SettingsDraft, busy: bool) -> bool {
+    let Some(net) = draft.baseline.as_ref().map(|b| b.network.clone()) else {
+        return false;
+    };
+    ui.horizontal(|ui| {
+        ui.strong("Peer listener and discovery");
+        ui.add(Badge::new("Restart required").color(BadgeColor::Warning));
+    });
+    if !net.can_save {
+        ui.label(format!(
+            "Listen {} {}",
+            net.listen_ip.as_deref().unwrap_or("any"),
+            net.listen_port.map(|p| p.to_string()).unwrap_or_default()
+        ));
+        let (mut upnp, mut dht, mut lsd) =
+            (net.upnp_port_forward, net.dht_enabled, net.lsd_enabled);
+        ui.add_enabled(false, Checkbox::bool(&mut upnp, "UPnP port forward"));
+        ui.add_enabled(false, Checkbox::bool(&mut dht, "DHT"));
+        ui.add_enabled(false, Checkbox::bool(&mut lsd, "Local discovery"));
+        ui.label(
+            "Session persistence is off, so these settings cannot be saved here. Set them with the startup flags.",
+        );
+        ui.add_space(8.0);
+        return false;
+    }
+    match net.pending_status {
+        Some(SavedNetworkStatus::FellBack) => {
+            MessageBar::new(
+                Intent::Error,
+                "The saved peer listener settings could not be used at the last start, so the startup flags are running. Fix the values below, or use the startup flags.",
+            )
+            .id_salt("network_fell_back")
+            .show(ui);
+        }
+        Some(SavedNetworkStatus::Ignored) => {
+            MessageBar::new(
+                Intent::Info,
+                "Started with --ignore-saved-network: the saved values below are not in use.",
+            )
+            .id_salt("network_ignored")
+            .show(ui);
+        }
+        _ => {}
+    }
+    let rows = saved_vs_running(&net);
+    if !rows.is_empty() {
+        egui::Grid::new("network_saved_vs_running")
+            .num_columns(3)
+            .spacing([16.0, 4.0])
+            .show(ui, |ui| {
+                ui.weak("Setting");
+                ui.weak("Running now");
+                ui.weak("Saved");
+                ui.end_row();
+                for row in &rows {
+                    ui.label(row.label);
+                    ui.label(&row.running);
+                    if row.differs() {
+                        ui.strong(format!("{} (next start)", row.saved));
+                    } else {
+                        ui.label(&row.saved);
+                    }
+                    ui.end_row();
+                }
+            });
+    }
+    ui.add(
+        Input::new(&mut draft.listen_ip)
+            .label("Listen IP")
+            .placeholder("::")
+            .id_salt("listen_ip"),
+    );
+    ui.label("IPv4 or IPv6 address for incoming peers. :: listens on every interface. Blank uses the startup flag.");
+    ui.add(
+        Input::new(&mut draft.listen_port)
+            .label("Listen port")
+            .id_salt("listen_port"),
+    );
+    ui.add(Checkbox::bool(&mut draft.upnp, "UPnP port forward"));
+    ui.add(Checkbox::bool(&mut draft.dht, "DHT"));
+    ui.add(Checkbox::bool(&mut draft.lsd, "Local discovery"));
+    if let Some(err) = listen_ip_error(&draft.listen_ip) {
+        ui.colored_label(ERROR_RED, err);
+    }
+    if parse_port(&draft.listen_port).is_none() {
+        ui.colored_label(ERROR_RED, PORT_ERROR);
+    }
+    for warning in network_warnings(&draft.listen_ip, &draft.listen_port) {
+        ui.colored_label(WARNING_AMBER, warning);
+    }
+    let mut reset = false;
+    if net.pending.is_some()
+        && ui
+            .add_enabled(!busy, Button::new("Use startup flags"))
+            .clicked()
+    {
+        reset = true;
+    }
+    if !draft.network_notice.is_empty() {
+        ui.label(&draft.network_notice);
+    }
+    ui.add_space(8.0);
+    reset
 }
 
 fn speed(ui: &mut egui::Ui, draft: &mut SettingsDraft) {
@@ -507,5 +807,52 @@ mod draft_debug {
         let shown = format!("{draft:?}");
         assert!(shown.contains("socks5://ada:***@127.0.0.1:1080"));
         assert!(!shown.contains("s3cret-pass"));
+    }
+}
+
+#[cfg(test)]
+mod network_rules {
+    use super::{listen_ip_error, network_warnings, saved_vs_running};
+    use rtbit_client::{NetworkConfig, NetworkSettings};
+
+    #[test]
+    fn listen_ip_accepts_blank_v4_v6_and_brackets() {
+        for ok in ["", "  ", "10.0.0.1", "::", "[::1]", "2001:db8::5"] {
+            assert_eq!(listen_ip_error(ok), None, "{ok}");
+        }
+        assert!(listen_ip_error("fe80::1%eth0").unwrap().contains("zones"));
+        assert!(listen_ip_error("300.1.1.1").unwrap().contains("valid"));
+        assert!(listen_ip_error("host.lan").unwrap().contains("valid"));
+    }
+
+    #[test]
+    fn warnings_cover_privileged_ports_and_all_interfaces() {
+        assert!(network_warnings("", "6881").is_empty());
+        assert_eq!(network_warnings("", "443").len(), 1);
+        assert!(network_warnings("0.0.0.0", "6881")[0].contains("none on IPv6"));
+        assert!(network_warnings("[::]", "80").len() == 2);
+    }
+
+    #[test]
+    fn rows_list_only_saved_values() {
+        let mut net = NetworkConfig {
+            listen_port: Some(6881),
+            dht_enabled: true,
+            ..NetworkConfig::default()
+        };
+        assert!(saved_vs_running(&net).is_empty());
+        net.pending = Some(NetworkSettings {
+            listen_port: Some(6881),
+            dht_enabled: Some(false),
+            ..NetworkSettings::default()
+        });
+        let rows = saved_vs_running(&net);
+        assert_eq!(rows.len(), 2);
+        assert!(!rows[0].differs());
+        assert_eq!(
+            (rows[1].running.as_str(), rows[1].saved.as_str()),
+            ("On", "Off")
+        );
+        assert!(rows[1].differs());
     }
 }

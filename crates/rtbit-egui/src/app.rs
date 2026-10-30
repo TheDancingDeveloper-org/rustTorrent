@@ -355,6 +355,9 @@ impl LoginAttempt for DaemonLogin {
         let changes = changes.clone();
         on_session(move |session| {
             session.runtime.block_on(async {
+                if let Some(body) = &changes.network {
+                    session.client.set_network(body).await?;
+                }
                 if let Some(body) = &changes.downloads {
                     session.client.set_downloads(body).await?;
                 }
@@ -473,6 +476,8 @@ pub struct App<L: LoginAttempt = DaemonLogin, S: TokenStore = OsKeychain> {
     settings_load: Option<Receiver<Result<SettingsSnapshot, String>>>,
     settings_save: Option<Receiver<Result<(), String>>>,
     settings_error: String,
+    /// Shown on the network form once the reload after a network save lands.
+    settings_notice: String,
 }
 
 impl Default for App<DaemonLogin> {
@@ -541,6 +546,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             settings_load: None,
             settings_save: None,
             settings_error: String::new(),
+            settings_notice: String::new(),
         }
     }
 }
@@ -597,6 +603,7 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             settings_load: None,
             settings_save: None,
             settings_error: String::new(),
+            settings_notice: String::new(),
         }
     }
 }
@@ -1313,15 +1320,19 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
                 self.screen = Screen::Main;
             }
         });
-        let save = crate::screens::draw_settings(
+        let action = crate::screens::draw_settings(
             ui,
             &mut self.settings_tab,
             &mut self.settings_draft,
             self.settings_save.is_some() || self.settings_load.is_some(),
             &self.settings_error,
         );
-        if save {
-            self.submit_settings();
+        match action {
+            crate::screens::SettingsAction::Save => self.submit_settings(),
+            crate::screens::SettingsAction::UseStartupFlags => {
+                self.send_settings(SettingsChanges::use_startup_flags());
+            }
+            crate::screens::SettingsAction::None => {}
         }
     }
 
@@ -1330,6 +1341,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             match rx.try_recv() {
                 Ok(Ok(snap)) => {
                     self.settings_draft = SettingsDraft::from_snapshot(&snap);
+                    self.settings_draft.network_notice = std::mem::take(&mut self.settings_notice);
                     self.settings_load = None;
                     self.settings_error.clear();
                 }
@@ -1353,6 +1365,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
                     self.fail(message.clone());
                     self.settings_error = message;
                     self.settings_save = None;
+                    self.settings_notice.clear();
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => self.settings_save = None,
@@ -1375,6 +1388,20 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
                 self.settings_error = message;
                 return;
             }
+        };
+        self.send_settings(changes);
+    }
+
+    fn send_settings(&mut self, changes: SettingsChanges) {
+        if self.settings_save.is_some() {
+            return;
+        }
+        self.settings_notice = match &changes.network {
+            Some(body) if body.reset == Some(true) && body.listen_port.is_none() => {
+                "Saved values cleared. The next start uses the startup flags.".into()
+            }
+            Some(_) => "Saved. Restart to apply.".into(),
+            None => String::new(),
         };
         let login = self.login.clone();
         let (tx, rx) = mpsc::channel();

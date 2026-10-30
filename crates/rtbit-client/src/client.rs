@@ -241,6 +241,22 @@ impl Client {
         self.authed_post_json("session/advanced", body).await
     }
 
+    /// `POST /session/network`. Saved for the next start; nothing changes live.
+    /// The daemon answers 409 when session persistence is off.
+    pub async fn set_network(&mut self, body: &crate::types::NetworkSettings) -> Result<(), Error> {
+        self.authed_post_json("session/network", body).await
+    }
+
+    /// `POST /session/network` with `{"reset": true}`: forget the saved values,
+    /// so the next start uses the startup flags.
+    pub async fn reset_network(&mut self) -> Result<(), Error> {
+        self.set_network(&crate::types::NetworkSettings {
+            reset: Some(true),
+            ..Default::default()
+        })
+        .await
+    }
+
     /// `POST /session/proxy`. A password in the URL is stored; the daemon never echoes it.
     pub async fn set_proxy(&mut self, body: &crate::types::ProxyConfig) -> Result<(), Error> {
         self.authed_post_json("session/proxy", body).await

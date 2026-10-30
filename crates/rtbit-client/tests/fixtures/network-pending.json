@@ -1,0 +1,1 @@
+{"listen_ip": "0.0.0.0", "listen_port": 6881, "dht_enabled": true, "pex_enabled": true, "lsd_enabled": false, "upnp_port_forward": true, "encryption": null, "http_api_listen": ":3030", "pending": {"listen_ip": "192.168.1.5", "listen_port": 51413, "dht_enabled": false}, "pending_status": "fell_back", "can_save": true}
