@@ -5,6 +5,7 @@ mod e2e_stream;
 mod mock_tracker;
 mod policy_pass;
 mod read_only_storage;
+mod saved_network;
 mod shutdown_flush;
 pub mod test_util;
 mod torrent_ratelimits;

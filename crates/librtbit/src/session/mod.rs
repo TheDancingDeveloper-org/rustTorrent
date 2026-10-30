@@ -171,6 +171,8 @@ pub struct Session {
     proxy_url: parking_lot::RwLock<Option<String>>,
     /// Network settings saved for the next start. Not applied to this process.
     pending_network: parking_lot::RwLock<Option<NetworkSettings>>,
+    /// What this start did with the saved network settings.
+    saved_network_status: Option<SavedNetworkStatus>,
     pub allowlist: Option<IpRanges>,
     /// IPs banned at runtime (WebUI `transfer/banPeers`); not persisted.
     banned_peers: RwLock<HashSet<IpAddr>>,
@@ -228,6 +230,59 @@ fn apply_network_settings(opts: &mut SessionOptions, net: &NetworkSettings) {
     if let Some(lsd) = net.lsd_enabled {
         opts.disable_local_service_discovery = !lsd;
     }
+}
+
+/// What a start did with the network settings saved from the web UI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SavedNetworkStatus {
+    /// The saved values are what this process runs with.
+    Applied,
+    /// `--ignore-saved-network` was given; the startup flags were used.
+    Ignored,
+    /// The peer listener could not start with the saved values, so it was
+    /// started with the startup flags instead.
+    FellBack,
+}
+
+/// The startup flags a saved value replaces, as `flag: old -> new` lines for
+/// the startup log. Values equal to the startup ones are not listed.
+fn network_overrides(opts: &SessionOptions, net: &NetworkSettings) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(listen) = opts.listen.as_ref() {
+        if let Some(ip) = net.listen_ip.filter(|ip| *ip != listen.listen_addr.ip()) {
+            out.push(format!("--listen-ip: {} -> {ip}", listen.listen_addr.ip()));
+        }
+        if let Some(port) = net.listen_port.filter(|p| *p != listen.listen_addr.port()) {
+            out.push(format!(
+                "--listen-port: {} -> {port}",
+                listen.listen_addr.port()
+            ));
+        }
+        if let Some(upnp) = net
+            .upnp_port_forward
+            .filter(|u| *u != listen.enable_upnp_port_forwarding)
+        {
+            out.push(format!(
+                "--disable-upnp-port-forward: upnp {}",
+                on_off(upnp)
+            ));
+        }
+    }
+    if let Some(dht) = net.dht_enabled.filter(|d| *d == opts.disable_dht) {
+        out.push(format!("--disable-dht: dht {}", on_off(dht)));
+    }
+    if let Some(lsd) = net
+        .lsd_enabled
+        .filter(|l| *l == opts.disable_local_service_discovery)
+    {
+        out.push(format!("--disable-lsd: lsd {}", on_off(lsd)));
+    }
+    out
+}
+
+fn on_off(v: bool) -> &'static str {
+    if v { "on" } else { "off" }
 }
 
 impl Session {
@@ -372,9 +427,24 @@ impl Session {
             }
 
             // Network settings saved from the web UI win over the startup
-            // options. They exist to change what the next start does.
+            // options. They exist to change what the next start does. The CLI
+            // listener options are kept so a saved value that cannot bind falls
+            // back to them instead of stopping the daemon.
+            let cli_listen = opts.listen.clone();
+            let mut saved_network_status = None;
             if let Some(net) = pending_network {
-                apply_network_settings(&mut opts, &net);
+                if opts.ignore_saved_network {
+                    warn!(
+                        "ignoring saved network settings (--ignore-saved-network); using the startup flags"
+                    );
+                    saved_network_status = Some(SavedNetworkStatus::Ignored);
+                } else {
+                    for change in network_overrides(&opts, &net) {
+                        info!("saved network setting overrides the startup flag: {change}");
+                    }
+                    apply_network_settings(&mut opts, &net);
+                    saved_network_status = Some(SavedNetworkStatus::Applied);
+                }
             }
 
             // The listener token is a child of the session token, but it is only
@@ -382,19 +452,34 @@ impl Session {
             // drop the uTP socket (and kill its dispatcher) while task_listener is
             // still in accept(), which logs "error accepting uTP: dispatcher dead".
             let listener_token = token.child_token();
-            let listen_result = if let Some(listen_opts) = opts.listen.take() {
-                Some(
-                    listen_opts
-                        .start(
-                            opts.root_span.as_ref().and_then(|s| s.id()),
-                            listener_token.clone(),
-                            bind_device.as_ref(),
-                        )
-                        .await
-                        .context("error starting listeners")?,
-                )
-            } else {
-                None
+            let span_id = opts.root_span.as_ref().and_then(|s| s.id());
+            let listen_result = match opts.listen.take() {
+                None => None,
+                Some(listen_opts) => {
+                    let started = listen_opts
+                        .start(span_id.clone(), listener_token.clone(), bind_device.as_ref())
+                        .await;
+                    match (started, cli_listen) {
+                        (Ok(listener), _) => Some(listener),
+                        (Err(e), Some(cli))
+                            if saved_network_status == Some(SavedNetworkStatus::Applied) =>
+                        {
+                            warn!(
+                                "could not start the peer listener with the saved network settings ({e:#}); \
+                                 falling back to the startup flags ({}). Fix or reset the saved values in \
+                                 the web UI, or start with --ignore-saved-network",
+                                cli.listen_addr
+                            );
+                            saved_network_status = Some(SavedNetworkStatus::FellBack);
+                            Some(
+                                cli.start(span_id, listener_token.clone(), bind_device.as_ref())
+                                    .await
+                                    .context("error starting listeners")?,
+                            )
+                        }
+                        (Err(e), _) => return Err(e.context("error starting listeners")),
+                    }
+                }
             };
 
             let has_proxy = opts.connect.as_ref().and_then(|s| s.proxy_url.as_ref()).is_some();
@@ -613,6 +698,7 @@ impl Session {
                 ip_filter_text: parking_lot::RwLock::new(String::new()),
                 proxy_url: parking_lot::RwLock::new(proxy_url),
                 pending_network: parking_lot::RwLock::new(pending_network),
+                saved_network_status,
                 allowlist,
                 banned_peers: Default::default(),
                 lsd,
@@ -1681,6 +1767,23 @@ impl Session {
     /// Network settings saved for the next start, if any.
     pub fn pending_network(&self) -> Option<NetworkSettings> {
         *self.pending_network.read()
+    }
+
+    /// Forget every saved network setting, so the next start uses the
+    /// startup flags. Call [`Self::persist_session_settings`] to keep it.
+    pub fn clear_pending_network(&self) {
+        *self.pending_network.write() = None;
+    }
+
+    /// What this start did with the saved network settings; `None` when
+    /// nothing was saved at startup.
+    pub fn saved_network_status(&self) -> Option<SavedNetworkStatus> {
+        self.saved_network_status
+    }
+
+    /// True when session settings are written to disk or a database.
+    pub fn has_persistence(&self) -> bool {
+        self.persistence.is_some()
     }
 
     /// Merge `update` into the saved network settings. Takes effect at the

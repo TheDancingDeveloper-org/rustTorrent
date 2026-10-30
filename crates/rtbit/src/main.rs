@@ -271,6 +271,12 @@ struct Opts {
     )]
     disable_upnp_port_forward: bool,
 
+    /// Start with the peer listener, DHT and LSD flags as given, ignoring the
+    /// network settings saved from the web UI. The saved values are kept, so
+    /// the web UI can still show, fix or reset them.
+    #[arg(long = "ignore-saved-network", env = "RTBIT_IGNORE_SAVED_NETWORK")]
+    ignore_saved_network: bool,
+
     /// If set, will run a UPnP Media server on RTBIT_HTTP_API_LISTEN_ADDR.
     #[arg(long = "enable-upnp-server", env = "RTBIT_UPNP_SERVER_ENABLE")]
     enable_upnp_server: bool,
@@ -851,6 +857,7 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
 
     let mut sopts = SessionOptions {
         disable_dht: opts.disable_dht,
+        ignore_saved_network: opts.ignore_saved_network,
         disable_dht_persistence: opts.disable_dht_persistence,
         dht_bootstrap_addrs: opts
             .dht_bootstrap_addrs

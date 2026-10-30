@@ -194,6 +194,12 @@ pub struct NetworkConfig {
     pub encryption: Option<String>,
     pub http_api_listen: String,
     pub pending: Option<crate::session_persistence::NetworkSettings>,
+    /// What this start did with the saved values: `applied`, `ignored`
+    /// (`--ignore-saved-network`) or `fell_back` (they could not bind, so the
+    /// startup flags were used). Null when nothing was saved at startup.
+    pub pending_status: Option<crate::SavedNetworkStatus>,
+    /// False when session persistence is off, so nothing can be saved.
+    pub can_save: bool,
 }
 
 /// A write of the network settings. Deserialized leniently so an unknown or
@@ -220,6 +226,10 @@ pub struct NetworkConfigUpdate {
     pub disable_auth: Option<bool>,
     #[serde(default)]
     pub read_only: Option<bool>,
+    /// Forget every saved value first, so the next start uses the startup
+    /// flags. Other fields in the same body are then saved on top.
+    #[serde(default)]
+    pub reset: Option<bool>,
 }
 
 /// Check a network-settings write. Returns the settings to save for the next
@@ -247,9 +257,17 @@ pub fn validate_network_update(
         return Err("listen_port must be between 1 and 65535");
     }
     let listen_ip = match update.listen_ip.as_deref().map(str::trim) {
-        None => None,
+        None | Some("") => None,
+        Some(raw) if raw.contains('%') => {
+            return Err(
+                "listen_ip cannot carry an IPv6 zone (%interface); give the address \
+                 without it, or pick the interface with --bind-device",
+            );
+        }
         Some(raw) => Some(
-            raw.parse::<std::net::IpAddr>()
+            raw.trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<std::net::IpAddr>()
                 .map_err(|_| "listen_ip must be an IPv4 or IPv6 address")?,
         ),
     };
@@ -260,7 +278,7 @@ pub fn validate_network_update(
         lsd_enabled: update.lsd_enabled,
         upnp_port_forward: update.upnp_port_forward,
     };
-    if settings.is_empty() {
+    if settings.is_empty() && update.reset != Some(true) {
         return Err("no network setting was given");
     }
     Ok(settings)
@@ -286,6 +304,8 @@ pub async fn h_get_network(State(state): State<ApiState>) -> Result<impl IntoRes
         encryption: None,
         http_api_listen,
         pending: session.pending_network(),
+        pending_status: session.saved_network_status(),
+        can_save: session.has_persistence(),
     }))
 }
 
@@ -301,7 +321,20 @@ pub async fn h_set_network(
         Err(message) => return ApiError::from((StatusCode::BAD_REQUEST, message)).into_response(),
     };
     let session = state.api.session();
-    session.set_pending_network(settings);
+    if !session.has_persistence() {
+        return ApiError::from((
+            StatusCode::CONFLICT,
+            "session persistence is off, so network settings cannot be saved for \
+             the next start; set them with the startup flags instead",
+        ))
+        .into_response();
+    }
+    if update.reset == Some(true) {
+        session.clear_pending_network();
+    }
+    if !settings.is_empty() {
+        session.set_pending_network(settings);
+    }
     if let Err(err) = session.persist_session_settings().await {
         tracing::warn!("could not save network settings: {err:#}");
         return (
@@ -310,9 +343,14 @@ pub async fn h_set_network(
         )
             .into_response();
     }
+    let message = if session.pending_network().is_none() {
+        "Saved network settings cleared. The next start uses the startup flags."
+    } else {
+        "Network settings saved. Restart to apply them."
+    };
     Json(serde_json::json!({
         "restart_required": true,
-        "message": "Network settings saved. Restart to apply them."
+        "message": message,
     }))
     .into_response()
 }
@@ -564,6 +602,88 @@ mod tests {
                 .contains("listen_ip")
         );
         assert!(validate_network_update(&NetworkConfigUpdate::default()).is_err());
+        let zone = network_update(|update| update.listen_ip = Some("fe80::1%eth0".to_string()));
+        assert!(
+            validate_network_update(&zone)
+                .unwrap_err()
+                .contains("IPv6 zone")
+        );
+    }
+
+    async fn network_state(
+        persist: Option<&Path>,
+    ) -> (ApiState, std::sync::Arc<crate::Session>, tempfile::TempDir) {
+        let output = tempfile::TempDir::new().unwrap();
+        let session = crate::Session::new_with_opts(
+            output.path().to_owned(),
+            crate::SessionOptions {
+                disable_dht: true,
+                disable_dht_persistence: true,
+                disable_local_service_discovery: true,
+                persistence: persist.map(|folder| crate::SessionPersistenceConfig::Json {
+                    folder: Some(folder.to_owned()),
+                }),
+                listen: Some(crate::ListenerOptions {
+                    listen_addr: (std::net::Ipv4Addr::LOCALHOST, 0).into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let api = crate::Api::new(
+            session.clone(),
+            None,
+            #[cfg(feature = "tracing-subscriber-utils")]
+            None,
+        );
+        let state = std::sync::Arc::new(crate::http_api::HttpApi::new(api, None));
+        (state, session, output)
+    }
+
+    #[tokio::test]
+    async fn set_network_without_persistence_is_a_conflict() {
+        let (state, session, _output) = network_state(None).await;
+        let update = network_update(|update| update.listen_port = Some(6881));
+        let resp = h_set_network(State(state), Json(update)).await;
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("persistence is off"));
+        assert_eq!(session.pending_network(), None);
+        session.stop().await;
+    }
+
+    #[tokio::test]
+    async fn set_network_reset_clears_saved_values() {
+        let persist = tempfile::TempDir::new().unwrap();
+        let (state, session, _output) = network_state(Some(persist.path())).await;
+        let save = network_update(|update| {
+            update.listen_port = Some(6881);
+            update.dht_enabled = Some(false);
+        });
+        let resp = h_set_network(State(state.clone()), Json(save)).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(session.pending_network().unwrap().listen_port, Some(6881));
+
+        let reset = network_update(|update| update.reset = Some(true));
+        let resp = h_set_network(State(state), Json(reset)).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("cleared"));
+        assert_eq!(session.pending_network(), None);
+        session.stop().await;
+    }
+
+    #[test]
+    fn network_update_reset_alone_is_accepted() {
+        let reset = network_update(|update| update.reset = Some(true));
+        assert!(validate_network_update(&reset).unwrap().is_empty());
+        let bracketed = network_update(|update| update.listen_ip = Some("[::1]".to_string()));
+        assert_eq!(
+            validate_network_update(&bracketed).unwrap().listen_ip,
+            Some("::1".parse().unwrap())
+        );
     }
 
     #[test]
