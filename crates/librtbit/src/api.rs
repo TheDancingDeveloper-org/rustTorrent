@@ -809,6 +809,12 @@ impl Api {
                 "tag name is required",
             )));
         }
+        if from.contains(',') || to.contains(',') {
+            return Err(ApiError::from((
+                StatusCode::BAD_REQUEST,
+                "tag name must not contain a comma",
+            )));
+        }
         if from == to {
             return Ok(Default::default());
         }

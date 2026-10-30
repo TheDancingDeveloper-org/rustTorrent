@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import debounce from "lodash.debounce";
 import { StatusFilter } from "../helper/torrentFilters";
 import { CategoryInfo } from "../api-types";
 import {
@@ -42,6 +43,13 @@ function publishView(
 ): void {
   writeViewQuery(viewFromState(patch), window.location, window.history, mode);
 }
+
+// Search keystrokes replace the current history entry rather than pushing one
+// per character, and the write is debounced so typing a word costs one entry.
+const publishSearch = debounce(
+  (query: string) => publishView({ search: query }, "replace"),
+  300,
+);
 
 /** Apply the URL's view to the store. Used on load and on back/forward. */
 export function applyViewFromLocation(
@@ -149,7 +157,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
 
   searchQuery: initialView.search,
   setSearchQuery: (query) => {
-    publishView({ search: query });
+    publishSearch(query);
     set({ searchQuery: query });
   },
 

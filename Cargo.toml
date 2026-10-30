@@ -33,6 +33,9 @@ all = { level = "warn", priority = -1 }
 [workspace.lints.rust]
 unused = "warn"
 
+[workspace.package]
+version = "0.2.0-beta.3"
+
 [profile.dev]
 panic = "abort"
 

@@ -1,6 +1,6 @@
 [package]
 name = "rtbit-fluent-mockup"
-version = "0.2.0-beta.3"
+version.workspace = true
 edition = "2024"
 publish = false
 description = "Static fluent2 mockup of the rustTorrent UI. Fake data, no daemon."

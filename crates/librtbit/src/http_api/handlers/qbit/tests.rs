@@ -1085,6 +1085,21 @@ async fn tag_endpoints_drive_backend_tags() {
     assert!(!session.tags().exists("only"));
     assert!(session.tags().exists("renamed"));
 
+    // renameTag rejects a comma in either name with 400: tags are
+    // comma-separated on the wire, so such a name could never round-trip.
+    let response = h_torrents_rename_tag(st(), form("from=renamed&to=with,comma".into()))
+        .await
+        .into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // renameTag reports a conflicting target as 409.
+    h_torrents_create_tags(st(), form("tags=exists".into())).await;
+    let response = h_torrents_rename_tag(st(), form("from=renamed&to=exists".into()))
+        .await
+        .into_response();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(session.tags().exists("renamed"));
+
     // deleteTags unregisters a tag and strips it from every torrent.
     h_torrents_delete_tags(st(), form("tags=new".into())).await;
     assert!(torrent_tags(&a).is_empty());
