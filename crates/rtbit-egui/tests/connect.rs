@@ -7,10 +7,10 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use rtbit_client::{
     AdvancedConfig, AltSpeedConfig, AltSpeedSchedule, AltSpeedStatus, AuthStatus, DownloadsConfig,
-    Error, FoldersConfig, IpFilterConfig, NetworkConfig, PeerCounts, PeerList, PieceProgress,
-    ProxyConfig, RateLimits, RssFeed, RssItem, RssSnapshot, SeedLimits, SessionCounters,
-    SessionStats, SettingsSnapshot, Speed, Torrent, TorrentFile, TorrentList, TorrentState,
-    TorrentStats, TrackerList,
+    Error, FoldersConfig, IpFilterConfig, NetworkConfig, NetworkSettings, PeerCounts, PeerList,
+    PieceProgress, ProxyConfig, RateLimits, RssFeed, RssItem, RssSnapshot, SavedNetworkStatus,
+    SeedLimits, SessionCounters, SessionStats, SettingsSnapshot, Speed, Torrent, TorrentFile,
+    TorrentList, TorrentState, TorrentStats, TrackerList,
 };
 use rtbit_egui::{
     AddRequest, AddSource, App, Connection, DetailSnapshot, LoginAttempt, MemoryStore, RowAction,
@@ -41,6 +41,8 @@ struct Scripted {
     /// What `rotated_refresh` reports. Tests set this to simulate a 401 rotation.
     rotated: std::sync::Arc<Mutex<Option<String>>>,
     settings_saves: std::sync::Arc<Mutex<Vec<SettingsChanges>>>,
+    /// The network part of what `load_settings` returns.
+    network: std::sync::Arc<Mutex<NetworkConfig>>,
     rss_downloads: std::sync::Arc<Mutex<Vec<String>>>,
 }
 
@@ -107,7 +109,10 @@ impl LoginAttempt for Scripted {
     }
 
     fn load_settings(&self) -> Result<SettingsSnapshot, Error> {
-        Ok(sample_settings())
+        Ok(SettingsSnapshot {
+            network: self.network.lock().expect("network").clone(),
+            ..sample_settings()
+        })
     }
 
     fn save_settings(&self, changes: &SettingsChanges) -> Result<(), Error> {
@@ -178,6 +183,7 @@ fn scripted(result: Script) -> Scripted {
         setups: std::sync::Arc::new(Mutex::new(0)),
         rotated: std::sync::Arc::new(Mutex::new(None)),
         settings_saves: std::sync::Arc::new(Mutex::new(Vec::new())),
+        network: std::sync::Arc::new(Mutex::new(sample_settings().network)),
         rss_downloads: std::sync::Arc::new(Mutex::new(Vec::new())),
     }
 }
@@ -1039,4 +1045,192 @@ fn pointer_click(harness: &mut Harness<'static, App<Scripted>>, pos: egui::Pos2)
         });
     }
     harness.run_steps(2);
+}
+
+/// Sign in, open Settings and the Connection tab with this network read.
+fn open_connection(script: Scripted) -> Harness<'static, App<Scripted, MemoryStore>> {
+    let mut harness = mem_harness(script, MemoryStore::default());
+    click_mem(&mut harness, "Connect");
+    for _ in 0..50 {
+        harness.run_steps(1);
+        if harness.state().screen() == Screen::Main {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    click_mem(&mut harness, "Settings");
+    wait_for(&mut harness, "Append .part to incomplete files");
+    click_mem(&mut harness, "Connection");
+    harness.run_steps(2);
+    harness
+}
+
+fn wait_for(harness: &mut Harness<'static, App<Scripted, MemoryStore>>, text: &'static str) {
+    for _ in 0..50 {
+        harness.run_steps(1);
+        if shows_mem(harness, text) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("never showed {text}");
+}
+
+fn wait_for_save(
+    saves: &Mutex<Vec<SettingsChanges>>,
+    harness: &mut Harness<'static, App<Scripted, MemoryStore>>,
+) {
+    for _ in 0..50 {
+        harness.run_steps(1);
+        if !saves.lock().expect("saves").is_empty() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+fn click_checkbox(harness: &mut Harness<'static, App<Scripted, MemoryStore>>, name: &'static str) {
+    harness
+        .query_all(egui_kittest::kittest::by().predicate(move |node| {
+            node.label().as_deref() == Some(name) && node.role() == Role::CheckBox
+        }))
+        .next()
+        .unwrap_or_else(|| panic!("no checkbox {name}"))
+        .click();
+}
+
+fn has_button(harness: &Harness<'static, App<Scripted, MemoryStore>>, name: &'static str) -> bool {
+    harness
+        .query_all(egui_kittest::kittest::by().predicate(move |node| {
+            node.label().as_deref() == Some(name) && node.role() == Role::Button
+        }))
+        .next()
+        .is_some()
+}
+
+#[test]
+fn network_edit_posts_every_field_for_the_next_start() {
+    let script = scripted(Script::Ok);
+    let saves = script.settings_saves.clone();
+    let mut harness = open_connection(script);
+    assert!(shows_mem(&harness, "Restart required"));
+    assert!(shows_mem(&harness, "Listen port"));
+    assert!(
+        !has_button(&harness, "Use startup flags"),
+        "nothing is saved, so there is nothing to reset"
+    );
+    click_checkbox(&mut harness, "DHT");
+    harness.run_steps(2);
+    click_mem(&mut harness, "Save");
+    wait_for_save(&saves, &mut harness);
+    let saved = saves.lock().expect("saves").clone();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(
+        saved[0].network,
+        Some(NetworkSettings {
+            listen_ip: None,
+            listen_port: Some(6881),
+            dht_enabled: Some(false),
+            lsd_enabled: Some(false),
+            upnp_port_forward: Some(false),
+            reset: None,
+        })
+    );
+    assert!(saved[0].proxy.is_none());
+    wait_for(&mut harness, "Saved. Restart to apply.");
+}
+
+#[test]
+fn an_unchanged_network_form_posts_nothing_for_it() {
+    let script = scripted(Script::Ok);
+    let saves = script.settings_saves.clone();
+    let mut harness = open_connection(script);
+    click_checkbox(&mut harness, "Clear proxy");
+    harness.run_steps(2);
+    click_mem(&mut harness, "Save");
+    wait_for_save(&saves, &mut harness);
+    let saved = saves.lock().expect("saves").clone();
+    assert_eq!(saved.len(), 1);
+    assert!(saved[0].network.is_none());
+}
+
+#[test]
+fn fell_back_saved_values_show_the_banner_rows_warnings_and_reset() {
+    let script = scripted(Script::Ok);
+    *script.network.lock().expect("network") = NetworkConfig {
+        listen_ip: Some("0.0.0.0".into()),
+        listen_port: Some(6881),
+        dht_enabled: true,
+        pending: Some(NetworkSettings {
+            listen_ip: Some("::".into()),
+            listen_port: Some(80),
+            ..NetworkSettings::default()
+        }),
+        pending_status: Some(SavedNetworkStatus::FellBack),
+        ..NetworkConfig::default()
+    };
+    let saves = script.settings_saves.clone();
+    let mut harness = open_connection(script);
+    assert!(shows_mem(
+        &harness,
+        "could not be used at the last start, so the startup flags are running"
+    ));
+    assert!(shows_mem(&harness, "Running now"));
+    assert!(shows_mem(&harness, "80 (next start)"));
+    assert!(shows_mem(&harness, "Ports below 1024 need root"));
+    assert!(shows_mem(
+        &harness,
+        ":: listens for peers on every interface"
+    ));
+    click_mem(&mut harness, "Use startup flags");
+    wait_for_save(&saves, &mut harness);
+    let saved = saves.lock().expect("saves").clone();
+    assert_eq!(saved, vec![SettingsChanges::use_startup_flags()]);
+    wait_for(
+        &mut harness,
+        "Saved values cleared. The next start uses the startup flags.",
+    );
+}
+
+#[test]
+fn ignored_saved_values_say_so_and_a_zoned_ip_is_refused() {
+    let script = scripted(Script::Ok);
+    *script.network.lock().expect("network") = NetworkConfig {
+        listen_port: Some(6881),
+        pending: Some(NetworkSettings {
+            dht_enabled: Some(false),
+            ..NetworkSettings::default()
+        }),
+        pending_status: Some(SavedNetworkStatus::Ignored),
+        ..NetworkConfig::default()
+    };
+    let saves = script.settings_saves.clone();
+    let mut harness = open_connection(script);
+    assert!(shows_mem(&harness, "Started with --ignore-saved-network"));
+    fill(&mut harness, "Listen IP", "fe80::1%eth0");
+    harness.run_steps(2);
+    assert!(shows_mem(
+        &harness,
+        "IPv6 zones (%interface) are not supported"
+    ));
+    click_mem(&mut harness, "Save");
+    harness.run_steps(4);
+    assert!(saves.lock().expect("saves").is_empty());
+}
+
+#[test]
+fn without_persistence_the_network_form_is_read_only() {
+    let script = scripted(Script::Ok);
+    script.network.lock().expect("network").can_save = false;
+    let harness = open_connection(script);
+    assert!(shows_mem(&harness, "Session persistence is off"));
+    assert!(
+        harness
+            .query_all(egui_kittest::kittest::by().predicate(|node| {
+                node.label().as_deref() == Some("Listen port") && node.role() == Role::TextInput
+            }))
+            .next()
+            .is_none()
+    );
+    assert!(!has_button(&harness, "Use startup flags"));
 }

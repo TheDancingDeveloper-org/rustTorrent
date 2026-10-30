@@ -449,7 +449,7 @@ pub struct AdvancedConfig {
 }
 
 /// `GET /session/network`. A POST saves values for the next start; they never apply live.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct NetworkConfig {
     pub listen_ip: Option<String>,
     pub listen_port: Option<u16>,
@@ -460,6 +460,72 @@ pub struct NetworkConfig {
     pub encryption: Option<String>,
     #[serde(default)]
     pub http_api_listen: String,
+    /// Values saved for the next start. `None` when nothing is saved.
+    #[serde(default)]
+    pub pending: Option<NetworkSettings>,
+    /// What this start did with the saved values. `None` when nothing was saved.
+    #[serde(default)]
+    pub pending_status: Option<SavedNetworkStatus>,
+    /// False when the daemon runs without session persistence, so nothing can be saved.
+    /// An older daemon omits it; treat that as savable, as the web UI does.
+    #[serde(default = "default_true")]
+    pub can_save: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            listen_ip: None,
+            listen_port: None,
+            dht_enabled: false,
+            pex_enabled: false,
+            lsd_enabled: false,
+            upnp_port_forward: false,
+            encryption: None,
+            http_api_listen: String::new(),
+            pending: None,
+            pending_status: None,
+            can_save: true,
+        }
+    }
+}
+
+/// `POST /session/network` body, and the `pending` part of the GET.
+/// Each absent field keeps the startup flag. Saved values apply at the next start.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub struct NetworkSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listen_ip: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listen_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dht_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lsd_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upnp_port_forward: Option<bool>,
+    /// Forget every saved value first. Other fields in the same body are saved on top.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset: Option<bool>,
+}
+
+/// What a start did with the saved network settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SavedNetworkStatus {
+    /// The saved values are running.
+    Applied,
+    /// Started with `--ignore-saved-network`.
+    Ignored,
+    /// The saved listener could not start, so the startup flags are running.
+    FellBack,
+    /// A status this client does not know.
+    #[serde(other)]
+    Unknown,
 }
 
 /// `GET /session/proxy`. The password, if any, is already masked by the daemon.

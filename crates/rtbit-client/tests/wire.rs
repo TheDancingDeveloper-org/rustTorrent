@@ -455,6 +455,103 @@ async fn settings_reads_the_five_tabs_and_posts_only_the_changed_section() {
     server.verify().await;
 }
 
+#[test]
+fn network_reads_saved_values_status_and_can_save() {
+    let old: rtbit_client::NetworkConfig = serde_json::from_str(&fixture("network.json")).unwrap();
+    assert!(old.can_save, "an older daemon without can_save is savable");
+    assert_eq!(old.pending, None);
+    assert_eq!(old.pending_status, None);
+
+    let net: rtbit_client::NetworkConfig =
+        serde_json::from_str(&fixture("network-pending.json")).unwrap();
+    assert_eq!(
+        net.pending_status,
+        Some(rtbit_client::SavedNetworkStatus::FellBack)
+    );
+    let pending = net.pending.unwrap();
+    assert_eq!(pending.listen_ip.as_deref(), Some("192.168.1.5"));
+    assert_eq!(pending.listen_port, Some(51413));
+    assert_eq!(pending.dht_enabled, Some(false));
+    assert_eq!(pending.lsd_enabled, None);
+
+    let unknown: rtbit_client::NetworkConfig = serde_json::from_str(
+        r#"{"listen_ip":null,"listen_port":null,"dht_enabled":false,"pex_enabled":true,"lsd_enabled":false,"upnp_port_forward":false,"encryption":null,"pending_status":"later","can_save":false}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        unknown.pending_status,
+        Some(rtbit_client::SavedNetworkStatus::Unknown)
+    );
+    assert!(!unknown.can_save);
+}
+
+#[tokio::test]
+async fn network_set_posts_only_given_fields_and_reset_posts_reset() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("login.json"), "application/json"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/session/network"))
+        .and(body_json(
+            serde_json::json!({"listen_port": 51413, "dht_enabled": false}),
+        ))
+        .and(header("authorization", "Bearer access-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"restart_required":true,"message":"saved"}"#,
+            "application/json",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/session/network"))
+        .and(body_json(serde_json::json!({"reset": true})))
+        .and(header("authorization", "Bearer access-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut client = Client::new(server.uri()).unwrap();
+    client.login("ada", "secret").await.unwrap();
+    client
+        .set_network(&rtbit_client::NetworkSettings {
+            listen_port: Some(51413),
+            dht_enabled: Some(false),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    client.reset_network().await.unwrap();
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn network_save_without_persistence_is_a_daemon_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("login.json"), "application/json"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/session/network"))
+        .respond_with(ResponseTemplate::new(409))
+        .mount(&server)
+        .await;
+    let mut client = Client::new(server.uri()).unwrap();
+    client.login("ada", "secret").await.unwrap();
+    let err = client.reset_network().await.unwrap_err();
+    assert!(matches!(err, rtbit_client::Error::Daemon { status, .. } if status.as_u16() == 409));
+}
+
 #[tokio::test]
 async fn rss_lists_feeds_and_items_and_posts_one_download() {
     let server = MockServer::start().await;
