@@ -131,8 +131,11 @@ async fn run_tracker(socket: UdpSocket, state: Arc<MockTrackerState>, cancel: Ca
                     }
                     peers.clone()
                 };
-                let seeders = peers.iter().filter(|peer| peer.is_seed).count() as u32;
-                let leechers = peers.len() as u32 - seeders;
+                // A test swarm never approaches u32::MAX peers, so these cannot fail.
+                let seeders = u32::try_from(peers.iter().filter(|peer| peer.is_seed).count())
+                    .expect("peer count fits in u32");
+                let leechers =
+                    u32::try_from(peers.len()).expect("peer count fits in u32") - seeders;
                 response.extend_from_slice(&ACTION_ANNOUNCE.to_be_bytes());
                 response.extend_from_slice(tid);
                 response.extend_from_slice(&1u32.to_be_bytes());
@@ -149,12 +152,18 @@ async fn run_tracker(socket: UdpSocket, state: Arc<MockTrackerState>, cancel: Ca
                 state.scrapes.fetch_add(1, Ordering::Relaxed);
                 response.extend_from_slice(&ACTION_SCRAPE.to_be_bytes());
                 response.extend_from_slice(tid);
-                for chunk in buf[16..len].chunks_exact(20) {
-                    let hash = Id20::new(chunk.try_into().unwrap());
+                let (hashes, _) = buf[16..len].as_chunks::<20>();
+                for hash in hashes {
+                    let hash = Id20::new(*hash);
                     let peers = state.peers.read();
                     let (seeders, leechers) = peers.get(&hash).map_or((0, 0), |peers| {
-                        let seeders = peers.iter().filter(|peer| peer.is_seed).count() as u32;
-                        (seeders, peers.len() as u32 - seeders)
+                        let seeders =
+                            u32::try_from(peers.iter().filter(|peer| peer.is_seed).count())
+                                .expect("peer count fits in u32");
+                        (
+                            seeders,
+                            u32::try_from(peers.len()).expect("peer count fits in u32") - seeders,
+                        )
                     });
                     response.extend_from_slice(&seeders.to_be_bytes());
                     response.extend_from_slice(&0u32.to_be_bytes());

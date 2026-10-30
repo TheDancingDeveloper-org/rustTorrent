@@ -1393,7 +1393,7 @@ mod tests {
     fn tracked_clients_stay_within_the_bound() {
         let limiter = LoginLimiter::default();
         let now = Instant::now();
-        for i in 0..(LOGIN_TRACKED_CLIENTS_MAX as u32 + 500) {
+        for i in 0..(u32::try_from(LOGIN_TRACKED_CLIENTS_MAX).expect("bound fits in u32") + 500) {
             let ip = IpAddr::V4(Ipv4Addr::from(0x0a00_0000 + i));
             limiter.record_failure(ip, now);
         }
@@ -1406,7 +1406,7 @@ mod tests {
         let now = Instant::now();
         let locked = test_ip();
         lock_out(&limiter, locked, now);
-        for i in 0..(LOGIN_TRACKED_CLIENTS_MAX as u32 + 500) {
+        for i in 0..(u32::try_from(LOGIN_TRACKED_CLIENTS_MAX).expect("bound fits in u32") + 500) {
             let ip = IpAddr::V4(Ipv4Addr::from(0x0b00_0000 + i));
             limiter.record_failure(ip, now);
         }
