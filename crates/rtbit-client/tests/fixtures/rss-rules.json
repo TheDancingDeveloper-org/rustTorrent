@@ -1,0 +1,11 @@
+[
+  {
+    "id": "r-1",
+    "name": "Show 1080p",
+    "feed_names": ["Show"],
+    "category": "tv",
+    "priority": 2,
+    "match_regex": "Show.*1080p",
+    "enabled": true
+  }
+]

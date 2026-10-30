@@ -662,9 +662,40 @@ pub struct RssItem {
     pub downloaded: bool,
 }
 
-/// Feeds and items the RSS screen shows. Rules are not part of v1.
+/// `GET /rss/rules`. An auto-download rule; it applies to the named feeds.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+pub struct RssRule {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub feed_names: Vec<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    /// 0 low, 1 normal, 2 high, 3 force.
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default)]
+    pub match_regex: String,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// Body of `POST /rss/rules` and `PUT /rss/rules/{id}`. The daemon compiles
+/// `match_regex` and answers 400 with the reason when it does not.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct RssRuleBody {
+    pub name: String,
+    pub feed_names: Vec<String>,
+    pub category: Option<String>,
+    pub priority: i32,
+    pub match_regex: String,
+    pub enabled: bool,
+}
+
+/// Feeds, items and rules the RSS screen shows.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RssSnapshot {
     pub feeds: Vec<RssFeed>,
     pub items: Vec<RssItem>,
+    pub rules: Vec<RssRule>,
 }

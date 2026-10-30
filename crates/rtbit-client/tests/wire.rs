@@ -565,6 +565,7 @@ async fn rss_lists_feeds_and_items_and_posts_one_download() {
     for (route, file) in [
         ("/rss/feeds", "rss-feeds.json"),
         ("/rss/items", "rss-items.json"),
+        ("/rss/rules", "rss-rules.json"),
     ] {
         Mock::given(method("GET"))
             .and(path(route))
@@ -591,6 +592,144 @@ async fn rss_lists_feeds_and_items_and_posts_one_download() {
     assert_eq!(snap.feeds[0].name, "Show");
     assert_eq!(snap.items[0].title, "Episode One");
     assert!(!snap.items[0].downloaded);
+    assert_eq!(snap.rules.len(), 1);
+    assert_eq!(snap.rules[0].id, "r-1");
+    assert_eq!(snap.rules[0].feed_names, ["Show"]);
+    assert_eq!(snap.rules[0].category.as_deref(), Some("tv"));
+    assert_eq!(snap.rules[0].priority, 2);
+    assert!(snap.rules[0].enabled);
     client.download_rss_item("ep-1").await.unwrap();
+    server.verify().await;
+}
+
+fn rule_body() -> rtbit_client::RssRuleBody {
+    rtbit_client::RssRuleBody {
+        name: "Show 1080p".into(),
+        feed_names: vec!["Show".into()],
+        category: Some("tv".into()),
+        priority: 2,
+        match_regex: "Show.*1080p".into(),
+        enabled: true,
+    }
+}
+
+async fn logged_in(server: &MockServer) -> Client {
+    Mock::given(method("POST"))
+        .and(path("/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("login.json"), "application/json"),
+        )
+        .mount(server)
+        .await;
+    let mut client = Client::new(server.uri()).unwrap();
+    client.login("ada", "secret").await.unwrap();
+    client
+}
+
+#[tokio::test]
+async fn rss_rule_add_update_and_delete_use_the_rule_routes() {
+    let server = MockServer::start().await;
+    let expected = serde_json::json!({
+        "name": "Show 1080p",
+        "feed_names": ["Show"],
+        "category": "tv",
+        "priority": 2,
+        "match_regex": "Show.*1080p",
+        "enabled": true,
+    });
+    Mock::given(method("POST"))
+        .and(path("/rss/rules"))
+        .and(header("authorization", "Bearer access-1"))
+        .and(body_json(expected.clone()))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(r#"{"status":true}"#, "application/json"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/rss/rules/r%201"))
+        .and(header("authorization", "Bearer access-1"))
+        .and(body_json(expected))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(r#"{"status":true}"#, "application/json"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rss/rules/r-1"))
+        .and(header("authorization", "Bearer access-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(r#"{"status":true}"#, "application/json"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut client = logged_in(&server).await;
+    client.add_rss_rule(&rule_body()).await.unwrap();
+    client.update_rss_rule("r 1", &rule_body()).await.unwrap();
+    client.delete_rss_rule("r-1").await.unwrap();
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn a_rejected_rule_pattern_keeps_the_daemon_reason() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rss/rules"))
+        .respond_with(ResponseTemplate::new(400).set_body_raw(
+            r#"{"error_kind":"internal_error","human_readable":"invalid filter pattern: invalid regex: unclosed group","status":400}"#,
+            "application/json",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut client = logged_in(&server).await;
+    let err = client.add_rss_rule(&rule_body()).await.unwrap_err();
+    match err {
+        Error::Daemon {
+            message: Some(text),
+            ..
+        } => assert_eq!(
+            text,
+            "invalid filter pattern: invalid regex: unclosed group"
+        ),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_401_on_rule_delete_refreshes_once_and_retries() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/rss/rules/r-1"))
+        .and(header("authorization", "Bearer access-1"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/auth/refresh"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("refresh.json"), "application/json"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rss/rules/r-1"))
+        .and(header("authorization", "Bearer access-2"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(r#"{"status":true}"#, "application/json"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut client = logged_in(&server).await;
+    client.delete_rss_rule("r-1").await.unwrap();
     server.verify().await;
 }

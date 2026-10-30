@@ -8,9 +8,9 @@ use egui_kittest::kittest::Queryable;
 use rtbit_client::{
     AdvancedConfig, AltSpeedConfig, AltSpeedSchedule, AltSpeedStatus, AuthStatus, DownloadsConfig,
     Error, FoldersConfig, IpFilterConfig, NetworkConfig, NetworkSettings, PeerCounts, PeerList,
-    PieceProgress, ProxyConfig, RateLimits, RssFeed, RssItem, RssSnapshot, SavedNetworkStatus,
-    SeedLimits, SessionCounters, SessionStats, SettingsSnapshot, Speed, Torrent, TorrentFile,
-    TorrentList, TorrentState, TorrentStats, TrackerList,
+    PieceProgress, ProxyConfig, RateLimits, RssFeed, RssItem, RssRule, RssRuleBody, RssSnapshot,
+    SavedNetworkStatus, SeedLimits, SessionCounters, SessionStats, SettingsSnapshot, Speed,
+    Torrent, TorrentFile, TorrentList, TorrentState, TorrentStats, TrackerList,
 };
 use rtbit_egui::{
     AddRequest, AddSource, App, Connection, DetailSnapshot, LoginAttempt, MemoryStore, RowAction,
@@ -30,6 +30,9 @@ enum SetupScript {
     Unreachable,
 }
 
+/// One rule save: the rule id (`None` for an add) and the body.
+type RuleSave = (Option<String>, RssRuleBody);
+
 #[derive(Clone)]
 struct Scripted {
     result: std::sync::Arc<Mutex<Script>>,
@@ -44,6 +47,8 @@ struct Scripted {
     /// The network part of what `load_settings` returns.
     network: std::sync::Arc<Mutex<NetworkConfig>>,
     rss_downloads: std::sync::Arc<Mutex<Vec<String>>>,
+    rule_saves: std::sync::Arc<Mutex<Vec<RuleSave>>>,
+    rule_deletes: std::sync::Arc<Mutex<Vec<String>>>,
 }
 
 impl LoginAttempt for Scripted {
@@ -137,11 +142,39 @@ impl LoginAttempt for Scripted {
                 url: Some("magnet:?xt=urn:btih:abc".into()),
                 downloaded: false,
             }],
+            rules: vec![RssRule {
+                id: "r-1".into(),
+                name: "Show S01".into(),
+                feed_names: vec!["Show".into()],
+                category: None,
+                priority: 2,
+                match_regex: "S01".into(),
+                enabled: true,
+            }],
         })
     }
 
     fn download_rss(&self, id: &str) -> Result<(), Error> {
         self.rss_downloads.lock().expect("rss").push(id.to_owned());
+        Ok(())
+    }
+
+    fn save_rss_rule(&self, id: Option<&str>, body: &RssRuleBody) -> Result<(), Error> {
+        self.rule_saves
+            .lock()
+            .expect("rules")
+            .push((id.map(str::to_owned), body.clone()));
+        if body.match_regex.contains('(') {
+            return Err(Error::Daemon {
+                status: rtbit_client::StatusCode::BAD_REQUEST,
+                message: Some("invalid filter pattern: invalid regex: unclosed group".into()),
+            });
+        }
+        Ok(())
+    }
+
+    fn delete_rss_rule(&self, id: &str) -> Result<(), Error> {
+        self.rule_deletes.lock().expect("rules").push(id.to_owned());
         Ok(())
     }
 
@@ -185,6 +218,8 @@ fn scripted(result: Script) -> Scripted {
         settings_saves: std::sync::Arc::new(Mutex::new(Vec::new())),
         network: std::sync::Arc::new(Mutex::new(sample_settings().network)),
         rss_downloads: std::sync::Arc::new(Mutex::new(Vec::new())),
+        rule_saves: std::sync::Arc::new(Mutex::new(Vec::new())),
+        rule_deletes: std::sync::Arc::new(Mutex::new(Vec::new())),
     }
 }
 
@@ -1233,4 +1268,159 @@ fn without_persistence_the_network_form_is_read_only() {
             .is_none()
     );
     assert!(!has_button(&harness, "Use startup flags"));
+}
+
+type MemHarness = Harness<'static, App<Scripted, MemoryStore>>;
+
+fn wait_until(harness: &mut MemHarness, mut done: impl FnMut(&MemHarness) -> bool) {
+    for _ in 0..50 {
+        harness.run_steps(1);
+        if done(harness) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Connect, open RSS and wait for the scripted feed, item and rule.
+fn on_rss(script: Scripted) -> MemHarness {
+    let mut harness = mem_harness(script, MemoryStore::default());
+    click_mem(&mut harness, "Connect");
+    wait_until(&mut harness, |h| h.state().screen() == Screen::Main);
+    click_mem(&mut harness, "RSS");
+    wait_until(&mut harness, |h| shows_mem(h, "Show S01"));
+    assert!(shows_mem(&harness, "Show S01: /S01/"));
+    harness
+}
+
+fn tick_checkbox(harness: &mut MemHarness, label: &'static str) {
+    harness
+        .query_all(egui_kittest::kittest::by().predicate(move |node| {
+            node.label().as_deref() == Some(label) && node.role() == Role::CheckBox
+        }))
+        .last()
+        .unwrap_or_else(|| panic!("no checkbox {label}"))
+        .click();
+    harness.run_steps(1);
+}
+
+/// Tab off the last field and press Enter: the dialog's primary button.
+fn confirm_mem(harness: &mut MemHarness) {
+    harness.key_press(egui::Key::Tab);
+    harness.run_steps(1);
+    harness.key_press(egui::Key::Enter);
+    harness.run_steps(1);
+}
+
+#[test]
+fn rss_rule_create_posts_the_dialog_fields() {
+    let script = scripted(Script::Ok);
+    let saves = script.rule_saves.clone();
+    let mut harness = on_rss(script);
+    click_mem(&mut harness, "Add rule");
+    harness.run_steps(2);
+    fill(&mut harness, "Rule name", "Show 1080p");
+    harness.run_steps(1);
+    fill(&mut harness, "Match regex", "1080p");
+    harness.run_steps(1);
+    fill(&mut harness, "Category", "tv");
+    harness.run_steps(1);
+    tick_checkbox(&mut harness, "Show");
+    tick_checkbox(&mut harness, "Enabled");
+    confirm_mem(&mut harness);
+    wait_until(&mut harness, |_| !saves.lock().expect("rules").is_empty());
+    let recorded = saves.lock().expect("rules").clone();
+    assert_eq!(
+        recorded,
+        [(
+            None,
+            RssRuleBody {
+                name: "Show 1080p".into(),
+                feed_names: vec!["Show".into()],
+                category: Some("tv".into()),
+                priority: 1,
+                match_regex: "1080p".into(),
+                enabled: false,
+            }
+        )]
+    );
+    wait_until(&mut harness, |h| !shows_mem(h, "Save rule"));
+    assert!(
+        !shows_mem(&harness, "Save rule"),
+        "dialog closes on success"
+    );
+}
+
+#[test]
+fn rss_rule_edit_puts_the_rule_id_and_keeps_the_other_fields() {
+    let script = scripted(Script::Ok);
+    let saves = script.rule_saves.clone();
+    let mut harness = on_rss(script);
+    click_mem(&mut harness, "Edit");
+    harness.run_steps(2);
+    assert!(shows_mem(&harness, "Edit rule"));
+    fill(&mut harness, "Category", "tv");
+    harness.run_steps(1);
+    tick_checkbox(&mut harness, "Enabled");
+    confirm_mem(&mut harness);
+    wait_until(&mut harness, |_| !saves.lock().expect("rules").is_empty());
+    let recorded = saves.lock().expect("rules").clone();
+    assert_eq!(recorded.len(), 1);
+    let (id, body) = &recorded[0];
+    assert_eq!(id.as_deref(), Some("r-1"));
+    assert_eq!(body.name, "Show S01");
+    assert_eq!(body.match_regex, "S01");
+    assert_eq!(body.feed_names, ["Show"]);
+    assert_eq!(body.category.as_deref(), Some("tv"));
+    assert_eq!(body.priority, 2);
+    assert!(!body.enabled);
+}
+
+#[test]
+fn rss_rule_delete_asks_then_deletes_that_rule() {
+    let script = scripted(Script::Ok);
+    let deletes = script.rule_deletes.clone();
+    let mut harness = on_rss(script);
+    click_mem(&mut harness, "Delete");
+    harness.run_steps(2);
+    assert!(shows_mem(&harness, "Delete the rule \"Show S01\""));
+    assert!(
+        deletes.lock().expect("rules").is_empty(),
+        "nothing before confirm"
+    );
+    confirm_mem(&mut harness);
+    wait_until(&mut harness, |_| !deletes.lock().expect("rules").is_empty());
+    assert_eq!(deletes.lock().expect("rules").as_slice(), ["r-1"]);
+}
+
+#[test]
+fn rss_rule_regex_refusal_shows_inside_the_open_dialog() {
+    let script = scripted(Script::Ok);
+    let saves = script.rule_saves.clone();
+    let mut harness = on_rss(script);
+    click_mem(&mut harness, "Add rule");
+    harness.run_steps(2);
+    fill(&mut harness, "Rule name", "Bad");
+    harness.run_steps(1);
+    fill(&mut harness, "Match regex", "(");
+    harness.run_steps(1);
+    tick_checkbox(&mut harness, "Enabled");
+    confirm_mem(&mut harness);
+    harness.run_steps(2);
+    assert!(shows_mem(&harness, "Select at least one feed"));
+    assert!(
+        saves.lock().expect("rules").is_empty(),
+        "client check stops it"
+    );
+    tick_checkbox(&mut harness, "Show");
+    confirm_mem(&mut harness);
+    wait_until(&mut harness, |h| {
+        shows_mem(h, "invalid regex: unclosed group")
+    });
+    assert!(shows_mem(
+        &harness,
+        "invalid filter pattern: invalid regex: unclosed group"
+    ));
+    assert!(shows_mem(&harness, "Save rule"), "dialog stays open");
+    assert_eq!(saves.lock().expect("rules").len(), 1);
 }
