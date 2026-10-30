@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Authenticode-sign the Windows executable in a release directory and
+# Authenticode-sign every Windows executable in a release directory and
 # regenerate SHA256SUMS-<tag>.txt so it lists the signed bytes.
 #
 #   sign-windows.sh <tag> <dir>
@@ -18,12 +18,10 @@ dir="${2:?usage: sign-windows.sh <tag> <dir>}"
 : "${RUSTTORRENT_AUTHENTICODE_PFX_PASSWORD:?RUSTTORRENT_AUTHENTICODE_PFX_PASSWORD is not set}"
 tsa="${AUTHENTICODE_TSA_URL:-http://timestamp.digicert.com}"
 
-# The daemon and the native client executables.
-exes=("$dir/rtbit-$tag-windows-x86_64.exe")
-if test -f "$dir/rtbit-egui-$tag-windows-x86_64.exe"; then
-  exes+=("$dir/rtbit-egui-$tag-windows-x86_64.exe")
-fi
-test -f "${exes[0]}"
+# Every Windows executable the release ships: the daemon and, when built, the
+# native client. The daemon must be present.
+test -f "$dir/rtbit-$tag-windows-x86_64.exe"
+exes=("$dir"/rtbit*-"$tag"-windows-x86_64.exe)
 
 umask 077
 work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/authenticode.XXXXXX")
@@ -41,6 +39,9 @@ for exe in "${exes[@]}"; do
     -ts "$tsa" \
     -in "$exe" -out "$work/signed.exe"
   install -m 644 "$work/signed.exe" "$exe"
+  # osslsigncode refuses to overwrite its -out file, so each executable needs
+  # a fresh one.
+  rm -f "$work/signed.exe"
 done
 
 (cd "$dir" && sha256sum rtbit-*) > "$dir/SHA256SUMS-$tag.txt"
