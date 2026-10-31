@@ -13,11 +13,17 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use fluent_layout::{MessageBar, MessageIntent, SelectableList, SelectableListItem};
-use fluent_primitives::{Button, ButtonAppearance, Field, FieldValidationState, Label, Switch, TextInput};
-use gpui::{AsyncApp, ClickEvent, Context, Entity, IntoElement, Render, Task, WeakEntity, Window, div, prelude::*, px, App};
+use fluent_primitives::{
+    Button, ButtonAppearance, Field, FieldValidationState, Label, Switch, TextInput,
+};
+use gpui::{
+    App, AsyncApp, ClickEvent, Context, Entity, IntoElement, Render, Task, WeakEntity, Window, div,
+    prelude::*, px,
+};
 use rtbit_client::{
-    AdvancedConfig, AltSpeedConfig, AltSpeedSchedule, Client, DownloadsConfig, Error, FoldersConfig,
-    IpFilterConfig, NetworkConfig, NetworkSettings, RateLimits, SeedLimits, SettingsSnapshot,
+    AdvancedConfig, AltSpeedConfig, AltSpeedSchedule, Client, DownloadsConfig, Error,
+    FoldersConfig, IpFilterConfig, NetworkConfig, NetworkSettings, RateLimits, SeedLimits,
+    SettingsSnapshot,
 };
 use rtbit_ui_core::{SettingsChanges, map_error};
 
@@ -44,11 +50,17 @@ impl SettingsTab {
     ];
 
     fn from_id(id: &str) -> Option<Self> {
-        Self::ALL.iter().find(|(_, nav, _)| *nav == id).map(|(tab, _, _)| *tab)
+        Self::ALL
+            .iter()
+            .find(|(_, nav, _)| *nav == id)
+            .map(|(tab, _, _)| *tab)
     }
 
     fn id(self) -> &'static str {
-        Self::ALL.iter().find(|(tab, _, _)| *tab == self).map_or("general", |(_, id, _)| id)
+        Self::ALL
+            .iter()
+            .find(|(tab, _, _)| *tab == self)
+            .map_or("general", |(_, id, _)| id)
     }
 }
 
@@ -113,7 +125,11 @@ impl SettingsDraft {
             schedule_start: snap.schedule.start_minutes.to_string(),
             schedule_end: snap.schedule.end_minutes.to_string(),
             schedule_days: snap.schedule.days.to_string(),
-            ratio_limit: snap.seed_limits.ratio_limit.map(|n| n.to_string()).unwrap_or_default(),
+            ratio_limit: snap
+                .seed_limits
+                .ratio_limit
+                .map(|n| n.to_string())
+                .unwrap_or_default(),
             seed_minutes: snap
                 .seed_limits
                 .time_limit_secs
@@ -125,26 +141,82 @@ impl SettingsDraft {
     /// Per-field validation messages, keyed by field name. Empty when the draft is valid.
     pub fn errors(&self) -> BTreeMap<&'static str, String> {
         let checks: [(&'static str, Option<String>); 18] = [
-            ("connect_timeout", parse_error::<u64>(&self.connect_timeout, "Connect timeout")),
-            ("read_write_timeout", parse_error::<u64>(&self.read_write_timeout, "Read/write timeout")),
-            ("keep_alive", parse_error::<u64>(&self.keep_alive, "Keep-alive")),
-            ("listen_ip", listen_ip_error(&self.listen_ip).map(str::to_owned)),
-            ("listen_port", parse_port(&self.listen_port).is_none().then(|| PORT_ERROR.to_owned())),
-            ("download_folder", self.download_folder.trim().is_empty().then(|| FOLDER_ERROR.to_owned())),
-            ("download_bps", parse_error::<u32>(&self.download_bps, "Download limit")),
-            ("upload_bps", parse_error::<u32>(&self.upload_bps, "Upload limit")),
-            ("peer_limit", parse_error::<u64>(&self.peer_limit, "Peer limit")),
-            ("init_limit", parse_error::<u64>(&self.init_limit, "Connection limit")),
-            ("alt_down", parse_error::<u64>(&self.alt_down, "Alternative download")),
-            ("alt_up", parse_error::<u64>(&self.alt_up, "Alternative upload")),
-            ("schedule_start", parse_error::<u32>(&self.schedule_start, "Schedule start")),
-            ("schedule_end", parse_error::<u32>(&self.schedule_end, "Schedule end")),
-            ("schedule_days", parse_error::<u8>(&self.schedule_days, "Schedule days")),
+            (
+                "connect_timeout",
+                parse_error::<u64>(&self.connect_timeout, "Connect timeout"),
+            ),
+            (
+                "read_write_timeout",
+                parse_error::<u64>(&self.read_write_timeout, "Read/write timeout"),
+            ),
+            (
+                "keep_alive",
+                parse_error::<u64>(&self.keep_alive, "Keep-alive"),
+            ),
+            (
+                "listen_ip",
+                listen_ip_error(&self.listen_ip).map(str::to_owned),
+            ),
+            (
+                "listen_port",
+                parse_port(&self.listen_port)
+                    .is_none()
+                    .then(|| PORT_ERROR.to_owned()),
+            ),
+            (
+                "download_folder",
+                self.download_folder
+                    .trim()
+                    .is_empty()
+                    .then(|| FOLDER_ERROR.to_owned()),
+            ),
+            (
+                "download_bps",
+                parse_error::<u32>(&self.download_bps, "Download limit"),
+            ),
+            (
+                "upload_bps",
+                parse_error::<u32>(&self.upload_bps, "Upload limit"),
+            ),
+            (
+                "peer_limit",
+                parse_error::<u64>(&self.peer_limit, "Peer limit"),
+            ),
+            (
+                "init_limit",
+                parse_error::<u64>(&self.init_limit, "Connection limit"),
+            ),
+            (
+                "alt_down",
+                parse_error::<u64>(&self.alt_down, "Alternative download"),
+            ),
+            (
+                "alt_up",
+                parse_error::<u64>(&self.alt_up, "Alternative upload"),
+            ),
+            (
+                "schedule_start",
+                parse_error::<u32>(&self.schedule_start, "Schedule start"),
+            ),
+            (
+                "schedule_end",
+                parse_error::<u32>(&self.schedule_end, "Schedule end"),
+            ),
+            (
+                "schedule_days",
+                parse_error::<u8>(&self.schedule_days, "Schedule days"),
+            ),
             ("ratio_limit", parse_opt_f64(&self.ratio_limit).err()),
-            ("seed_minutes", parse_error::<u64>(&self.seed_minutes, "Seed time")),
+            (
+                "seed_minutes",
+                parse_error::<u64>(&self.seed_minutes, "Seed time"),
+            ),
             ("schedule_enabled", None),
         ];
-        checks.into_iter().filter_map(|(key, err)| err.map(|msg| (key, msg))).collect()
+        checks
+            .into_iter()
+            .filter_map(|(key, err)| err.map(|msg| (key, msg)))
+            .collect()
     }
 
     /// The sections that differ from `base`, ready to post. Empty when nothing changed.
@@ -154,7 +226,9 @@ impl SettingsDraft {
         }
         let mut out = SettingsChanges::default();
 
-        let downloads = DownloadsConfig { incomplete_file_suffix: self.incomplete_suffix };
+        let downloads = DownloadsConfig {
+            incomplete_file_suffix: self.incomplete_suffix,
+        };
         if downloads != base.downloads {
             out.downloads = Some(downloads);
         }
@@ -182,7 +256,9 @@ impl SettingsDraft {
             }
         }
 
-        let filter = IpFilterConfig { filter: self.ip_filter.clone() };
+        let filter = IpFilterConfig {
+            filter: self.ip_filter.clone(),
+        };
         if filter != base.ip_filter {
             out.ip_filter = Some(filter);
         }
@@ -250,8 +326,15 @@ impl NetworkStart {
     fn of(net: &NetworkConfig) -> Self {
         let pending = net.pending.clone().unwrap_or_default();
         Self {
-            listen_ip: pending.listen_ip.or_else(|| net.listen_ip.clone()).unwrap_or_default(),
-            listen_port: pending.listen_port.or(net.listen_port).map(|p| p.to_string()).unwrap_or_default(),
+            listen_ip: pending
+                .listen_ip
+                .or_else(|| net.listen_ip.clone())
+                .unwrap_or_default(),
+            listen_port: pending
+                .listen_port
+                .or(net.listen_port)
+                .map(|p| p.to_string())
+                .unwrap_or_default(),
             upnp: pending.upnp_port_forward.unwrap_or(net.upnp_port_forward),
             dht: pending.dht_enabled.unwrap_or(net.dht_enabled),
             lsd: pending.lsd_enabled.unwrap_or(net.lsd_enabled),
@@ -516,17 +599,21 @@ impl SettingsScreen {
         self.loading = true;
         self.error = None;
         cx.notify();
-        let rx = cx.global::<Bridge>().call(|client: SharedClient| async move {
-            let mut client = client.lock().await;
-            client.settings().await
-        });
-        self._load = Some(cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let reply = match rx.await {
-                Ok(reply) => reply,
-                Err(_) => Err(Error::Unreachable("request cancelled".to_owned())),
-            };
-            let _ = this.update(cx, |this, cx| this.apply_loaded(reply, cx));
-        }));
+        let rx = cx
+            .global::<Bridge>()
+            .call(|client: SharedClient| async move {
+                let mut client = client.lock().await;
+                client.settings().await
+            });
+        self._load = Some(
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let reply = match rx.await {
+                    Ok(reply) => reply,
+                    Err(_) => Err(Error::Unreachable("request cancelled".to_owned())),
+                };
+                let _ = this.update(cx, |this, cx| this.apply_loaded(reply, cx));
+            }),
+        );
     }
 
     fn apply_loaded(&mut self, reply: Result<SettingsSnapshot, Error>, cx: &mut Context<Self>) {
@@ -579,17 +666,21 @@ impl SettingsScreen {
         self.error = None;
         self.notice = None;
         let restart = changes.network.is_some();
-        let rx = cx.global::<Bridge>().call(move |client: SharedClient| async move {
-            let mut client = client.lock().await;
-            post_changes(&mut client, &changes).await
-        });
-        self._save = Some(cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let reply = match rx.await {
-                Ok(reply) => reply,
-                Err(_) => Err(Error::Unreachable("request cancelled".to_owned())),
-            };
-            let _ = this.update(cx, |this, cx| this.apply_saved(reply, restart, cx));
-        }));
+        let rx = cx
+            .global::<Bridge>()
+            .call(move |client: SharedClient| async move {
+                let mut client = client.lock().await;
+                post_changes(&mut client, &changes).await
+            });
+        self._save = Some(
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let reply = match rx.await {
+                    Ok(reply) => reply,
+                    Err(_) => Err(Error::Unreachable("request cancelled".to_owned())),
+                };
+                let _ = this.update(cx, |this, cx| this.apply_saved(reply, restart, cx));
+            }),
+        );
         cx.notify();
     }
 
@@ -693,7 +784,11 @@ impl Render for SettingsScreen {
         let errors = self.draft(cx).errors();
         let nav_me = me.clone();
         let nav = SelectableList::new("settings-nav")
-            .items(SettingsTab::ALL.iter().map(|(_, id, title)| SelectableListItem::new(*id, *title)))
+            .items(
+                SettingsTab::ALL
+                    .iter()
+                    .map(|(_, id, title)| SelectableListItem::new(*id, *title)),
+            )
             .selected(self.tab.id())
             .on_select(move |id, _, cx| {
                 nav_me.update(cx, |screen, cx| screen.select_tab(&id, cx));
@@ -711,19 +806,61 @@ impl Render for SettingsScreen {
                     &me,
                     |s, v| s.incomplete_suffix = v,
                 ))
-                .child(text_field("Connect timeout (s)", &self.form.connect_timeout, &errors, "connect_timeout"))
-                .child(text_field("Read/write timeout (s)", &self.form.read_write_timeout, &errors, "read_write_timeout"))
-                .child(text_field("Keep-alive (s)", &self.form.keep_alive, &errors, "keep_alive"))
-                .child(text_field("IP filter", &self.form.ip_filter, &errors, "ip_filter")),
+                .child(text_field(
+                    "Connect timeout (s)",
+                    &self.form.connect_timeout,
+                    &errors,
+                    "connect_timeout",
+                ))
+                .child(text_field(
+                    "Read/write timeout (s)",
+                    &self.form.read_write_timeout,
+                    &errors,
+                    "read_write_timeout",
+                ))
+                .child(text_field(
+                    "Keep-alive (s)",
+                    &self.form.keep_alive,
+                    &errors,
+                    "keep_alive",
+                ))
+                .child(text_field(
+                    "IP filter",
+                    &self.form.ip_filter,
+                    &errors,
+                    "ip_filter",
+                )),
             SettingsTab::Connection => div()
                 .flex()
                 .flex_col()
                 .gap_3()
-                .child(text_field("Listen address", &self.form.listen_ip, &errors, "listen_ip"))
-                .child(text_field("Listen port", &self.form.listen_port, &errors, "listen_port"))
-                .child(switch_row("upnp", "UPnP port forward", self.upnp, &me, |s, v| s.upnp = v))
+                .child(text_field(
+                    "Listen address",
+                    &self.form.listen_ip,
+                    &errors,
+                    "listen_ip",
+                ))
+                .child(text_field(
+                    "Listen port",
+                    &self.form.listen_port,
+                    &errors,
+                    "listen_port",
+                ))
+                .child(switch_row(
+                    "upnp",
+                    "UPnP port forward",
+                    self.upnp,
+                    &me,
+                    |s, v| s.upnp = v,
+                ))
                 .child(switch_row("dht", "DHT", self.dht, &me, |s, v| s.dht = v))
-                .child(switch_row("lsd", "Local discovery", self.lsd, &me, |s, v| s.lsd = v))
+                .child(switch_row(
+                    "lsd",
+                    "Local discovery",
+                    self.lsd,
+                    &me,
+                    |s, v| s.lsd = v,
+                ))
                 .child(Label::new(
                     "Address, port and discovery switches apply on the next start.",
                 )),
@@ -731,39 +868,113 @@ impl Render for SettingsScreen {
                 .flex()
                 .flex_col()
                 .gap_3()
-                .child(text_field("Download limit (B/s)", &self.form.download_bps, &errors, "download_bps"))
-                .child(text_field("Upload limit (B/s)", &self.form.upload_bps, &errors, "upload_bps"))
-                .child(text_field("Peer limit", &self.form.peer_limit, &errors, "peer_limit"))
-                .child(text_field("Connection limit", &self.form.init_limit, &errors, "init_limit"))
-                .child(switch_row("alt-enabled", "Alternative speed limits", self.alt_enabled, &me, |s, v| s.alt_enabled = v))
-                .child(text_field("Alternative download (B/s)", &self.form.alt_down, &errors, "alt_down"))
-                .child(text_field("Alternative upload (B/s)", &self.form.alt_up, &errors, "alt_up"))
-                .child(switch_row("schedule-enabled", "Schedule alternative limits", self.schedule_enabled, &me, |s, v| s.schedule_enabled = v))
-                .child(text_field("Schedule start (minutes)", &self.form.schedule_start, &errors, "schedule_start"))
-                .child(text_field("Schedule end (minutes)", &self.form.schedule_end, &errors, "schedule_end"))
-                .child(text_field("Schedule days (bitmask)", &self.form.schedule_days, &errors, "schedule_days")),
+                .child(text_field(
+                    "Download limit (B/s)",
+                    &self.form.download_bps,
+                    &errors,
+                    "download_bps",
+                ))
+                .child(text_field(
+                    "Upload limit (B/s)",
+                    &self.form.upload_bps,
+                    &errors,
+                    "upload_bps",
+                ))
+                .child(text_field(
+                    "Peer limit",
+                    &self.form.peer_limit,
+                    &errors,
+                    "peer_limit",
+                ))
+                .child(text_field(
+                    "Connection limit",
+                    &self.form.init_limit,
+                    &errors,
+                    "init_limit",
+                ))
+                .child(switch_row(
+                    "alt-enabled",
+                    "Alternative speed limits",
+                    self.alt_enabled,
+                    &me,
+                    |s, v| s.alt_enabled = v,
+                ))
+                .child(text_field(
+                    "Alternative download (B/s)",
+                    &self.form.alt_down,
+                    &errors,
+                    "alt_down",
+                ))
+                .child(text_field(
+                    "Alternative upload (B/s)",
+                    &self.form.alt_up,
+                    &errors,
+                    "alt_up",
+                ))
+                .child(switch_row(
+                    "schedule-enabled",
+                    "Schedule alternative limits",
+                    self.schedule_enabled,
+                    &me,
+                    |s, v| s.schedule_enabled = v,
+                ))
+                .child(text_field(
+                    "Schedule start (minutes)",
+                    &self.form.schedule_start,
+                    &errors,
+                    "schedule_start",
+                ))
+                .child(text_field(
+                    "Schedule end (minutes)",
+                    &self.form.schedule_end,
+                    &errors,
+                    "schedule_end",
+                ))
+                .child(text_field(
+                    "Schedule days (bitmask)",
+                    &self.form.schedule_days,
+                    &errors,
+                    "schedule_days",
+                )),
             SettingsTab::Folders => div()
                 .flex()
                 .flex_col()
                 .gap_3()
-                .child(text_field("Download folder", &self.form.download_folder, &errors, "download_folder"))
-                .child(text_field("Completed folder", &self.form.completed_folder, &errors, "completed_folder")),
+                .child(text_field(
+                    "Download folder",
+                    &self.form.download_folder,
+                    &errors,
+                    "download_folder",
+                ))
+                .child(text_field(
+                    "Completed folder",
+                    &self.form.completed_folder,
+                    &errors,
+                    "completed_folder",
+                )),
             SettingsTab::Seeding => div()
                 .flex()
                 .flex_col()
                 .gap_3()
-                .child(Label::new("Blank turns the limit off. Seed time is minutes."))
-                .child(text_field("Ratio limit", &self.form.ratio_limit, &errors, "ratio_limit"))
-                .child(text_field("Seed time (minutes)", &self.form.seed_minutes, &errors, "seed_minutes")),
+                .child(Label::new(
+                    "Blank turns the limit off. Seed time is minutes.",
+                ))
+                .child(text_field(
+                    "Ratio limit",
+                    &self.form.ratio_limit,
+                    &errors,
+                    "ratio_limit",
+                ))
+                .child(text_field(
+                    "Seed time (minutes)",
+                    &self.form.seed_minutes,
+                    &errors,
+                    "seed_minutes",
+                )),
         };
 
         let save = cx.listener(|this, _: &ClickEvent, _window, cx| this.save(cx));
-        let mut panel = div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .w(px(420.0))
-            .child(body);
+        let mut panel = div().flex().flex_col().gap_3().w(px(420.0)).child(body);
         if let Some(message) = &self.error {
             panel = panel.child(MessageBar::new(message.clone()).intent(MessageIntent::Error));
         }
@@ -833,7 +1044,10 @@ mod tests {
         let snap = snapshot();
         let mut draft = SettingsDraft::from_snapshot(&snap);
         draft.download_folder = "   ".into();
-        assert_eq!(draft.errors().get("download_folder").map(String::as_str), Some(FOLDER_ERROR));
+        assert_eq!(
+            draft.errors().get("download_folder").map(String::as_str),
+            Some(FOLDER_ERROR)
+        );
         assert_eq!(draft.changes(&snap), Err(FOLDER_ERROR.to_owned()));
     }
 
@@ -857,7 +1071,10 @@ mod tests {
         draft.listen_port = "0".into();
         let errors = draft.errors();
         assert!(errors.get("listen_ip").unwrap().contains("valid"));
-        assert_eq!(errors.get("listen_port").map(String::as_str), Some(PORT_ERROR));
+        assert_eq!(
+            errors.get("listen_port").map(String::as_str),
+            Some(PORT_ERROR)
+        );
     }
 
     #[test]
@@ -867,7 +1084,12 @@ mod tests {
         let mut draft = SettingsDraft::from_snapshot(&snap);
         draft.incomplete_suffix = false;
         let changes = draft.changes(&snap).unwrap();
-        assert_eq!(changes.downloads, Some(DownloadsConfig { incomplete_file_suffix: false }));
+        assert_eq!(
+            changes.downloads,
+            Some(DownloadsConfig {
+                incomplete_file_suffix: false
+            })
+        );
     }
 
     #[test]
@@ -878,7 +1100,10 @@ mod tests {
         let changes = draft.changes(&snap).unwrap();
         assert_eq!(
             changes.seed_limits,
-            Some(SeedLimits { ratio_limit: None, time_limit_secs: Some(1800) })
+            Some(SeedLimits {
+                ratio_limit: None,
+                time_limit_secs: Some(1800)
+            })
         );
     }
 

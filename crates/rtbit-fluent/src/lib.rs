@@ -24,7 +24,7 @@ pub fn run() {
     let (w, h) = WINDOW_SIZE;
     FluentApp::new(WINDOW_TITLE).window_size(w, h).run(|cx| {
         let status = cx.new(|_| widgets::status_bar::StatusBar::new());
-        let main = cx.new(|_| screens::MainScreen::new(status.clone()));
+        let main = cx.new(|cx| screens::MainScreen::new(status.clone(), cx));
         let shell = cx.new(|cx| shell::Shell::new(status.clone(), main, cx));
         WindowTitle::set_status(cx, Connection::Disconnected.label());
         cx.new(|cx| {

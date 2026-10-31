@@ -117,13 +117,15 @@ impl RssScreen {
             let mut client = client.lock().await;
             client.download_rss_item(&id).await
         });
-        self._download = Some(cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let reply = match rx.await {
-                Ok(reply) => reply,
-                Err(_) => Err(Error::Unreachable("request cancelled".to_owned())),
-            };
-            let _ = this.update(cx, |this, cx| this.finish_download(reply, cx));
-        }));
+        self._download = Some(
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let reply = match rx.await {
+                    Ok(reply) => reply,
+                    Err(_) => Err(Error::Unreachable("request cancelled".to_owned())),
+                };
+                let _ = this.update(cx, |this, cx| this.finish_download(reply, cx));
+            }),
+        );
     }
 
     fn finish_download(&mut self, reply: Result<(), Error>, cx: &mut Context<Self>) {
@@ -279,9 +281,7 @@ mod tests {
                 .await;
             Mock::given(method("GET"))
                 .and(path("/rss/items"))
-                .respond_with(
-                    ResponseTemplate::new(200).set_body_raw(items, "application/json"),
-                )
+                .respond_with(ResponseTemplate::new(200).set_body_raw(items, "application/json"))
                 .mount(&server)
                 .await;
             Mock::given(method("GET"))
@@ -319,7 +319,9 @@ mod tests {
     fn loaded(cx: &mut TestAppContext) -> gpui::Entity<RssScreen> {
         let screen = cx.new(RssScreen::new);
         screen.update(cx, |screen, cx| screen.load(cx));
-        drive(cx, |cx| screen.read_with(cx, |s, _| !s.snapshot.is_loading()));
+        drive(cx, |cx| {
+            screen.read_with(cx, |s, _| !s.snapshot.is_loading())
+        });
         screen
     }
 
@@ -387,7 +389,9 @@ mod tests {
             screen.download_selected(cx);
             assert_eq!(screen.downloading(), Some("a"));
         });
-        drive(cx, |cx| screen.read_with(cx, |s, _| s.downloading().is_none()));
+        drive(cx, |cx| {
+            screen.read_with(cx, |s, _| s.downloading().is_none())
+        });
         screen.read_with(cx, |screen, _| {
             assert!(screen.error().is_none(), "download should succeed");
         });
@@ -408,7 +412,9 @@ mod tests {
             screen.select("a", cx);
             screen.download_selected(cx);
         });
-        drive(cx, |cx| screen.read_with(cx, |s, _| s.downloading().is_none()));
+        drive(cx, |cx| {
+            screen.read_with(cx, |s, _| s.downloading().is_none())
+        });
         screen.read_with(cx, |screen, _| {
             assert!(screen.error().is_some(), "error bar must show the refusal");
         });
