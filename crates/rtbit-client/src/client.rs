@@ -330,6 +330,15 @@ impl Client {
         self.authed_post_json("rss/rules", body).await
     }
 
+    /// `GET /rss/rules/{id}/episodes`. The daemon caps the list.
+    pub async fn rss_rule_episodes(
+        &mut self,
+        id: &str,
+    ) -> Result<Vec<crate::types::RssRuleEpisode>, Error> {
+        let path = format!("rss/rules/{}/episodes", urlencoding_minimal(id));
+        self.authed_get(&path).await
+    }
+
     /// `PUT /rss/rules/{id}`. Replaces the whole rule.
     pub async fn update_rss_rule(
         &mut self,

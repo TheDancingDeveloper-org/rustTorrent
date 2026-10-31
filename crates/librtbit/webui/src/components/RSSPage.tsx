@@ -12,7 +12,18 @@ import { RssAPI } from "../http-api";
 import { formatDuration } from "../helper/formatDuration.js";
 import { useRssStore } from "../stores/rssStore";
 import { useErrorStore } from "../stores/errorStore";
-import { RssFeedConfig, RssItem, RssRule, ErrorDetails } from "../api-types";
+import {
+  RssFeedConfig,
+  RssItem,
+  RssRule,
+  RssRuleEpisode,
+  ErrorDetails,
+} from "../api-types";
+import {
+  episodeMarker,
+  matchedDate,
+  ruleTracksEpisodes,
+} from "../helper/rssEpisodes";
 import { Spinner } from "./Spinner";
 import { formatBytes } from "../helper/formatBytes";
 
@@ -29,7 +40,9 @@ const errorCls = "text-xs text-error bg-error-bg/10 px-2 py-1 rounded";
 
 const enabledBadgeCls = (enabled: boolean) =>
   `text-xs px-1.5 py-0.5 rounded ${
-    enabled ? "bg-success-bg/15 text-success" : "bg-surface-sunken text-secondary"
+    enabled
+      ? "bg-success-bg/15 text-success"
+      : "bg-surface-sunken text-secondary"
   }`;
 
 // ---------------------------------------------------------------------------
@@ -261,8 +274,29 @@ const RuleModal: React.FC<{
   const [priority, setPriority] = useState(1);
   const [matchRegex, setMatchRegex] = useState("");
   const [enabled, setEnabled] = useState(true);
+  const [trackEpisodes, setTrackEpisodes] = useState(true);
+  const [episodes, setEpisodes] = useState<RssRuleEpisode[] | null>(null);
+  const [episodesError, setEpisodesError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setEpisodes(null);
+    setEpisodesError(null);
+    if (!rule || !isOpen) return;
+    let cancelled = false;
+    RssAPI.getRuleEpisodes(rule.id)
+      .then((list) => {
+        if (!cancelled) setEpisodes(list);
+      })
+      .catch((e: any) => {
+        if (!cancelled)
+          setEpisodesError(e?.text || e?.message || "Failed to load episodes");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rule, isOpen]);
 
   useEffect(() => {
     if (rule) {
@@ -272,6 +306,7 @@ const RuleModal: React.FC<{
       setPriority(rule.priority);
       setMatchRegex(rule.match_regex);
       setEnabled(rule.enabled);
+      setTrackEpisodes(ruleTracksEpisodes(rule));
     } else {
       setName("");
       setSelectedFeeds([]);
@@ -279,6 +314,7 @@ const RuleModal: React.FC<{
       setPriority(1);
       setMatchRegex("");
       setEnabled(true);
+      setTrackEpisodes(true);
     }
     setError(null);
   }, [rule, isOpen]);
@@ -310,6 +346,7 @@ const RuleModal: React.FC<{
         priority,
         match_regex: matchRegex.trim(),
         enabled,
+        track_episodes: trackEpisodes,
       };
       if (rule) {
         await RssAPI.updateRule(rule.id, body);
@@ -412,6 +449,54 @@ const RuleModal: React.FC<{
             />
             Enabled
           </label>
+          <label className="flex items-center gap-1.5 text-sm">
+            <input
+              type="checkbox"
+              checked={trackEpisodes}
+              onChange={(e) => setTrackEpisodes(e.target.checked)}
+            />
+            Skip episodes already downloaded
+          </label>
+          {rule && (
+            <div>
+              <label className={labelCls}>Matched episodes</label>
+              {episodesError ? (
+                <div className={errorCls} role="alert">
+                  {episodesError}
+                </div>
+              ) : episodes === null ? (
+                <span className="text-xs text-tertiary">Loading…</span>
+              ) : episodes.length === 0 ? (
+                <span className="text-xs text-tertiary">
+                  No episodes matched yet
+                </span>
+              ) : (
+                <ul className="max-h-40 overflow-y-auto text-xs divide-y divide-divider border border-divider rounded">
+                  {episodes.map((ep, i) => (
+                    <li
+                      key={`${ep.matched_at}-${i}`}
+                      className="flex gap-2 px-2 py-1"
+                    >
+                      <span className="font-mono shrink-0">
+                        {episodeMarker(ep)}
+                      </span>
+                      <span className="truncate flex-1" title={ep.title}>
+                        {ep.title}
+                      </span>
+                      <span className="text-tertiary shrink-0">
+                        {matchedDate(ep.matched_at)}
+                      </span>
+                      {ep.torrent_id !== null && (
+                        <span className="text-tertiary shrink-0">
+                          #{ep.torrent_id}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex justify-end gap-2 px-4 py-3 border-t border-divider">
           <button

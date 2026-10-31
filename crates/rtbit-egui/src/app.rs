@@ -11,13 +11,13 @@ use fluent2_egui::office::{TitleBar, WindowAction, window_command};
 use fluent2_egui::theme::{Theme, install};
 use fluent2_egui::tokens::FLUENT;
 use rtbit_client::{
-    AuthStatus, Client, Error, PeerList, PieceProgress, RssRuleBody, RssSnapshot, SessionStats,
-    SettingsSnapshot, Torrent, TorrentList, TrackerList,
+    AuthStatus, Client, Error, PeerList, PieceProgress, RssRuleBody, RssRuleEpisode, RssSnapshot,
+    SessionStats, SettingsSnapshot, Torrent, TorrentList, TrackerList,
 };
 
 use crate::screens::{
-    AddDraft, AddRequest, AddSource, DetailAction, DetailTab, DetailView, RowAction, RssAction,
-    RssView, RuleEditor, SettingsChanges, SettingsDraft, SettingsTab,
+    AddDraft, AddRequest, AddSource, DetailAction, DetailTab, DetailView, Episodes, RowAction,
+    RssAction, RssView, RuleEditor, SettingsChanges, SettingsDraft, SettingsTab,
 };
 
 use crate::keychain::{OsKeychain, TokenStore};
@@ -178,6 +178,12 @@ pub trait LoginAttempt: Send {
 
     /// Delete one rule.
     fn delete_rss_rule(&self, id: &str) -> Result<(), Error> {
+        let _ = id;
+        Err(Error::Unreachable("no rss".into()))
+    }
+
+    /// Episodes one rule matched, newest first.
+    fn rss_rule_episodes(&self, id: &str) -> Result<Vec<RssRuleEpisode>, Error> {
         let _ = id;
         Err(Error::Unreachable("no rss".into()))
     }
@@ -432,6 +438,14 @@ impl LoginAttempt for DaemonLogin {
     fn delete_rss_rule(&self, id: &str) -> Result<(), Error> {
         on_session(|session| session.runtime.block_on(session.client.delete_rss_rule(id)))
     }
+
+    fn rss_rule_episodes(&self, id: &str) -> Result<Vec<RssRuleEpisode>, Error> {
+        on_session(|session| {
+            session
+                .runtime
+                .block_on(session.client.rss_rule_episodes(id))
+        })
+    }
 }
 
 fn on_session<T>(call: impl FnOnce(&mut Session) -> Result<T, Error>) -> Result<T, Error> {
@@ -514,6 +528,8 @@ pub struct App<L: LoginAttempt = DaemonLogin, S: TokenStore = OsKeychain> {
     rss_editor: RuleEditor,
     /// A rule save (`true`) or delete (`false`) in flight.
     rss_rule_op: Option<(bool, Receiver<Result<(), String>>)>,
+    /// The episode history read for the rule being edited, by rule id.
+    rss_episodes_load: Option<(String, EpisodesReceiver)>,
     settings_tab: SettingsTab,
     settings_draft: SettingsDraft,
     settings_load: Option<Receiver<Result<SettingsSnapshot, String>>>,
@@ -585,6 +601,7 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             rss_download: None,
             rss_error: String::new(),
             rss_editor: RuleEditor::default(),
+            rss_episodes_load: None,
             rss_rule_op: None,
             settings_tab: SettingsTab::General,
             settings_draft: SettingsDraft::default(),
@@ -644,6 +661,7 @@ impl<L: LoginAttempt + Clone + 'static> App<L> {
             rss_download: None,
             rss_error: String::new(),
             rss_editor: RuleEditor::default(),
+            rss_episodes_load: None,
             rss_rule_op: None,
             settings_tab: SettingsTab::General,
             settings_draft: SettingsDraft::default(),
@@ -1495,11 +1513,13 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
             Some(RssAction::Download(id)) => self.download_rss(&id),
             Some(RssAction::SaveRule { id, body }) => self.save_rss_rule(id, body),
             Some(RssAction::DeleteRule(id)) => self.delete_rss_rule(id),
+            Some(RssAction::LoadEpisodes(id)) => self.load_rule_episodes(id),
             None => {}
         }
     }
 
     fn take_rss(&mut self) {
+        self.take_rule_episodes();
         if let Some(rx) = &self.rss_load {
             match rx.try_recv() {
                 Ok(Ok(snap)) => {
@@ -1558,6 +1578,40 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
         }
     }
 
+    fn load_rule_episodes(&mut self, id: String) {
+        let login = self.login.clone();
+        let (tx, rx) = mpsc::channel();
+        let rule = id.clone();
+        std::thread::spawn(move || {
+            let outcome = login
+                .rss_rule_episodes(&rule)
+                .map_err(|err| login_message(&err));
+            let _ = tx.send(outcome);
+        });
+        // A later Edit replaces an earlier read; its answer is dropped.
+        self.rss_episodes_load = Some((id, rx));
+    }
+
+    fn take_rule_episodes(&mut self) {
+        let Some((id, rx)) = &self.rss_episodes_load else {
+            return;
+        };
+        let outcome = match rx.try_recv() {
+            Ok(outcome) => outcome,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err("Episode history unavailable".to_owned())
+            }
+        };
+        if self.rss_editor.draft.id.as_deref() == Some(id.as_str()) {
+            self.rss_editor.episodes = match outcome {
+                Ok(list) => Episodes::Loaded(list),
+                Err(message) => Episodes::Failed(message),
+            };
+        }
+        self.rss_episodes_load = None;
+    }
+
     fn save_rss_rule(&mut self, id: Option<String>, body: RssRuleBody) {
         if self.rss_rule_op.is_some() {
             return;
@@ -1604,6 +1658,9 @@ impl<L: LoginAttempt + Clone + 'static, S: TokenStore> App<L, S> {
         self.rss_error.clear();
     }
 }
+
+/// Answer to one rule's episode-history read.
+type EpisodesReceiver = Receiver<Result<Vec<RssRuleEpisode>, String>>;
 
 struct Poll {
     rx: Receiver<Result<Snapshot, String>>,

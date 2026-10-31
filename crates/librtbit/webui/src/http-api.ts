@@ -25,6 +25,7 @@ import {
   RssFeedConfig,
   RssItem,
   RssRule,
+  RssRuleEpisode,
   RssSettings,
   RtbitAPI,
   SeedLimitsConfig,
@@ -754,6 +755,7 @@ export const RssAPI = {
     priority?: number;
     match_regex: string;
     enabled?: boolean;
+    track_episodes?: boolean;
   }): Promise<void> => {
     return makeRequest("POST", "/rss/rules", rule, true);
   },
@@ -767,6 +769,7 @@ export const RssAPI = {
       priority?: number;
       match_regex: string;
       enabled?: boolean;
+      track_episodes?: boolean;
     },
   ): Promise<void> => {
     return makeRequest(
@@ -779,6 +782,10 @@ export const RssAPI = {
 
   deleteRule: (id: string): Promise<void> => {
     return makeRequest("DELETE", `/rss/rules/${encodeURIComponent(id)}`);
+  },
+
+  getRuleEpisodes: (id: string): Promise<RssRuleEpisode[]> => {
+    return makeRequest("GET", `/rss/rules/${encodeURIComponent(id)}/episodes`);
   },
 
   // Settings

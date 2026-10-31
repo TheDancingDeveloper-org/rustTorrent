@@ -6,13 +6,13 @@
 //! match regex, feeds, category, priority and enabled. The daemon compiles the
 //! regex; its reason for a refusal is shown inside the dialog.
 //!
-//! Episode tracking is not a setting: the daemon always skips an episode it
-//! already downloaded for a series, and it has no route that lists those
-//! episodes, so there is no toggle and no history here.
+//! Episode tracking is per rule, as in the web UI: a rule that tracks episodes
+//! skips one already downloaded for the series. Editing a rule also reads the
+//! episodes it matched from the daemon and lists them in the dialog.
 
 use fluent2_egui::controls::{Appearance, Button, Checkbox, Dropdown, Input};
 use fluent2_egui::surfaces::{CloseReason, Dialog, DialogResult};
-use rtbit_client::{RssFeed, RssItem, RssRule, RssRuleBody, RssSnapshot};
+use rtbit_client::{RssFeed, RssItem, RssRule, RssRuleBody, RssRuleEpisode, RssSnapshot};
 
 /// Priority labels, indexed by the daemon's priority value.
 const PRIORITIES: [&str; 4] = ["Low", "Normal", "High", "Force"];
@@ -45,6 +45,7 @@ pub struct RuleDraft {
     pub category: String,
     pub priority: Option<usize>,
     pub enabled: bool,
+    pub track_episodes: bool,
     /// A client check or the daemon's refusal, shown inside the dialog.
     pub error: String,
 }
@@ -59,6 +60,7 @@ impl Default for RuleDraft {
             category: String::new(),
             priority: Some(1),
             enabled: true,
+            track_episodes: true,
             error: String::new(),
         }
     }
@@ -76,6 +78,7 @@ impl RuleDraft {
                 .ok()
                 .filter(|p| *p < PRIORITIES.len()),
             enabled: rule.enabled,
+            track_episodes: rule.track_episodes,
             error: String::new(),
         }
     }
@@ -89,6 +92,17 @@ pub struct RuleEditor {
     /// The rule the delete confirmation is about.
     pub delete: Option<RssRule>,
     pub delete_open: bool,
+    /// Episodes the edited rule matched, newest first.
+    pub episodes: Episodes,
+}
+
+/// The edited rule's matched-episode history, as read from the daemon.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Episodes {
+    #[default]
+    Loading,
+    Loaded(Vec<RssRuleEpisode>),
+    Failed(String),
 }
 
 impl RuleEditor {
@@ -115,6 +129,8 @@ pub enum RssAction {
         body: RssRuleBody,
     },
     DeleteRule(String),
+    /// Read the matched episodes of the rule being edited.
+    LoadEpisodes(String),
 }
 
 /// Draw feeds, rules and items, and the rule dialogs.
@@ -155,7 +171,9 @@ pub fn draw_rss(
                 ui.label("No rules.");
             }
             for rule in rules {
-                rule_row(ui, rule, editor, busy);
+                if let Some(id) = rule_row(ui, rule, editor, busy) {
+                    action = Some(RssAction::LoadEpisodes(id));
+                }
             }
         });
     }
@@ -197,7 +215,15 @@ pub fn draw_rss(
     action
 }
 
-fn rule_row(ui: &mut egui::Ui, rule: &RssRule, editor: &mut RuleEditor, busy: bool) {
+/// One rule under its feed. Returns the rule id when Edit opened the dialog,
+/// so the app can read the rule's episode history.
+fn rule_row(
+    ui: &mut egui::Ui,
+    rule: &RssRule,
+    editor: &mut RuleEditor,
+    busy: bool,
+) -> Option<String> {
+    let mut opened = None;
     ui.horizontal(|ui| {
         let state = if rule.enabled { "" } else { ", off" };
         ui.label(format!("{}: /{}/{state}", rule.name, rule.match_regex));
@@ -206,7 +232,9 @@ fn rule_row(ui: &mut egui::Ui, rule: &RssRule, editor: &mut RuleEditor, busy: bo
             .clicked()
         {
             editor.draft = RuleDraft::edit(rule);
+            editor.episodes = Episodes::Loading;
             editor.open = true;
+            opened = Some(rule.id.clone());
         }
         if ui
             .add_enabled(!busy, Button::new("Delete").appearance(Appearance::Subtle))
@@ -216,6 +244,7 @@ fn rule_row(ui: &mut egui::Ui, rule: &RssRule, editor: &mut RuleEditor, busy: bo
             editor.delete_open = true;
         }
     });
+    opened
 }
 
 /// The add/edit dialog. Returns a save only when Save is pressed and the
@@ -255,6 +284,7 @@ fn rule_dialog(
         "Add rule"
     };
     let draft = &mut editor.draft;
+    let episodes = &editor.episodes;
     let result = Dialog::new("rtbit_rule")
         .title(title)
         .actions(|actions| {
@@ -301,7 +331,15 @@ fn rule_dialog(
                 }
             }
             ui.add_space(8.0);
+            ui.add(Checkbox::bool(
+                &mut draft.track_episodes,
+                "Skip episodes already downloaded",
+            ));
             ui.add(Checkbox::bool(&mut draft.enabled, "Enabled"));
+            if draft.id.is_some() {
+                ui.add_space(8.0);
+                episode_history(ui, episodes);
+            }
             if busy {
                 ui.add_space(8.0);
                 ui.label("Saving…");
@@ -322,6 +360,44 @@ fn rule_dialog(
         DialogResult::Open(_) => {}
     }
     action
+}
+
+fn episode_history(ui: &mut egui::Ui, episodes: &Episodes) {
+    ui.label("Matched episodes");
+    match episodes {
+        Episodes::Loading => {
+            ui.label("Loading…");
+        }
+        Episodes::Failed(message) => {
+            ui.colored_label(egui::Color32::from_rgb(196, 43, 28), message);
+        }
+        Episodes::Loaded(list) if list.is_empty() => {
+            ui.label("No episodes matched yet.");
+        }
+        Episodes::Loaded(list) => {
+            egui::ScrollArea::vertical()
+                .id_salt("rtbit_rule_episodes")
+                .max_height(160.0)
+                .show(ui, |ui| {
+                    for entry in list {
+                        ui.label(episode_line(entry));
+                    }
+                });
+        }
+    }
+}
+
+/// `S01E02 · Show Name S01E02 · 2026-10-31 · torrent 4`.
+pub fn episode_line(entry: &RssRuleEpisode) -> String {
+    let date = entry.matched_at.get(..10).unwrap_or(&entry.matched_at);
+    let mut line = format!(
+        "S{:02}E{:02} · {} · {date}",
+        entry.season, entry.episode, entry.title
+    );
+    if let Some(id) = entry.torrent_id {
+        line.push_str(&format!(" · torrent {id}"));
+    }
+    line
 }
 
 fn delete_dialog(ctx: &egui::Context, editor: &mut RuleEditor) -> Option<String> {
@@ -377,6 +453,7 @@ pub fn validate_rule(draft: &RuleDraft) -> Result<RssRuleBody, &'static str> {
             .unwrap_or(1),
         match_regex: match_regex.to_owned(),
         enabled: draft.enabled,
+        track_episodes: draft.track_episodes,
     })
 }
 
@@ -400,6 +477,7 @@ mod tests {
         assert_eq!(body.category, None);
         assert_eq!(body.priority, 1);
         assert!(body.enabled);
+        assert!(body.track_episodes, "new rules track episodes");
     }
 
     #[test]
@@ -412,6 +490,7 @@ mod tests {
             priority: 3,
             match_regex: "S01".into(),
             enabled: false,
+            track_episodes: false,
         };
         let draft = RuleDraft::edit(&rule);
         assert_eq!(draft.priority, Some(3));
@@ -420,5 +499,24 @@ mod tests {
         assert_eq!(body.category.as_deref(), Some("tv"));
         assert_eq!(body.priority, 3);
         assert!(!body.enabled);
+        assert!(!body.track_episodes);
+    }
+
+    #[test]
+    fn an_episode_line_shows_the_marker_title_date_and_torrent() {
+        let mut entry = RssRuleEpisode {
+            show: "show".into(),
+            season: 1,
+            episode: 2,
+            title: "Show S01E02".into(),
+            matched_at: "2026-10-31T10:00:00+00:00".into(),
+            torrent_id: Some(4),
+        };
+        assert_eq!(
+            episode_line(&entry),
+            "S01E02 · Show S01E02 · 2026-10-31 · torrent 4"
+        );
+        entry.torrent_id = None;
+        assert_eq!(episode_line(&entry), "S01E02 · Show S01E02 · 2026-10-31");
     }
 }

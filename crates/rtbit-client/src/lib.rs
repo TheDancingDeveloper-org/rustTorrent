@@ -15,7 +15,8 @@ pub use types::{
     AdvancedConfig, AltSpeedConfig, AltSpeedSchedule, AltSpeedStatus, AuthStatus, ConnectionFamily,
     ConnectionKindStats, Connections, DownloadsConfig, FoldersConfig, IpFilterConfig, LiveSpeeds,
     NetworkConfig, NetworkSettings, PeerCounts, PeerList, PeerView, PieceProgress, ProxyConfig,
-    RateLimits, Role, RssFeed, RssItem, RssRule, RssRuleBody, RssSnapshot, SavedNetworkStatus,
-    SeedLimits, SessionCounters, SessionStats, SettingsSnapshot, Speed, TokenPair, Torrent,
-    TorrentFile, TorrentList, TorrentState, TorrentStats, TrackerList, TrackerState, TrackerStatus,
+    RateLimits, Role, RssFeed, RssItem, RssRule, RssRuleBody, RssRuleEpisode, RssSnapshot,
+    SavedNetworkStatus, SeedLimits, SessionCounters, SessionStats, SettingsSnapshot, Speed,
+    TokenPair, Torrent, TorrentFile, TorrentList, TorrentState, TorrentStats, TrackerList,
+    TrackerState, TrackerStatus,
 };

@@ -8,9 +8,9 @@ use egui_kittest::kittest::Queryable;
 use rtbit_client::{
     AdvancedConfig, AltSpeedConfig, AltSpeedSchedule, AltSpeedStatus, AuthStatus, DownloadsConfig,
     Error, FoldersConfig, IpFilterConfig, NetworkConfig, NetworkSettings, PeerCounts, PeerList,
-    PieceProgress, ProxyConfig, RateLimits, RssFeed, RssItem, RssRule, RssRuleBody, RssSnapshot,
-    SavedNetworkStatus, SeedLimits, SessionCounters, SessionStats, SettingsSnapshot, Speed,
-    Torrent, TorrentFile, TorrentList, TorrentState, TorrentStats, TrackerList,
+    PieceProgress, ProxyConfig, RateLimits, RssFeed, RssItem, RssRule, RssRuleBody, RssRuleEpisode,
+    RssSnapshot, SavedNetworkStatus, SeedLimits, SessionCounters, SessionStats, SettingsSnapshot,
+    Speed, Torrent, TorrentFile, TorrentList, TorrentState, TorrentStats, TrackerList,
 };
 use rtbit_egui::{
     AddRequest, AddSource, App, Connection, DetailSnapshot, LoginAttempt, MemoryStore, RowAction,
@@ -150,6 +150,7 @@ impl LoginAttempt for Scripted {
                 priority: 2,
                 match_regex: "S01".into(),
                 enabled: true,
+                track_episodes: true,
             }],
         })
     }
@@ -176,6 +177,18 @@ impl LoginAttempt for Scripted {
     fn delete_rss_rule(&self, id: &str) -> Result<(), Error> {
         self.rule_deletes.lock().expect("rules").push(id.to_owned());
         Ok(())
+    }
+
+    fn rss_rule_episodes(&self, id: &str) -> Result<Vec<RssRuleEpisode>, Error> {
+        assert_eq!(id, "r-1");
+        Ok(vec![RssRuleEpisode {
+            show: "show".into(),
+            season: 1,
+            episode: 2,
+            title: "Show S01E02".into(),
+            matched_at: "2026-10-31T10:00:00+00:00".into(),
+            torrent_id: Some(4),
+        }])
     }
 
     fn detail(&self, id: u64) -> Result<DetailSnapshot, Error> {
@@ -1341,6 +1354,7 @@ fn rss_rule_create_posts_the_dialog_fields() {
                 priority: 1,
                 match_regex: "1080p".into(),
                 enabled: false,
+                track_episodes: true,
             }
         )]
     );
@@ -1374,6 +1388,28 @@ fn rss_rule_edit_puts_the_rule_id_and_keeps_the_other_fields() {
     assert_eq!(body.category.as_deref(), Some("tv"));
     assert_eq!(body.priority, 2);
     assert!(!body.enabled);
+}
+
+#[test]
+fn rss_rule_edit_lists_matched_episodes_and_can_stop_tracking() {
+    let script = scripted(Script::Ok);
+    let saves = script.rule_saves.clone();
+    let mut harness = on_rss(script);
+    click_mem(&mut harness, "Edit");
+    harness.run_steps(2);
+    assert!(shows_mem(&harness, "Matched episodes"));
+    wait_until(&mut harness, |h| {
+        shows_mem(h, "S01E02 · Show S01E02 · 2026-10-31 · torrent 4")
+    });
+    tick_checkbox(&mut harness, "Skip episodes already downloaded");
+    // Enabled is the last field; Tab off it then Enter saves.
+    tick_checkbox(&mut harness, "Enabled");
+    confirm_mem(&mut harness);
+    wait_until(&mut harness, |_| !saves.lock().expect("rules").is_empty());
+    let recorded = saves.lock().expect("rules").clone();
+    assert_eq!(recorded[0].0.as_deref(), Some("r-1"));
+    assert!(!recorded[0].1.track_episodes);
+    assert!(!recorded[0].1.enabled);
 }
 
 #[test]

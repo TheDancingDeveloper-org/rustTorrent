@@ -4,7 +4,7 @@ use chrono::Utc;
 use rusqlite::{Connection, params};
 use tracing::info;
 
-use super::models::{RssItem, RssRule};
+use super::models::{RssItem, RssRule, RssRuleEpisode};
 
 /// Database handle for RSS feed item and rule persistence.
 pub struct RssDatabase {
@@ -106,6 +106,32 @@ impl RssDatabase {
                 );
 
                 UPDATE schema_version SET version = 3;
+                ",
+            )?;
+        }
+
+        // Per-rule smart-episode setting, and the episodes each rule matched.
+        if version < 4 {
+            info!("Applying RSS database migration v4");
+            self.conn.execute_batch(
+                "
+                ALTER TABLE rss_rules ADD COLUMN track_episodes INTEGER NOT NULL DEFAULT 1;
+
+                CREATE TABLE IF NOT EXISTS rss_rule_episodes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rule_id TEXT NOT NULL,
+                    show TEXT NOT NULL,
+                    season INTEGER NOT NULL,
+                    episode INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    matched_at TEXT NOT NULL,
+                    torrent_id INTEGER
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_rss_rule_episodes_rule
+                    ON rss_rule_episodes(rule_id, id DESC);
+
+                UPDATE schema_version SET version = 4;
                 ",
             )?;
         }
@@ -312,8 +338,9 @@ impl RssDatabase {
     pub fn rss_rule_insert(&self, rule: &RssRule) -> anyhow::Result<()> {
         let feed_names_str = rule.feed_names.join(",");
         self.conn.execute(
-            "INSERT INTO rss_rules (id, name, feed_name, category, priority, match_regex, enabled)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO rss_rules (id, name, feed_name, category, priority, match_regex, enabled,
+             track_episodes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 rule.id,
                 rule.name,
@@ -322,6 +349,7 @@ impl RssDatabase {
                 rule.priority,
                 rule.match_regex,
                 rule.enabled as i32,
+                rule.track_episodes as i32,
             ],
         )?;
         Ok(())
@@ -330,7 +358,7 @@ impl RssDatabase {
     /// List all RSS download rules.
     pub fn rss_rule_list(&self) -> anyhow::Result<Vec<RssRule>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, feed_name, category, priority, match_regex, enabled
+            "SELECT id, name, feed_name, category, priority, match_regex, enabled, track_episodes
              FROM rss_rules ORDER BY name ASC",
         )?;
         let rules = stmt
@@ -349,6 +377,7 @@ impl RssDatabase {
                     priority: row.get(4)?,
                     match_regex: row.get(5)?,
                     enabled: row.get::<_, i32>(6)? != 0,
+                    track_episodes: row.get::<_, i32>(7)? != 0,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -360,7 +389,7 @@ impl RssDatabase {
         let feed_names_str = rule.feed_names.join(",");
         self.conn.execute(
             "UPDATE rss_rules SET name=?2, feed_name=?3, category=?4, priority=?5,
-             match_regex=?6, enabled=?7 WHERE id=?1",
+             match_regex=?6, enabled=?7, track_episodes=?8 WHERE id=?1",
             params![
                 rule.id,
                 rule.name,
@@ -369,6 +398,7 @@ impl RssDatabase {
                 rule.priority,
                 rule.match_regex,
                 rule.enabled as i32,
+                rule.track_episodes as i32,
             ],
         )?;
         Ok(())
@@ -378,6 +408,10 @@ impl RssDatabase {
     pub fn rss_rule_delete(&self, id: &str) -> anyhow::Result<()> {
         self.conn
             .execute("DELETE FROM rss_rules WHERE id=?1", params![id])?;
+        self.conn.execute(
+            "DELETE FROM rss_rule_episodes WHERE rule_id=?1",
+            params![id],
+        )?;
         Ok(())
     }
 
@@ -416,6 +450,63 @@ impl RssDatabase {
             params![series, episode.season as i64, episode.episode as i64],
         )?;
         Ok(())
+    }
+
+    /// Record that a rule matched and downloaded an episode.
+    pub fn rule_episode_record(&self, rule_id: &str, entry: &RssRuleEpisode) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT INTO rss_rule_episodes
+             (rule_id, show, season, episode, title, matched_at, torrent_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                rule_id,
+                entry.show,
+                entry.season as i64,
+                entry.episode as i64,
+                entry.title,
+                entry.matched_at.to_rfc3339(),
+                entry.torrent_id.and_then(|id| i64::try_from(id).ok()),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Episodes a rule matched, newest first, at most `limit`.
+    pub fn rule_episodes_list(
+        &self,
+        rule_id: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<RssRuleEpisode>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT show, season, episode, title, matched_at, torrent_id
+             FROM rss_rule_episodes WHERE rule_id = ?1
+             ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![rule_id, limit as i64], |row| {
+                Ok(RssRuleEpisode {
+                    show: row.get(0)?,
+                    season: u32::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
+                    episode: u32::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
+                    title: row.get(3)?,
+                    matched_at: parse_datetime(&row.get::<_, String>(4)?),
+                    torrent_id: row
+                        .get::<_, Option<i64>>(5)?
+                        .and_then(|id| usize::try_from(id).ok()),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Whether a rule with this id exists.
+    pub fn rss_rule_exists(&self, id: &str) -> anyhow::Result<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM rss_rules WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
     }
 }
 
@@ -495,6 +586,7 @@ mod tests {
             priority: 1,
             match_regex: ".*".into(),
             enabled: true,
+            track_episodes: true,
         })
         .unwrap();
         db.rss_rule_insert(&RssRule {
@@ -505,6 +597,7 @@ mod tests {
             priority: 1,
             match_regex: ".*".into(),
             enabled: true,
+            track_episodes: true,
         })
         .unwrap();
 
@@ -523,5 +616,87 @@ mod tests {
         assert!(rules.iter().all(|rule| rule.id != "rule-a"));
         let shared = rules.iter().find(|rule| rule.id == "rule-shared").unwrap();
         assert_eq!(shared.feed_names, vec!["feed-b".to_string()]);
+    }
+
+    #[test]
+    fn migrates_a_v3_database_keeping_rules_with_episode_tracking_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rss.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_version (version INTEGER NOT NULL);
+                 INSERT INTO schema_version (version) VALUES (3);
+                 CREATE TABLE rss_items (id TEXT PRIMARY KEY, feed_name TEXT NOT NULL,
+                    title TEXT NOT NULL, url TEXT, published_at TEXT,
+                    first_seen_at TEXT NOT NULL, downloaded INTEGER NOT NULL DEFAULT 0,
+                    downloaded_at TEXT, category TEXT, size_bytes INTEGER DEFAULT 0);
+                 CREATE TABLE rss_rules (id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                    feed_name TEXT NOT NULL, category TEXT,
+                    priority INTEGER NOT NULL DEFAULT 1, match_regex TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1);
+                 CREATE TABLE rss_feeds (name TEXT PRIMARY KEY, url TEXT NOT NULL,
+                    poll_interval_secs INTEGER NOT NULL DEFAULT 900, category TEXT,
+                    filter_regex TEXT, enabled INTEGER NOT NULL DEFAULT 1,
+                    auto_download INTEGER NOT NULL DEFAULT 0);
+                 CREATE TABLE rss_episodes (series TEXT NOT NULL, season INTEGER NOT NULL,
+                    episode INTEGER NOT NULL, PRIMARY KEY (series, season, episode));
+                 INSERT INTO rss_rules (id, name, feed_name, match_regex)
+                    VALUES ('old', 'Old rule', 'feed', 'S01');",
+            )
+            .unwrap();
+        }
+
+        let db = RssDatabase::open(&path).unwrap();
+        let rules = db.rss_rule_list().unwrap();
+        assert_eq!(rules.len(), 1);
+        assert!(rules[0].track_episodes, "existing rules keep tracking on");
+        assert!(db.rule_episodes_list("old", 10).unwrap().is_empty());
+
+        // Opening again does not re-run the migration.
+        drop(db);
+        let db = RssDatabase::open(&path).unwrap();
+        assert!(db.rss_rule_list().unwrap()[0].track_episodes);
+    }
+
+    #[test]
+    fn rule_episodes_are_listed_newest_first_capped_and_dropped_with_the_rule() {
+        let (_dir, db) = test_db();
+        let mut rule = RssRule {
+            id: "r".into(),
+            name: "r".into(),
+            feed_names: vec!["f".into()],
+            category: None,
+            priority: 1,
+            match_regex: ".*".into(),
+            enabled: true,
+            track_episodes: false,
+        };
+        db.rss_rule_insert(&rule).unwrap();
+        assert!(!db.rss_rule_list().unwrap()[0].track_episodes);
+        rule.track_episodes = true;
+        db.rss_rule_update(&rule).unwrap();
+        assert!(db.rss_rule_list().unwrap()[0].track_episodes);
+
+        for episode in 1..=3 {
+            db.rule_episode_record(
+                "r",
+                &RssRuleEpisode {
+                    show: "show".into(),
+                    season: 1,
+                    episode,
+                    title: format!("Show S01E0{episode}"),
+                    matched_at: Utc::now(),
+                    torrent_id: (episode != 2).then_some(episode as usize),
+                },
+            )
+            .unwrap();
+        }
+        let listed = db.rule_episodes_list("r", 2).unwrap();
+        assert_eq!(listed.iter().map(|e| e.episode).collect::<Vec<_>>(), [3, 2]);
+        assert_eq!(listed[1].torrent_id, None);
+
+        db.rss_rule_delete("r").unwrap();
+        assert!(db.rule_episodes_list("r", 10).unwrap().is_empty());
     }
 }
