@@ -453,6 +453,19 @@ impl ConnectScreen {
         cx.emit(ConnectEvent::Failed);
         cx.notify();
     }
+
+    /// Leave the first-run setup form for the sign-in form. The daemon URL
+    /// stays as typed; the setup secrets are cleared, and any setup error goes
+    /// with them. Ignored while a request is in flight.
+    pub fn back_to_connect(&mut self, cx: &mut Context<Self>) {
+        if self.pending {
+            return;
+        }
+        self.mode = Mode::Connect;
+        self.error = None;
+        self.clear_secrets(cx);
+        cx.notify();
+    }
 }
 
 /// The reply from a bridge call, or a cancellation error if the runtime dropped it.
@@ -504,6 +517,8 @@ impl Render for ConnectScreen {
             }
             Mode::Setup => {
                 let submit = cx.listener(|this, _: &ClickEvent, _window, cx| this.submit_setup(cx));
+                let back =
+                    cx.listener(|this, _: &ClickEvent, _window, cx| this.back_to_connect(cx));
                 let label = if self.pending {
                     "Creating account…"
                 } else {
@@ -512,6 +527,7 @@ impl Render for ConnectScreen {
                 form = form
                     .child(Label::new("First-run setup"))
                     .child(Label::new("The setup token is printed in the rtbit log."))
+                    .child(field("Daemon URL", self.url.clone()))
                     .child(field("Setup token", self.setup_token.clone()))
                     .child(field("Username", self.username.clone()))
                     .child(field("Password", self.password.clone()))
@@ -526,6 +542,13 @@ impl Render for ConnectScreen {
                         .appearance(ButtonAppearance::Accent)
                         .disabled(self.pending)
                         .on_click(submit),
+                )
+                .child(
+                    Button::new("setup-back")
+                        .label("Back")
+                        .appearance(ButtonAppearance::Hyperlink)
+                        .disabled(self.pending)
+                        .on_click(back),
                 )
             }
         }
@@ -782,6 +805,34 @@ mod tests {
                 screen.error(),
                 Some("Password must be at least 4 characters.")
             );
+        });
+    }
+
+    #[gpui::test]
+    fn back_from_setup_returns_to_connect_and_clears_setup_secrets(cx: &mut TestAppContext) {
+        let screen = cx.new(ConnectScreen::new);
+        screen.update(cx, |screen, _| screen.mode = Mode::Setup);
+        fill_setup(&screen, cx, "setup-token", "admin", "abc", "abc");
+        screen.update(cx, |screen, cx| screen.submit_setup(cx));
+        screen.read_with(cx, |screen, _| assert!(screen.error().is_some()));
+        screen.update(cx, |screen, cx| screen.back_to_connect(cx));
+        screen.read_with(cx, |screen, cx| {
+            assert_eq!(screen.mode(), Mode::Connect);
+            assert!(screen.error().is_none(), "setup error goes with the form");
+            assert_eq!(screen.setup_token.read(cx).text(), "");
+            assert_eq!(screen.confirm.read(cx).text(), "");
+            assert_eq!(screen.password.read(cx).text(), "");
+            assert_eq!(screen.username.read(cx).text(), "admin");
+        });
+    }
+
+    #[gpui::test]
+    fn setup_form_shows_the_daemon_url_the_user_typed(cx: &mut TestAppContext) {
+        let screen = cx.new(ConnectScreen::new);
+        fill(&screen, cx, "http://10.0.0.5:3030", "admin", "secret");
+        screen.update(cx, |screen, _| screen.mode = Mode::Setup);
+        screen.read_with(cx, |screen, cx| {
+            assert_eq!(screen.url.read(cx).text(), "http://10.0.0.5:3030");
         });
     }
 
