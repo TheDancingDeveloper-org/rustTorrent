@@ -1,0 +1,19 @@
+[package]
+name = "rtbit-fluent"
+version = "0.2.0-beta.4"
+authors = ["AusAgentSmith <admin@rusttorrent.dev>"]
+edition = "2024"
+description = "rustTorrent native client on the fluent-gpui design system (scaffold)."
+license = "Apache-2.0"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+gpui = { git = "https://github.com/thedancingdeveloper/fluent-gpui", tag = "v3.0.0+zed.ba63a022c9a2" }
+fluent-app = { git = "https://github.com/thedancingdeveloper/fluent-gpui", tag = "v3.0.0+zed.ba63a022c9a2" }
+fluent-core = { git = "https://github.com/thedancingdeveloper/fluent-gpui", tag = "v3.0.0+zed.ba63a022c9a2" }
+fluent-layout = { git = "https://github.com/thedancingdeveloper/fluent-gpui", tag = "v3.0.0+zed.ba63a022c9a2" }
+fluent-primitives = { git = "https://github.com/thedancingdeveloper/fluent-gpui", tag = "v3.0.0+zed.ba63a022c9a2" }
+
