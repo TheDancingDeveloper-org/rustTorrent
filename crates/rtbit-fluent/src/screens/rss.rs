@@ -208,7 +208,11 @@ impl RssScreen {
 
     /// Close the editor without saving.
     pub fn cancel_rule(&mut self, cx: &mut Context<Self>) {
+        if self.rule_busy {
+            return;
+        }
         self.editor = None;
+        self.error = None;
         cx.notify();
     }
 
@@ -736,6 +740,7 @@ impl RssScreen {
                         Button::new("rss-rule-cancel")
                             .label("Cancel")
                             .appearance(ButtonAppearance::Subtle)
+                            .disabled(self.rule_busy)
                             .on_click(cancel),
                     ),
             );
