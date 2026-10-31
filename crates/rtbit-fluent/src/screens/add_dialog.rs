@@ -1,7 +1,7 @@
 //! Add-torrent dialog: a magnet link or a `.torrent` file, a save path, an
 //! optional category and a start-paused switch.
 //!
-//! The dialog checks its input with the same rules the egui shell uses, then
+//! The dialog checks its input with the same rules the add-torrent flow applies, then
 //! emits an [`AddDialogEvent::Submit`] carrying an [`AddRequest`]. The owner
 //! (the main screen) sends the request through the bridge. The dialog never
 //! talks to the daemon itself, so a cancel can never reach it.
@@ -252,7 +252,7 @@ impl Render for AddDialog {
     }
 }
 
-/// Client-side checks, the same rules the egui add dialog applies. The daemon
+/// Client-side checks, the same rules the add-torrent flow applies. The daemon
 /// still rejects a bad magnet or a bad path. A magnet wins over a file.
 pub fn validate_add(
     magnet: &str,

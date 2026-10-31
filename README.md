@@ -32,7 +32,8 @@ already run.
   tray integration.
 - **Native desktop client** — `rtbit-fluent`, a GPU-rendered client built on gpui with
   the Fluent design system, for managing a local or remote daemon. Linux `.deb` and
-  binary and a Windows `.exe` ship with each release.
+  binary ship with each release; the Windows desktop build is temporarily
+  unavailable (WI-2779).
 - **Memory safe** — written entirely in Rust; the bencode, DHT, and peer-protocol parsers
   are additionally fuzz-tested.
 

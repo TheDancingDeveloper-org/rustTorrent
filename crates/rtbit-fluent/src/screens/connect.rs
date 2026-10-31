@@ -24,10 +24,10 @@ use rtbit_ui_core::{OsKeychain, TokenStore, map_error};
 
 use crate::bridge::Bridge;
 
-/// Address the egui shell starts with.
+/// Address the client starts with.
 pub const DEFAULT_URL: &str = "http://127.0.0.1:3030";
 
-/// Shortest password the first-run form accepts. Matches the egui shell.
+/// Shortest password the first-run form accepts.
 const MIN_PASSWORD_CHARS: usize = 4;
 
 /// What the shell needs to know about a sign-in attempt.
