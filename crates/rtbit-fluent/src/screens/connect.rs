@@ -11,6 +11,9 @@
 //! blocking thread inside the bridge, never on the UI thread. Only the refresh
 //! token is stored; the password is never stored or logged.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+
 use fluent_layout::{MessageBar, MessageIntent};
 use fluent_primitives::{Button, ButtonAppearance, Label, TextInput};
 use gpui::{
@@ -105,17 +108,69 @@ async fn load_token(keychain: Keychain, url: String) -> Option<String> {
         .flatten()
 }
 
+/// The screen's attempt counter, shared with the bridge so a keychain write can
+/// tell whether its attempt is still current. Each sign-in, setup or sign-out
+/// bumps it on the UI thread before its own request goes out.
+///
+/// Every keychain write holds `lock` across the check and the write. A stale
+/// resume therefore either sees the bump and skips its write, or finishes its
+/// write before the newer attempt's own write runs.
+#[derive(Clone, Default)]
+struct Epoch {
+    current: Arc<AtomicU64>,
+    lock: Arc<Mutex<()>>,
+}
+
+impl Epoch {
+    fn get(&self) -> u64 {
+        self.current.load(Ordering::SeqCst)
+    }
+
+    fn bump(&self) {
+        self.current.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Run `write` unless `expected` is set and an attempt started after it.
+    fn write_if_current(&self, expected: Option<u64>, write: impl FnOnce()) {
+        let _guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if expected.is_none_or(|epoch| epoch == self.get()) {
+            write();
+        }
+    }
+}
+
 /// Write the refresh token on a blocking thread. A refused write does not fail
-/// the sign-in; the token just will not survive a relaunch.
-async fn remember_token(keychain: Keychain, url: String, token: Option<String>) {
+/// the sign-in; the token just will not survive a relaunch. With `expected`
+/// set, the write is skipped once a newer attempt has started.
+async fn remember_token(
+    keychain: Keychain,
+    epoch: Epoch,
+    expected: Option<u64>,
+    url: String,
+    token: Option<String>,
+) {
     let Some(token) = token else { return };
-    let _ = tokio::task::spawn_blocking(move || keychain.store(&url, &token)).await;
+    let _ = tokio::task::spawn_blocking(move || {
+        epoch.write_if_current(expected, || {
+            let _ = keychain.store(&url, &token);
+        });
+    })
+    .await;
 }
 
 /// Drop the stored refresh token on a blocking thread. Used by sign-out and by
 /// a resume the daemon refused, so a dead token is not retried on each launch.
-async fn forget_token(keychain: Keychain, url: String) {
-    let _ = tokio::task::spawn_blocking(move || keychain.clear(&url)).await;
+/// With `expected` set, the delete is skipped once a newer attempt has started.
+async fn forget_token(keychain: Keychain, epoch: Epoch, expected: Option<u64>, url: String) {
+    let _ = tokio::task::spawn_blocking(move || {
+        epoch.write_if_current(expected, || {
+            let _ = keychain.clear(&url);
+        });
+    })
+    .await;
 }
 
 /// The connect and first-run setup form. Fields are read when the user submits;
@@ -135,7 +190,7 @@ pub struct ConnectScreen {
     resuming: bool,
     /// Bumped whenever a sign-in or setup starts, so a resume reply that
     /// arrives after that is ignored.
-    epoch: u64,
+    epoch: Epoch,
 }
 
 /// Shown when the daemon has closed first-run setup (403/404 on `/auth/setup`).
@@ -185,7 +240,7 @@ impl ConnectScreen {
             error: None,
             pending: false,
             resuming: false,
-            epoch: 0,
+            epoch: Epoch::default(),
         }
     }
 
@@ -237,13 +292,14 @@ impl ConnectScreen {
         };
         bridge.install(cx);
 
-        self.epoch += 1;
+        self.epoch.bump();
         self.pending = true;
         self.error = None;
         cx.emit(ConnectEvent::Connecting);
         cx.notify();
 
         let keychain = self.keychain.clone();
+        let gate = self.epoch.clone();
         let rx = cx.global::<Bridge>().call(move |client| async move {
             let mut client = client.lock().await;
             if client.auth_status().await?.setup_required {
@@ -251,7 +307,7 @@ impl ConnectScreen {
             }
             client.login(&username, &password).await?;
             let refresh = client.refresh_token().map(str::to_owned);
-            remember_token(keychain, url, refresh).await;
+            remember_token(keychain, gate, None, url, refresh).await;
             Ok(Reply::Connected)
         });
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -293,18 +349,19 @@ impl ConnectScreen {
         };
         bridge.install(cx);
 
-        self.epoch += 1;
+        self.epoch.bump();
         self.pending = true;
         self.error = None;
         cx.emit(ConnectEvent::Connecting);
         cx.notify();
 
         let keychain = self.keychain.clone();
+        let gate = self.epoch.clone();
         let rx = cx.global::<Bridge>().call(move |client| async move {
             let mut client = client.lock().await;
             client.setup(&username, &password, &setup_token).await?;
             let refresh = client.refresh_token().map(str::to_owned);
-            remember_token(keychain, url, refresh).await;
+            remember_token(keychain, gate, None, url, refresh).await;
             Ok(Reply::Connected)
         });
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -344,10 +401,11 @@ impl ConnectScreen {
         bridge.install(cx);
 
         self.resuming = true;
-        let epoch = self.epoch;
+        let epoch = self.epoch.get();
         cx.notify();
 
         let keychain = self.keychain.clone();
+        let gate = self.epoch.clone();
         let rx = cx.global::<Bridge>().call(move |client| async move {
             let Some(refresh) = load_token(keychain.clone(), url.clone()).await else {
                 return Err(Error::Unauthorised);
@@ -356,14 +414,15 @@ impl ConnectScreen {
             match client.resume(&refresh).await {
                 Ok(()) => {
                     let rotated = client.refresh_token().map(str::to_owned);
-                    remember_token(keychain, url, rotated).await;
+                    remember_token(keychain, gate, Some(epoch), url, rotated).await;
                     Ok(Reply::Connected)
                 }
                 Err(err) => {
                     // The daemon no longer accepts the stored token: forget it,
-                    // so each launch does not retry a dead token.
+                    // so each launch does not retry a dead token. Not if a newer
+                    // sign-in has started: the stored token may be its own.
                     if matches!(err, Error::Unauthorised) {
-                        forget_token(keychain, url).await;
+                        forget_token(keychain, gate, Some(epoch), url).await;
                     }
                     Err(err)
                 }
@@ -402,7 +461,7 @@ impl ConnectScreen {
     fn finish_resume(&mut self, epoch: u64, reply: Result<Reply, Error>, cx: &mut Context<Self>) {
         self.resuming = false;
         // A sign-in started after this resume: its own reply decides the screen.
-        if epoch != self.epoch {
+        if epoch != self.epoch.get() {
             cx.notify();
             return;
         }
@@ -425,14 +484,17 @@ impl ConnectScreen {
         if self.pending {
             return;
         }
+        // A resume still in flight must not write its token back after this.
+        self.epoch.bump();
         let url = self.url.read(cx).text().trim().to_owned();
         if let Ok(bridge) = Bridge::new(&url) {
             bridge.install(cx);
             let keychain = self.keychain.clone();
+            let gate = self.epoch.clone();
             let rx = cx.global::<Bridge>().call(move |client| async move {
                 let mut client = client.lock().await;
                 client.logout();
-                forget_token(keychain, url).await;
+                forget_token(keychain, gate, None, url).await;
                 Ok::<(), Error>(())
             });
             cx.spawn(async move |_this: WeakEntity<Self>, _cx: &mut AsyncApp| {
@@ -986,6 +1048,90 @@ mod tests {
             assert!(!s.is_pending(), "a silent resume must not lock Sign in");
         });
         drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_busy()));
+    }
+
+    /// A daemon whose `/auth/refresh` answers `status` after `delay_ms`, and
+    /// whose sign-in succeeds at once with the login fixture.
+    fn slow_refresh_daemon(
+        runtime: &tokio::runtime::Runtime,
+        status: u16,
+        delay_ms: u64,
+    ) -> MockServer {
+        runtime.block_on(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/auth/status"))
+                .respond_with(ResponseTemplate::new(200).set_body_raw(
+                    r#"{"auth_enabled":true,"setup_required":false}"#,
+                    "application/json",
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/auth/login"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_raw(fixture("login.json"), "application/json"),
+                )
+                .mount(&server)
+                .await;
+            let refresh = if status == 200 {
+                ResponseTemplate::new(200).set_body_raw(fixture("refresh.json"), "application/json")
+            } else {
+                ResponseTemplate::new(status)
+            };
+            Mock::given(method("POST"))
+                .and(path("/auth/refresh"))
+                .respond_with(refresh.set_delay(Duration::from_millis(delay_ms)))
+                .mount(&server)
+                .await;
+            server
+        })
+    }
+
+    #[gpui::test]
+    fn a_resume_finishing_after_sign_out_does_not_store_its_token(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let runtime = runtime();
+        let server = slow_refresh_daemon(&runtime, 200, 500);
+        let store = MemoryStore::default();
+        store.store(&server.uri(), "refresh-1");
+        let screen = cx.new(|cx| ConnectScreen::with_memory_store(cx, store.clone()));
+        let url = screen.read_with(cx, |s, _| s.url.clone());
+        url.update(cx, |field, cx| field.set_value(server.uri(), cx));
+        screen.update(cx, |screen, cx| screen.try_resume(cx));
+        // Let the resume read the keychain and reach the slow refresh first.
+        std::thread::sleep(Duration::from_millis(150));
+        screen.update(cx, |screen, cx| screen.sign_out(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_busy()));
+        // Give the sign-out's own clear time to land as well.
+        std::thread::sleep(Duration::from_millis(200));
+        cx.run_until_parked();
+        assert_eq!(store.load(&server.uri()), Some(None));
+    }
+
+    #[gpui::test]
+    fn a_stale_refused_resume_keeps_the_newer_sign_in_token(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let runtime = runtime();
+        let server = slow_refresh_daemon(&runtime, 401, 500);
+        let store = MemoryStore::default();
+        store.store(&server.uri(), "dead-token");
+        let screen = cx.new(|cx| ConnectScreen::with_memory_store(cx, store.clone()));
+        fill(&screen, cx, &server.uri(), "admin", "secret");
+        screen.update(cx, |screen, cx| screen.try_resume(cx));
+        std::thread::sleep(Duration::from_millis(150));
+        screen.update(cx, |screen, cx| screen.submit(cx));
+        drive(cx, |cx| {
+            screen.read_with(cx, |s, _| !s.is_busy() && !s.is_pending())
+        });
+        // Outlast the slow refusal so the stale resume has had its chance to forget.
+        std::thread::sleep(Duration::from_millis(700));
+        cx.run_until_parked();
+        assert_eq!(
+            store.load(&server.uri()),
+            Some(Some("refresh-1".to_owned()))
+        );
     }
 
     #[gpui::test]

@@ -449,10 +449,10 @@ fn toolbar_click(
     move |_, _, app| dispatch(&me, app, action)
 }
 
-/// Run a confirmed delete. Calls the daemon path directly: `request` would open the modal again.
 /// Shown in the table when the daemon has no torrents.
 pub const NO_TORRENTS: &str = "No torrents yet.";
 
+/// Run a confirmed delete. Calls the daemon path directly: `request` would open the modal again.
 fn confirm_delete(me: &Entity<MainScreen>, app: &mut App) {
     me.update(app, |screen, cx| screen.act(RowAction::Delete, cx));
 }
