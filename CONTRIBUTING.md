@@ -5,8 +5,9 @@ that your contribution is licensed under the same terms.
 
 ## Branches and releases
 
-- Branch from **`main`** and open the pull request against `main`. Branches are
-  short-lived; there is no integration or long-lived release branch.
+- Changes land through graft, not by pushing a branch and opening a pull
+  request. See [How changes land](#how-changes-land). There is no integration or
+  long-lived release branch.
 - A pull request lands through the merge queue, which runs the full suite on
   the exact tree `main` will become. Do not rebase a queued PR by hand.
 - A `v*` tag cut from `main` is a release. It publishes the binaries, `.deb`
@@ -52,6 +53,14 @@ Playwright browser suite, and the deterministic mock tracker used by the tests.
 - Keep changes small and focused, and add tests for behaviour changes.
 
 ## How changes land
+
+Changes land through graft, batched. Workers `g land` on graft line `trial-3`.
+Oversight cuts one batch PR from the line (`graft-mirror pr-batch`) and merges
+it with `land-pr --method rebase`. When a backlog of work is under way, all of
+it goes into a single batch PR. Batch rules: workspace
+`.claude/rules/delivery-process.md` ("Landing").
+
+- Graft line: `trial-3`; mirror: `graft-dev-mirror`
 
 - **Required checks.** A pull request must pass five checks: `policy`, `rust`,
   `webui`, `gui-e2e` and `runner-policy / runner-policy`. They are small on
