@@ -3,5 +3,6 @@
 pub mod connect;
 pub mod detail;
 pub mod main_screen;
+pub mod settings;
 
 pub use main_screen::MainScreen;
