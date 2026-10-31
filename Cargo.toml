@@ -16,6 +16,7 @@ members = [
     "crates/rtbit",
     "crates/rtbit-client",
     "crates/rtbit-egui",
+    "crates/rtbit-fluent",
     "crates/rtbit-ui-core",
     "examples/fluent-mockup",
     "desktop/src-tauri",
