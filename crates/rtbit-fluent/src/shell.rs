@@ -8,6 +8,7 @@ use gpui::{
 use rtbit_ui_core::{Connection, Screen, Snapshot, StatusFilter};
 
 use crate::screens::connect::{ConnectEvent, ConnectScreen};
+use crate::screens::rss::RssScreen;
 use crate::screens::settings::SettingsScreen;
 use crate::screens::MainScreen;
 use crate::widgets::status_bar::StatusBar;
@@ -25,6 +26,7 @@ pub struct Shell {
     filter: StatusFilter,
     status: Entity<StatusBar>,
     connect: Entity<ConnectScreen>,
+    rss: Entity<RssScreen>,
     settings: Entity<SettingsScreen>,
     main: Entity<MainScreen>,
     _connect_events: Subscription,
@@ -53,6 +55,7 @@ impl Shell {
             filter: StatusFilter::All,
             status,
             connect,
+            rss: cx.new(RssScreen::new),
             settings,
             main,
             _connect_events: connect_events,
@@ -82,6 +85,9 @@ impl Shell {
     pub fn select_screen(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Some((_, _, screen)) = NAV.iter().find(|(nav_id, _, _)| *nav_id == id) {
             self.screen = *screen;
+            if self.screen == Screen::Rss {
+                self.rss.update(cx, |rss, cx| rss.load(cx));
+            }
             if self.screen == Screen::Settings {
                 self.settings.update(cx, |settings, cx| settings.load(cx));
             }
@@ -118,6 +124,13 @@ impl Shell {
                 .flex_1()
                 .p_4()
                 .child(self.connect.clone())
+                .into_any_element();
+        }
+        if self.screen == Screen::Rss {
+            return div()
+                .flex_1()
+                .p_4()
+                .child(self.rss.clone())
                 .into_any_element();
         }
         if self.screen == Screen::Settings {
