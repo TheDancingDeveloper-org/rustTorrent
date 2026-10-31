@@ -13,6 +13,8 @@ use fluent2_egui::surfaces::TabList;
 use fluent2_egui::{Icon, IconName};
 use rtbit_client::{PeerList, PieceProgress, Torrent, TorrentFile, TrackerList};
 
+pub use rtbit_ui_core::DetailAction;
+
 /// How many piece segments the bar will draw. Wider torrents are sampled.
 const PIECE_CAP: usize = 400;
 
@@ -54,18 +56,6 @@ pub struct DetailView {
     pub peers: Option<PeerList>,
     pub pieces: Option<PieceProgress>,
     pub error: Option<String>,
-}
-
-/// A change the pane asked for. The shell posts it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DetailAction {
-    /// Toggle one file in or out of the download selection.
-    SetIncluded { index: usize, included: bool },
-    /// Set every listed file the same way. A folder checkbox uses this so the
-    /// files under it move together.
-    SetIncludedMany { indices: Vec<usize>, included: bool },
-    /// Attach one announce URL.
-    AddTracker(String),
 }
 
 /// Draw the pane. Returns a mutation when the user changed the selection or
