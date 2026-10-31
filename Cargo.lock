@@ -8329,6 +8329,7 @@ dependencies = [
  "fluent-layout",
  "fluent-primitives",
  "gpui",
+ "rtbit-ui-core",
 ]
 
 [[package]]
