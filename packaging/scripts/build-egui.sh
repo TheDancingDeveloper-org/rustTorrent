@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Build and stage the native client (crates/rtbit-egui) release assets.
 #
-#   build-egui.sh linux   <tag> <dir>   binary + .deb, built in a container
-#   build-egui.sh windows <tag> <dir>   .exe, cross-built with cargo-zigbuild
-#   build-egui.sh sbom    <tag> <dir>   CycloneDX SBOM of the rtbit-egui graph
+#   [CLIENT=egui|fluent] build-egui.sh linux   <tag> <dir>   binary + .deb, built in a container
+#   [CLIENT=egui|fluent] build-egui.sh windows <tag> <dir>   .exe, cross-built with cargo-zigbuild
+#   [CLIENT=egui|fluent] build-egui.sh sbom    <tag> <dir>   CycloneDX SBOM of the client graph
+#
+# CLIENT selects the native client: egui (crates/rtbit-egui, the default) or
+# fluent (crates/rtbit-fluent). Artifacts are named rtbit-$CLIENT-<tag>-*.
 #
 # Used by the build job in release.yml and by release-dry-run.yml. The
 # rust-heavy runners are shared and not ephemeral, so nothing here changes
@@ -21,6 +24,13 @@ dir="${3:?usage: build-egui.sh <linux|windows|sbom> <tag> <dir>}"
 tmp="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 mkdir -p "$dir"
 
+client="${CLIENT:-egui}"
+case "$client" in
+  egui) crate=rtbit-egui ;;
+  fluent) crate=rtbit-fluent ;;
+  *) echo "unknown CLIENT: $client (want egui or fluent)" >&2; exit 2 ;;
+esac
+
 # rust:1.95-bookworm, pinned by index digest.
 image="docker.io/library/rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1"
 
@@ -35,25 +45,27 @@ case "$mode" in
       -e CARGO_PROFILE_RELEASE_GITHUB_LTO \
       -e CARGO_PROFILE_RELEASE_GITHUB_CODEGEN_UNITS \
       -e CARGO_PROFILE_RELEASE_GITHUB_STRIP \
+      -e CLIENT_CRATE="$crate" \
       "$image" bash -euo pipefail -c '
         apt-get update -qq
         apt-get install -y --no-install-recommends pkg-config \
           libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev \
-          libxrandr-dev libxi-dev libgl1-mesa-dev libegl1-mesa-dev
-        cargo build --locked --profile release-github -p rtbit-egui
+          libxrandr-dev libxi-dev libgl1-mesa-dev libegl1-mesa-dev \
+          libxcb1-dev libxkbcommon-x11-dev libfontconfig1-dev libvulkan-dev
+        cargo build --locked --profile release-github -p "$CLIENT_CRATE"
       ')"
     trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
     tar -c --exclude=./target --exclude=./.git --exclude='*/node_modules' \
       --transform 's,^\.,src,' . | docker cp - "$cid:/"
     docker start -a "$cid"
     mkdir -p target/egui-linux/release-github
-    docker cp "$cid:/src/target/egui-linux/release-github/rtbit-egui" target/egui-linux/release-github/rtbit-egui
-    bin=target/egui-linux/release-github/rtbit-egui
+    docker cp "$cid:/src/target/egui-linux/release-github/$crate" "target/egui-linux/release-github/$crate"
+    bin=target/egui-linux/release-github/$crate
     test -s "$bin"
     VERSION="${tag#v}" ARCH=amd64 BINARY="$bin" \
-      nfpm package --packager deb --config packaging/linux/nfpm-egui.yaml \
-      --target "$dir/rtbit-egui-$tag-amd64.deb"
-    cp "$bin" "$dir/rtbit-egui-$tag-linux-x86_64"
+      nfpm package --packager deb --config "packaging/linux/nfpm-$client.yaml" \
+      --target "$dir/rtbit-$client-$tag-amd64.deb"
+    cp "$bin" "$dir/rtbit-$client-$tag-linux-x86_64"
     ;;
   windows)
     zig="zig-x86_64-linux-0.15.2"
@@ -72,9 +84,9 @@ case "$mode" in
     export PATH="$tmp/$zig:$tmp/zig-wrappers:$tmp/zigbuild/bin:$PATH"
     rustup target add x86_64-pc-windows-gnu
     CARGO_TARGET_DIR=target/egui-windows \
-      cargo zigbuild --locked --profile release-github -p rtbit-egui --target x86_64-pc-windows-gnu
-    cp target/egui-windows/x86_64-pc-windows-gnu/release-github/rtbit-egui.exe \
-      "$dir/rtbit-egui-$tag-windows-x86_64.exe"
+      cargo zigbuild --locked --profile release-github -p "$crate" --target x86_64-pc-windows-gnu
+    cp "target/egui-windows/x86_64-pc-windows-gnu/release-github/$crate.exe" \
+      "$dir/rtbit-$client-$tag-windows-x86_64.exe"
     ;;
   sbom)
     if ! command -v cargo-cyclonedx >/dev/null 2>&1; then
@@ -82,10 +94,10 @@ case "$mode" in
       export PATH="$tmp/cyclonedx/bin:$PATH"
     fi
     cargo-cyclonedx cyclonedx \
-      --manifest-path crates/rtbit-egui/Cargo.toml \
+      --manifest-path "crates/$crate/Cargo.toml" \
       --format json --spec-version 1.5 \
-      --override-filename rtbit-egui-sbom
-    mv crates/rtbit-egui/rtbit-egui-sbom.json "$dir/rtbit-egui-$tag-sbom.cdx.json"
+      --override-filename "$crate-sbom"
+    mv "crates/$crate/$crate-sbom.json" "$dir/rtbit-$client-$tag-sbom.cdx.json"
     ;;
   *)
     echo "unknown mode: $mode" >&2
