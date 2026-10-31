@@ -68,6 +68,11 @@ case "$mode" in
     cp "$bin" "$dir/rtbit-$client-$tag-linux-x86_64"
     ;;
   windows)
+    if [ "$client" = fluent ]; then
+      # TODO(WI-2780): rtbit-fluent Windows is not built until a native Windows job exists
+      echo "::error::CLIENT=fluent has no Windows build until a native Windows job exists (WI-2780)" >&2
+      exit 2
+    fi
     zig="zig-x86_64-linux-0.15.2"
     if ! test -x "$tmp/$zig/zig"; then
       curl -fsSL -o "$tmp/$zig.tar.xz" "https://ziglang.org/download/0.15.2/$zig.tar.xz"

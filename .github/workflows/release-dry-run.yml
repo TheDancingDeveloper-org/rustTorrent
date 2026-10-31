@@ -103,7 +103,8 @@ jobs:
           bash packaging/scripts/build-egui.sh windows "$tag" target/egui-stage
           bash packaging/scripts/build-egui.sh sbom "$tag" target/egui-stage
           CLIENT=fluent bash packaging/scripts/build-egui.sh linux "$tag" target/egui-stage
-          CLIENT=fluent bash packaging/scripts/build-egui.sh windows "$tag" target/egui-stage
+          # TODO(WI-2780): rtbit-fluent Windows is not built until a native Windows job exists
+          # (gpui_windows DirectX shaders cannot cross-compile from Linux). Follow-up tracked under WI-2780.
           CLIENT=fluent bash packaging/scripts/build-egui.sh sbom "$tag" target/egui-stage
       - name: Stage and checksum artifacts
         shell: bash
@@ -166,7 +167,6 @@ jobs:
             "rtbit-egui-$tag-sbom.cdx.json" \
             "rtbit-fluent-$tag-linux-x86_64" \
             "rtbit-fluent-$tag-amd64.deb" \
-            "rtbit-fluent-$tag-windows-x86_64.exe" \
             "rtbit-fluent-$tag-sbom.cdx.json"; do
             test -s "release-artifacts/$file" || { echo "::error::missing $file"; exit 1; }
           done
