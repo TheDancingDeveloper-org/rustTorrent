@@ -86,10 +86,12 @@ jobs:
           export CARGO_PROFILE_RELEASE_GITHUB_CODEGEN_UNITS=1
           export CARGO_PROFILE_RELEASE_GITHUB_STRIP=symbols
           cargo build --profile release-github -p rtbit --target x86_64-pc-windows-gnu --no-default-features --features default-tls
-      # The native client (crates/rtbit-egui). Linux builds in a pinned
-      # container with the wayland/X11/GL -dev packages, Windows cross-builds
-      # with cargo-zigbuild; see packaging/scripts/build-egui.sh. Neither
-      # changes the shared runner's apt or dpkg state.
+      # The desktop client (crates/rtbit-fluent, gpui). Linux builds in a
+      # pinned container with the wayland/X11/GL -dev packages; see
+      # packaging/scripts/build-desktop.sh. It does not change the shared
+      # runner's apt or dpkg state.
+      # TODO(WI-2779): no Windows desktop build until a native Windows job
+      # exists (gpui_windows DirectX shaders cannot cross-compile from Linux).
       - name: Build native client artifacts
         shell: bash
         run: |
@@ -98,14 +100,9 @@ jobs:
           export CARGO_PROFILE_RELEASE_GITHUB_STRIP=symbols
           tag="${{ steps.tag.outputs.tag }}"
           test -n "$tag"
-          rm -rf target/egui-stage
-          bash packaging/scripts/build-egui.sh linux "$tag" target/egui-stage
-          bash packaging/scripts/build-egui.sh windows "$tag" target/egui-stage
-          bash packaging/scripts/build-egui.sh sbom "$tag" target/egui-stage
-          CLIENT=fluent bash packaging/scripts/build-egui.sh linux "$tag" target/egui-stage
-          # TODO(WI-2780): rtbit-fluent Windows is not built until a native Windows job exists
-          # (gpui_windows DirectX shaders cannot cross-compile from Linux). Follow-up tracked under WI-2780.
-          CLIENT=fluent bash packaging/scripts/build-egui.sh sbom "$tag" target/egui-stage
+          rm -rf target/desktop-stage
+          bash packaging/scripts/build-desktop.sh linux "$tag" target/desktop-stage
+          bash packaging/scripts/build-desktop.sh sbom "$tag" target/desktop-stage
       - name: Stage and checksum artifacts
         shell: bash
         run: |
@@ -144,9 +141,8 @@ jobs:
             --format json --spec-version 1.5 \
             --override-filename rtbit-sbom
           mv crates/rtbit/rtbit-sbom.json "release-artifacts/rtbit-$tag-sbom.cdx.json"
-          # Native client binaries, .deb and SBOM, named rtbit-egui-<tag>-*
-          # and rtbit-fluent-<tag>-*.
-          cp target/egui-stage/rtbit-egui-* target/egui-stage/rtbit-fluent-* release-artifacts/
+          # Desktop client binary, .deb and SBOM, named rtbit-fluent-<tag>-*.
+          cp target/desktop-stage/rtbit-fluent-* release-artifacts/
           (cd release-artifacts && sha256sum rtbit-*) > "release-artifacts/SHA256SUMS-$tag.txt"
       - name: Verify the staged set
         shell: bash
@@ -161,18 +157,13 @@ jobs:
             "rtbit-$tag-service-files.tar.gz" \
             "rtbit-$tag-vendor.tar.xz" \
             "rtbit-$tag-sbom.cdx.json" \
-            "rtbit-egui-$tag-linux-x86_64" \
-            "rtbit-egui-$tag-amd64.deb" \
-            "rtbit-egui-$tag-windows-x86_64.exe" \
-            "rtbit-egui-$tag-sbom.cdx.json" \
             "rtbit-fluent-$tag-linux-x86_64" \
             "rtbit-fluent-$tag-amd64.deb" \
             "rtbit-fluent-$tag-sbom.cdx.json"; do
             test -s "release-artifacts/$file" || { echo "::error::missing $file"; exit 1; }
           done
           (cd release-artifacts && sha256sum -c "SHA256SUMS-$tag.txt")
-          # The native client .deb must carry its binary.
-          dpkg-deb --contents "release-artifacts/rtbit-egui-$tag-amd64.deb" | grep -q ' ./usr/bin/rtbit-egui$'
+          # The desktop client .deb must carry its binary.
           dpkg-deb --contents "release-artifacts/rtbit-fluent-$tag-amd64.deb" | grep -q ' ./usr/bin/rtbit-fluent$'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
