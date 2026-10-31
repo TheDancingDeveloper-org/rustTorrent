@@ -60,6 +60,16 @@ impl Bridge {
         cx.set_global(self);
     }
 
+    /// Build a bridge from a runtime and an already-logged-in client. Tests
+    /// use this to point screens at a mock daemon.
+    #[cfg(test)]
+    pub fn from_parts(runtime: Arc<Runtime>, client: Client) -> Self {
+        Self {
+            runtime,
+            client: Arc::new(Mutex::new(client)),
+        }
+    }
+
     /// The runtime, for callers that need to spawn their own I/O.
     pub fn runtime(&self) -> &Arc<Runtime> {
         &self.runtime
