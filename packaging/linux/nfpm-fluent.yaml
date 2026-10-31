@@ -1,5 +1,5 @@
 # nfpm config for the rtbit-fluent (native client) .deb.
-# Built in CI by packaging/scripts/build-egui.sh from the release-github
+# Built in CI by packaging/scripts/build-desktop.sh from the release-github
 # binary; VERSION, ARCH and BINARY are set by the caller.
 name: rtbit-fluent
 arch: "${ARCH}"

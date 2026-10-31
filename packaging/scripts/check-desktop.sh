@@ -5,10 +5,10 @@
 # Used by the desktop job in ci.yml. The shared rust-heavy runners have no
 # webkit or Node, and nothing here changes their dpkg or apt state: the webkit, GTK
 # and appindicator development packages and a checksummed Node are installed inside the same
-# digest-pinned container that build-egui.sh uses.
+# digest-pinned container that build-desktop.sh uses.
 set -euo pipefail
 
-# rust:1.95-bookworm, pinned by index digest. Keep in step with build-egui.sh.
+# rust:1.95-bookworm, pinned by index digest. Keep in step with build-desktop.sh.
 image="docker.io/library/rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1"
 
 command -v docker >/dev/null 2>&1 || { echo "::error::docker is required for the desktop build"; exit 1; }
