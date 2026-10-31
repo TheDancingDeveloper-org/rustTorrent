@@ -5,8 +5,11 @@
 //! pending flag and awaits the reply in a gpui task. The shell reacts to the
 //! [`ConnectEvent`]s to update the connection badge and the window title.
 //!
-//! Setup (first-run account) and refresh-token resume from the keychain are not
-//! in this slice.
+//! When the daemon has no account yet, the same screen switches to the
+//! first-run setup form (`POST /auth/setup`). Once at start-up the screen tries
+//! to resume from the refresh token in the keychain. Keychain access runs on a
+//! blocking thread inside the bridge, never on the UI thread. Only the refresh
+//! token is stored; the password is never stored or logged.
 
 use fluent_layout::{MessageBar, MessageIntent};
 use fluent_primitives::{Button, ButtonAppearance, Label, TextInput};
@@ -15,12 +18,17 @@ use gpui::{
     div, prelude::*, px,
 };
 use rtbit_client::Error;
-use rtbit_ui_core::map_error;
+#[cfg(test)]
+use rtbit_ui_core::MemoryStore;
+use rtbit_ui_core::{OsKeychain, TokenStore, map_error};
 
 use crate::bridge::Bridge;
 
 /// Address the egui shell starts with.
 pub const DEFAULT_URL: &str = "http://127.0.0.1:3030";
+
+/// Shortest password the first-run form accepts. Matches the egui shell.
+const MIN_PASSWORD_CHARS: usize = 4;
 
 /// What the shell needs to know about a sign-in attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,15 +37,81 @@ pub enum ConnectEvent {
     Connecting,
     /// The daemon accepted the credentials. The shell opens the main screen.
     Connected,
+    /// The daemon has no account yet. The screen shows the setup form.
+    SetupRequired,
     /// The attempt failed. The message is shown on this screen.
     Failed,
 }
 
-/// The connect form. Fields are read when the user submits; nothing is logged.
+/// Which form the screen shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// Daemon URL, username and password.
+    Connect,
+    /// First-run account: setup token, username, password and confirmation.
+    Setup,
+}
+
+/// What a bridge call reports back to the screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reply {
+    Connected,
+    SetupRequired,
+}
+
+/// Where the refresh token is kept. Tests use the in-memory store.
+#[derive(Clone)]
+enum Keychain {
+    Os(OsKeychain),
+    #[cfg(test)]
+    Memory(MemoryStore),
+}
+
+impl Keychain {
+    fn load(&self, url: &str) -> Option<Option<String>> {
+        match self {
+            Self::Os(store) => store.load(url),
+            #[cfg(test)]
+            Self::Memory(store) => store.load(url),
+        }
+    }
+
+    fn store(&self, url: &str, token: &str) -> Option<()> {
+        match self {
+            Self::Os(store) => store.store(url, token),
+            #[cfg(test)]
+            Self::Memory(store) => store.store(url, token),
+        }
+    }
+}
+
+/// Read the stored refresh token on a blocking thread. `None` when there is no
+/// token or the keychain cannot be opened.
+async fn load_token(keychain: Keychain, url: String) -> Option<String> {
+    tokio::task::spawn_blocking(move || keychain.load(&url))
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+}
+
+/// Write the refresh token on a blocking thread. A refused write does not fail
+/// the sign-in; the token just will not survive a relaunch.
+async fn remember_token(keychain: Keychain, url: String, token: Option<String>) {
+    let Some(token) = token else { return };
+    let _ = tokio::task::spawn_blocking(move || keychain.store(&url, &token)).await;
+}
+
+/// The connect and first-run setup form. Fields are read when the user submits;
+/// nothing is logged.
 pub struct ConnectScreen {
     url: Entity<TextInput>,
     username: Entity<TextInput>,
     password: Entity<TextInput>,
+    setup_token: Entity<TextInput>,
+    confirm: Entity<TextInput>,
+    mode: Mode,
+    keychain: Keychain,
     error: Option<String>,
     pending: bool,
 }
@@ -47,13 +121,32 @@ impl EventEmitter<ConnectEvent> for ConnectScreen {}
 impl ConnectScreen {
     #[must_use]
     pub fn new(cx: &mut Context<Self>) -> Self {
+        Self::build(cx, Keychain::Os(OsKeychain))
+    }
+
+    #[cfg(test)]
+    fn with_memory_store(cx: &mut Context<Self>, store: MemoryStore) -> Self {
+        Self::build(cx, Keychain::Memory(store))
+    }
+
+    fn build(cx: &mut Context<Self>, keychain: Keychain) -> Self {
         let url = cx.new(|_| TextInput::new().value(DEFAULT_URL));
         let username = cx.new(|_| TextInput::new().placeholder("Username"));
         let password = cx.new(|_| TextInput::new().placeholder("Password").masked(true));
+        let setup_token = cx.new(|_| TextInput::new().placeholder("Setup token").masked(true));
+        let confirm = cx.new(|_| {
+            TextInput::new()
+                .placeholder("Confirm password")
+                .masked(true)
+        });
         Self {
             url,
             username,
             password,
+            setup_token,
+            confirm,
+            mode: Mode::Connect,
+            keychain,
             error: None,
             pending: false,
         }
@@ -65,14 +158,22 @@ impl ConnectScreen {
         self.error.as_deref()
     }
 
-    /// `true` while a sign-in request is in flight.
+    /// `true` while a sign-in or setup request is in flight.
     #[must_use]
     pub fn is_pending(&self) -> bool {
         self.pending
     }
 
-    /// Validate the form and start one sign-in on the bridge. A second submit
-    /// while one is pending does nothing.
+    /// The form currently shown.
+    #[must_use]
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// Validate the form and start one sign-in on the bridge. The daemon is
+    /// asked first whether setup is still open; if it is, the screen switches
+    /// to the setup form instead of signing in. A second submit while one is
+    /// pending does nothing.
     pub fn submit(&mut self, cx: &mut Context<Self>) {
         if self.pending {
             return;
@@ -98,33 +199,148 @@ impl ConnectScreen {
         cx.emit(ConnectEvent::Connecting);
         cx.notify();
 
+        let keychain = self.keychain.clone();
         let rx = cx.global::<Bridge>().call(move |client| async move {
             let mut client = client.lock().await;
+            if client.auth_status().await?.setup_required {
+                return Ok(Reply::SetupRequired);
+            }
             client.login(&username, &password).await?;
             let refresh = client.refresh_token().map(str::to_owned);
-            Ok::<Option<String>, Error>(refresh)
+            remember_token(keychain, url, refresh).await;
+            Ok(Reply::Connected)
         });
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let reply = match rx.await {
-                Ok(reply) => reply,
-                Err(_) => Err(Error::Unreachable("request cancelled".to_owned())),
-            };
+            let reply = reply_or_cancel(rx).await;
             let _ = this.update(cx, |this, cx| this.finish(reply, cx));
         })
         .detach();
     }
 
-    fn finish(&mut self, reply: Result<Option<String>, Error>, cx: &mut Context<Self>) {
+    /// Validate the first-run form and create the account on the bridge. The
+    /// setup token and passwords are never logged.
+    pub fn submit_setup(&mut self, cx: &mut Context<Self>) {
+        if self.pending {
+            return;
+        }
+        let url = self.url.read(cx).text().trim().to_owned();
+        let setup_token = self.setup_token.read(cx).text().trim().to_owned();
+        let username = self.username.read(cx).text().trim().to_owned();
+        let password = self.password.read(cx).text().to_owned();
+        let confirm = self.confirm.read(cx).text().to_owned();
+        if setup_token.is_empty() || username.is_empty() || password.is_empty() {
+            self.fail("Setup token, username and password are required.", cx);
+            return;
+        }
+        if password.chars().count() < MIN_PASSWORD_CHARS {
+            self.fail("Password must be at least 4 characters.", cx);
+            return;
+        }
+        if password != confirm {
+            self.fail("Passwords do not match.", cx);
+            return;
+        }
+        let bridge = match Bridge::new(&url) {
+            Ok(bridge) => bridge,
+            Err(err) => {
+                self.fail(&map_error(&err), cx);
+                return;
+            }
+        };
+        bridge.install(cx);
+
+        self.pending = true;
+        self.error = None;
+        cx.emit(ConnectEvent::Connecting);
+        cx.notify();
+
+        let keychain = self.keychain.clone();
+        let rx = cx.global::<Bridge>().call(move |client| async move {
+            let mut client = client.lock().await;
+            client.setup(&username, &password, &setup_token).await?;
+            let refresh = client.refresh_token().map(str::to_owned);
+            remember_token(keychain, url, refresh).await;
+            Ok(Reply::Connected)
+        });
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let reply = reply_or_cancel(rx).await;
+            let _ = this.update(cx, |this, cx| this.finish(reply, cx));
+        })
+        .detach();
+    }
+
+    /// Try once to continue from the refresh token in the keychain. No token,
+    /// an unavailable keychain, or a token the daemon refuses all leave the
+    /// connect form as it is, with no error bar.
+    pub fn try_resume(&mut self, cx: &mut Context<Self>) {
+        if self.pending || self.mode != Mode::Connect {
+            return;
+        }
+        let url = self.url.read(cx).text().trim().to_owned();
+        if url.is_empty() {
+            return;
+        }
+        let Ok(bridge) = Bridge::new(&url) else {
+            return;
+        };
+        bridge.install(cx);
+
+        self.pending = true;
+        cx.notify();
+
+        let keychain = self.keychain.clone();
+        let rx = cx.global::<Bridge>().call(move |client| async move {
+            let Some(refresh) = load_token(keychain.clone(), url.clone()).await else {
+                return Err(Error::Unauthorised);
+            };
+            let mut client = client.lock().await;
+            client.resume(&refresh).await?;
+            let rotated = client.refresh_token().map(str::to_owned);
+            remember_token(keychain, url, rotated).await;
+            Ok(Reply::Connected)
+        });
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let reply = reply_or_cancel(rx).await;
+            let _ = this.update(cx, |this, cx| this.finish_resume(reply, cx));
+        })
+        .detach();
+    }
+
+    fn finish(&mut self, reply: Result<Reply, Error>, cx: &mut Context<Self>) {
         self.pending = false;
         match reply {
-            Ok(_refresh) => {
-                // The refresh token is not persisted yet; keychain resume is a later slice.
-                self.password
-                    .update(cx, |field, cx| field.set_value("", cx));
+            Ok(Reply::Connected) => {
+                self.clear_secrets(cx);
                 cx.emit(ConnectEvent::Connected);
                 cx.notify();
             }
+            Ok(Reply::SetupRequired) => {
+                // The typed password was for a sign-in that cannot happen yet.
+                self.password
+                    .update(cx, |field, cx| field.set_value("", cx));
+                self.mode = Mode::Setup;
+                self.error = None;
+                cx.emit(ConnectEvent::SetupRequired);
+                cx.notify();
+            }
             Err(err) => self.fail(&map_error(&err), cx),
+        }
+    }
+
+    /// A resume is silent: success opens the main screen, anything else leaves
+    /// the form as it was.
+    fn finish_resume(&mut self, reply: Result<Reply, Error>, cx: &mut Context<Self>) {
+        self.pending = false;
+        if matches!(reply, Ok(Reply::Connected)) {
+            self.clear_secrets(cx);
+            cx.emit(ConnectEvent::Connected);
+        }
+        cx.notify();
+    }
+
+    fn clear_secrets(&self, cx: &mut Context<Self>) {
+        for field in [&self.password, &self.setup_token, &self.confirm] {
+            field.update(cx, |field, cx| field.set_value("", cx));
         }
     }
 
@@ -133,6 +349,16 @@ impl ConnectScreen {
         self.error = Some(message.to_owned());
         cx.emit(ConnectEvent::Failed);
         cx.notify();
+    }
+}
+
+/// The reply from a bridge call, or a cancellation error if the runtime dropped it.
+async fn reply_or_cancel(
+    rx: tokio::sync::oneshot::Receiver<Result<Reply, Error>>,
+) -> Result<Reply, Error> {
+    match rx.await {
+        Ok(reply) => reply,
+        Err(_) => Err(Error::Unreachable("request cancelled".to_owned())),
     }
 }
 
@@ -147,31 +373,59 @@ fn field(label: &'static str, input: Entity<TextInput>) -> impl IntoElement {
 
 impl Render for ConnectScreen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let submit = cx.listener(|this, _: &ClickEvent, _window, cx| this.submit(cx));
-        let label = if self.pending {
-            "Connecting…"
-        } else {
-            "Sign in"
-        };
-        let mut form = div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .w(px(360.0))
-            .child(Label::new("Connect to a daemon"))
-            .child(field("Daemon URL", self.url.clone()))
-            .child(field("Username", self.username.clone()))
-            .child(field("Password", self.password.clone()));
-        if let Some(message) = &self.error {
-            form = form.child(MessageBar::new(message.clone()).intent(MessageIntent::Error));
+        let mut form = div().flex().flex_col().gap_3().w(px(360.0));
+        match self.mode {
+            Mode::Connect => {
+                let submit = cx.listener(|this, _: &ClickEvent, _window, cx| this.submit(cx));
+                let label = if self.pending {
+                    "Connecting…"
+                } else {
+                    "Sign in"
+                };
+                form = form
+                    .child(Label::new("Connect to a daemon"))
+                    .child(field("Daemon URL", self.url.clone()))
+                    .child(field("Username", self.username.clone()))
+                    .child(field("Password", self.password.clone()));
+                if let Some(message) = &self.error {
+                    form =
+                        form.child(MessageBar::new(message.clone()).intent(MessageIntent::Error));
+                }
+                form.child(
+                    Button::new("connect-submit")
+                        .label(label)
+                        .appearance(ButtonAppearance::Accent)
+                        .disabled(self.pending)
+                        .on_click(submit),
+                )
+            }
+            Mode::Setup => {
+                let submit = cx.listener(|this, _: &ClickEvent, _window, cx| this.submit_setup(cx));
+                let label = if self.pending {
+                    "Creating account…"
+                } else {
+                    "Create account"
+                };
+                form = form
+                    .child(Label::new("First-run setup"))
+                    .child(Label::new("The setup token is printed in the rtbit log."))
+                    .child(field("Setup token", self.setup_token.clone()))
+                    .child(field("Username", self.username.clone()))
+                    .child(field("Password", self.password.clone()))
+                    .child(field("Confirm password", self.confirm.clone()));
+                if let Some(message) = &self.error {
+                    form =
+                        form.child(MessageBar::new(message.clone()).intent(MessageIntent::Error));
+                }
+                form.child(
+                    Button::new("setup-submit")
+                        .label(label)
+                        .appearance(ButtonAppearance::Accent)
+                        .disabled(self.pending)
+                        .on_click(submit),
+                )
+            }
         }
-        form.child(
-            Button::new("connect-submit")
-                .label(label)
-                .appearance(ButtonAppearance::Accent)
-                .disabled(self.pending)
-                .on_click(submit),
-        )
     }
 }
 
@@ -196,18 +450,45 @@ mod tests {
         std::fs::read_to_string(format!("{FIXTURES}/{name}")).unwrap()
     }
 
-    /// A wiremock daemon whose `/auth/login` answers `status`.
-    fn login_server(runtime: &tokio::runtime::Runtime, status: u16) -> MockServer {
+    /// A wiremock daemon. `/auth/status` says whether setup is still open;
+    /// `/auth/login` answers `login`; `/auth/setup` and `/auth/refresh` succeed
+    /// with the token fixtures.
+    fn daemon(runtime: &tokio::runtime::Runtime, login: u16, setup_required: bool) -> MockServer {
         runtime.block_on(async {
             let server = MockServer::start().await;
-            let response = if status == 200 {
+            let status_body =
+                format!(r#"{{"auth_enabled":true,"setup_required":{setup_required}}}"#);
+            Mock::given(method("GET"))
+                .and(path("/auth/status"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_raw(status_body, "application/json"),
+                )
+                .mount(&server)
+                .await;
+            let login_response = if login == 200 {
                 ResponseTemplate::new(200).set_body_raw(fixture("login.json"), "application/json")
             } else {
-                ResponseTemplate::new(status)
+                ResponseTemplate::new(login)
             };
             Mock::given(method("POST"))
                 .and(path("/auth/login"))
-                .respond_with(response)
+                .respond_with(login_response)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/auth/setup"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_raw(fixture("login.json"), "application/json"),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/auth/refresh"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_raw(fixture("refresh.json"), "application/json"),
+                )
                 .mount(&server)
                 .await;
             server
@@ -222,7 +503,7 @@ mod tests {
             .unwrap()
     }
 
-    /// Put text into the three fields the way a user would type it.
+    /// Put text into the three connect fields the way a user would type it.
     fn fill(
         screen: &Entity<ConnectScreen>,
         cx: &mut TestAppContext,
@@ -238,6 +519,29 @@ mod tests {
         pass_field.update(cx, |field, cx| field.set_value(pass, cx));
     }
 
+    /// Put text into the four first-run fields.
+    fn fill_setup(
+        screen: &Entity<ConnectScreen>,
+        cx: &mut TestAppContext,
+        token: &str,
+        user: &str,
+        pass: &str,
+        confirm: &str,
+    ) {
+        let (token_field, user_field, pass_field, confirm_field) = screen.read_with(cx, |s, _| {
+            (
+                s.setup_token.clone(),
+                s.username.clone(),
+                s.password.clone(),
+                s.confirm.clone(),
+            )
+        });
+        token_field.update(cx, |field, cx| field.set_value(token, cx));
+        user_field.update(cx, |field, cx| field.set_value(user, cx));
+        pass_field.update(cx, |field, cx| field.set_value(pass, cx));
+        confirm_field.update(cx, |field, cx| field.set_value(confirm, cx));
+    }
+
     /// Drive gpui until `done` holds. Replies arrive from tokio threads.
     fn drive(cx: &mut TestAppContext, mut done: impl FnMut(&mut TestAppContext) -> bool) {
         for _ in 0..500 {
@@ -248,6 +552,20 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!("sign-in reply never arrived");
+    }
+
+    fn record_events(
+        screen: &Entity<ConnectScreen>,
+        cx: &mut TestAppContext,
+    ) -> (Rc<RefCell<Vec<ConnectEvent>>>, Subscription) {
+        let events: Rc<RefCell<Vec<ConnectEvent>>> = Rc::default();
+        let sink = events.clone();
+        let subscription = cx.update(|cx: &mut App| {
+            cx.subscribe(screen, move |_, event: &ConnectEvent, _| {
+                sink.borrow_mut().push(*event);
+            })
+        });
+        (events, subscription)
     }
 
     #[gpui::test]
@@ -267,7 +585,7 @@ mod tests {
     fn bad_credentials_show_the_error_bar(cx: &mut TestAppContext) {
         cx.executor().allow_parking();
         let runtime = runtime();
-        let server = login_server(&runtime, 401);
+        let server = daemon(&runtime, 401, false);
         let screen = cx.new(ConnectScreen::new);
         fill(&screen, cx, &server.uri(), "admin", "wrong");
         screen.update(cx, |screen, cx| screen.submit(cx));
@@ -275,6 +593,7 @@ mod tests {
         drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_pending()));
         screen.read_with(cx, |screen, _| {
             assert_eq!(screen.error(), Some("Sign-in was refused."));
+            assert_eq!(screen.mode(), Mode::Connect);
         });
     }
 
@@ -282,15 +601,9 @@ mod tests {
     fn good_credentials_emit_connected_and_clear_the_password(cx: &mut TestAppContext) {
         cx.executor().allow_parking();
         let runtime = runtime();
-        let server = login_server(&runtime, 200);
+        let server = daemon(&runtime, 200, false);
         let screen = cx.new(ConnectScreen::new);
-        let events: Rc<RefCell<Vec<ConnectEvent>>> = Rc::default();
-        let sink = events.clone();
-        let _subscription: Subscription = cx.update(|cx: &mut App| {
-            cx.subscribe(&screen, move |_, event: &ConnectEvent, _| {
-                sink.borrow_mut().push(*event);
-            })
-        });
+        let (events, _subscription) = record_events(&screen, cx);
         fill(&screen, cx, &server.uri(), "admin", "secret");
         screen.update(cx, |screen, cx| screen.submit(cx));
         drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_pending()));
@@ -301,5 +614,120 @@ mod tests {
         screen.read_with(cx, |screen, _| assert!(screen.error().is_none()));
         let pass = screen.read_with(cx, |s, _| s.password.clone());
         assert_eq!(pass.read_with(cx, |field, _| field.text().to_owned()), "");
+    }
+
+    #[gpui::test]
+    fn open_setup_switches_to_the_setup_form_without_signing_in(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let runtime = runtime();
+        let server = daemon(&runtime, 200, true);
+        let screen = cx.new(ConnectScreen::new);
+        let (events, _subscription) = record_events(&screen, cx);
+        fill(&screen, cx, &server.uri(), "admin", "secret");
+        screen.update(cx, |screen, cx| screen.submit(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_pending()));
+        assert_eq!(
+            *events.borrow(),
+            vec![ConnectEvent::Connecting, ConnectEvent::SetupRequired]
+        );
+        screen.read_with(cx, |screen, _| {
+            assert_eq!(screen.mode(), Mode::Setup);
+            assert!(screen.error().is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn setup_creates_the_account_and_stores_only_the_refresh_token(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let runtime = runtime();
+        let server = daemon(&runtime, 200, true);
+        let store = MemoryStore::default();
+        let screen = cx.new(|cx| ConnectScreen::with_memory_store(cx, store.clone()));
+        let (events, _subscription) = record_events(&screen, cx);
+        fill(&screen, cx, &server.uri(), "admin", "secret");
+        screen.update(cx, |screen, cx| screen.submit(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_pending()));
+        fill_setup(&screen, cx, "setup-token", "admin", "secret", "secret");
+        screen.update(cx, |screen, cx| screen.submit_setup(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_pending()));
+        assert_eq!(
+            *events.borrow(),
+            vec![
+                ConnectEvent::Connecting,
+                ConnectEvent::SetupRequired,
+                ConnectEvent::Connecting,
+                ConnectEvent::Connected,
+            ]
+        );
+        assert_eq!(
+            store.load(&server.uri()),
+            Some(Some("refresh-1".to_owned()))
+        );
+        let setup_token = screen.read_with(cx, |s, _| s.setup_token.clone());
+        assert_eq!(setup_token.read_with(cx, |f, _| f.text().to_owned()), "");
+    }
+
+    #[gpui::test]
+    fn setup_rejects_a_short_password_without_a_request(cx: &mut TestAppContext) {
+        let screen = cx.new(ConnectScreen::new);
+        screen.update(cx, |screen, _| screen.mode = Mode::Setup);
+        fill_setup(&screen, cx, "setup-token", "admin", "abc", "abc");
+        screen.update(cx, |screen, cx| screen.submit_setup(cx));
+        screen.read_with(cx, |screen, _| {
+            assert!(!screen.is_pending());
+            assert_eq!(
+                screen.error(),
+                Some("Password must be at least 4 characters.")
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn setup_rejects_mismatched_passwords_without_a_request(cx: &mut TestAppContext) {
+        let screen = cx.new(ConnectScreen::new);
+        screen.update(cx, |screen, _| screen.mode = Mode::Setup);
+        fill_setup(&screen, cx, "setup-token", "admin", "secret", "other");
+        screen.update(cx, |screen, cx| screen.submit_setup(cx));
+        screen.read_with(cx, |screen, _| {
+            assert!(!screen.is_pending());
+            assert_eq!(screen.error(), Some("Passwords do not match."));
+        });
+    }
+
+    #[gpui::test]
+    fn stored_refresh_token_resumes_and_is_rotated(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let runtime = runtime();
+        let server = daemon(&runtime, 200, false);
+        let store = MemoryStore::default();
+        store.store(&server.uri(), "refresh-1");
+        let screen = cx.new(|cx| ConnectScreen::with_memory_store(cx, store.clone()));
+        let (events, _subscription) = record_events(&screen, cx);
+        let url = screen.read_with(cx, |s, _| s.url.clone());
+        url.update(cx, |field, cx| field.set_value(server.uri(), cx));
+        screen.update(cx, |screen, cx| screen.try_resume(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_pending()));
+        assert_eq!(*events.borrow(), vec![ConnectEvent::Connected]);
+        screen.read_with(cx, |screen, _| assert!(screen.error().is_none()));
+        assert_eq!(
+            store.load(&server.uri()),
+            Some(Some("refresh-2".to_owned()))
+        );
+    }
+
+    #[gpui::test]
+    fn no_stored_token_resumes_silently(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let runtime = runtime();
+        let server = daemon(&runtime, 200, false);
+        let store = MemoryStore::default();
+        let screen = cx.new(|cx| ConnectScreen::with_memory_store(cx, store.clone()));
+        let (events, _subscription) = record_events(&screen, cx);
+        let url = screen.read_with(cx, |s, _| s.url.clone());
+        url.update(cx, |field, cx| field.set_value(server.uri(), cx));
+        screen.update(cx, |screen, cx| screen.try_resume(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_pending()));
+        assert!(events.borrow().is_empty());
+        screen.read_with(cx, |screen, _| assert!(screen.error().is_none()));
     }
 }
