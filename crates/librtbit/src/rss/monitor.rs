@@ -205,14 +205,22 @@ impl RssMonitor {
             };
             let decision = rules::decide(&rules, &title, &tracker);
 
-            let (should_download, category) = match decision {
-                RuleDecision::Download { category } => {
-                    (true, category.or_else(|| feed.category.clone()))
-                }
+            // The rule that matched, and whether it tracks episodes. A feed-level
+            // auto-download keeps the old behaviour: it always tracks.
+            let (should_download, category, matched_rule) = match decision {
+                RuleDecision::Download {
+                    category,
+                    rule_id,
+                    track_episodes,
+                } => (
+                    true,
+                    category.or_else(|| feed.category.clone()),
+                    Some((rule_id, track_episodes)),
+                ),
                 RuleDecision::Skip if feed.auto_download && feed.filter_regex.is_none() => {
-                    (true, feed.category.clone())
+                    (true, feed.category.clone(), None)
                 }
-                RuleDecision::Skip => (false, None),
+                RuleDecision::Skip => (false, None, None),
             };
 
             if !should_download {
@@ -222,11 +230,28 @@ impl RssMonitor {
             info!(feed = %feed.name, title = %title, url = %url, "Auto-downloading RSS item");
 
             match self.add_torrent(url, category.as_deref()).await {
-                Ok(()) => {
+                Ok(torrent_id) => {
                     let db = self.db.lock();
                     let _ = db.rss_item_mark_downloaded(&entry_id, category.as_deref());
                     if let Some(episode) = rules::parse_episode(&title) {
-                        let _ = db.episode_record(&rules::series_key(&title), episode);
+                        let series = rules::series_key(&title);
+                        let track = matched_rule.as_ref().is_none_or(|(_, track)| *track);
+                        if track {
+                            let _ = db.episode_record(&series, episode);
+                        }
+                        if let Some((rule_id, _)) = &matched_rule {
+                            let _ = db.rule_episode_record(
+                                rule_id,
+                                &super::models::RssRuleEpisode {
+                                    show: series,
+                                    season: episode.season,
+                                    episode: episode.episode,
+                                    title: title.clone(),
+                                    matched_at: Utc::now(),
+                                    torrent_id,
+                                },
+                            );
+                        }
                     }
                     info!(title = %title, "RSS torrent added successfully");
                 }
@@ -298,7 +323,12 @@ impl RssMonitor {
     }
 
     /// Add a torrent to the session from a URL (magnet or .torrent URL).
-    async fn add_torrent(&self, url: &str, category: Option<&str>) -> anyhow::Result<()> {
+    /// Add the torrent; returns its id when the session reports one.
+    async fn add_torrent(
+        &self,
+        url: &str,
+        category: Option<&str>,
+    ) -> anyhow::Result<Option<usize>> {
         use std::borrow::Cow;
 
         let opts = crate::session::AddTorrentOptions {
@@ -309,13 +339,18 @@ impl RssMonitor {
 
         let add = AddTorrent::Url(Cow::Owned(url.to_string()));
 
-        self.api
+        let response = self
+            .api
             .session()
             .add_torrent(add, Some(opts))
             .await
             .map_err(|e| anyhow::anyhow!("Failed to add torrent: {e:#}"))?;
 
-        Ok(())
+        Ok(match response {
+            crate::session::AddTorrentResponse::Added(id, _)
+            | crate::session::AddTorrentResponse::AlreadyManaged(id, _) => Some(id),
+            crate::session::AddTorrentResponse::ListOnly(_) => None,
+        })
     }
 }
 

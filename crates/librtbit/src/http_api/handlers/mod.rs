@@ -288,6 +288,7 @@ pub fn make_api_router(state: ApiState) -> Router {
         .route("/rss/feeds", get(rss::h_rss_feeds_list))
         .route("/rss/items", get(rss::h_rss_items_list))
         .route("/rss/rules", get(rss::h_rss_rules_list))
+        .route("/rss/rules/{id}/episodes", get(rss::h_rss_rule_episodes))
         .route("/rss/settings", get(rss::h_rss_settings_get));
 
     // Auth endpoints — status is always available; login/refresh/logout need token store;

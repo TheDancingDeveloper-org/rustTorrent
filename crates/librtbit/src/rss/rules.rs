@@ -221,17 +221,21 @@ fn read_number(text: &str, start: usize) -> Option<(u32, usize)> {
 /// What a per-feed rule decided about one item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuleDecision {
-    /// Download it, under this category.
-    Download { category: Option<String> },
+    /// Download it, under this category, for the rule with this id.
+    Download {
+        category: Option<String>,
+        rule_id: String,
+        track_episodes: bool,
+    },
     /// No enabled rule matched.
     Skip,
 }
 
 /// Decide whether `title` should be downloaded under the rules for one feed.
 ///
-/// A rule matches when its pattern matches the title and, if the title carries
-/// an episode, that episode has not already been recorded for the series. The
-/// first matching rule wins, in the order given.
+/// A rule matches when its pattern matches the title and, if the rule tracks
+/// episodes and the title carries one, that episode has not already been
+/// recorded for the series. The first matching rule wins, in the order given.
 pub fn decide(rules: &[RssRule], title: &str, tracker: &EpisodeTracker) -> RuleDecision {
     let episode = parse_episode(title);
     for rule in rules.iter().filter(|rule| rule.enabled) {
@@ -241,7 +245,7 @@ pub fn decide(rules: &[RssRule], title: &str, tracker: &EpisodeTracker) -> RuleD
         if !pattern.is_match(title) {
             continue;
         }
-        if let Some(episode) = episode {
+        if let Some(episode) = episode.filter(|_| rule.track_episodes) {
             let series = series_key(title);
             if tracker.contains(&series, episode) {
                 return RuleDecision::Skip;
@@ -249,6 +253,8 @@ pub fn decide(rules: &[RssRule], title: &str, tracker: &EpisodeTracker) -> RuleD
         }
         return RuleDecision::Download {
             category: rule.category.clone(),
+            rule_id: rule.id.clone(),
+            track_episodes: rule.track_episodes,
         };
     }
     RuleDecision::Skip
@@ -287,6 +293,7 @@ mod tests {
             priority: 1,
             match_regex: pattern.to_string(),
             enabled: true,
+            track_episodes: true,
         }
     }
 
@@ -352,7 +359,9 @@ mod tests {
         assert_eq!(
             decide(&rules, title, &tracker),
             RuleDecision::Download {
-                category: Some("tv".to_string())
+                category: Some("tv".to_string()),
+                rule_id: "r1".to_string(),
+                track_episodes: true,
             }
         );
 
@@ -377,7 +386,9 @@ mod tests {
         assert_eq!(
             decide(&rules, "Show Name S01E03", &tracker),
             RuleDecision::Download {
-                category: Some("tv".to_string())
+                category: Some("tv".to_string()),
+                rule_id: "r1".to_string(),
+                track_episodes: true,
             }
         );
         assert_eq!(
@@ -405,6 +416,24 @@ mod tests {
         assert_eq!(
             decide(&rules, "anything", &EpisodeTracker::new()),
             RuleDecision::Skip
+        );
+    }
+
+    #[test]
+    fn a_rule_without_episode_tracking_downloads_a_seen_episode_again() {
+        let mut untracked = rule(r"(?i)show name", "tv");
+        untracked.track_episodes = false;
+        let mut tracker = EpisodeTracker::new();
+        let title = "Show Name S01E02 720p";
+        tracker.record(&series_key(title), parse_episode(title).unwrap());
+
+        assert_eq!(
+            decide(&[untracked], title, &tracker),
+            RuleDecision::Download {
+                category: Some("tv".to_string()),
+                rule_id: "r1".to_string(),
+                track_episodes: false,
+            }
         );
     }
 }

@@ -598,6 +598,10 @@ async fn rss_lists_feeds_and_items_and_posts_one_download() {
     assert_eq!(snap.rules[0].category.as_deref(), Some("tv"));
     assert_eq!(snap.rules[0].priority, 2);
     assert!(snap.rules[0].enabled);
+    assert!(
+        snap.rules[0].track_episodes,
+        "a daemon without the field tracks episodes"
+    );
     client.download_rss_item("ep-1").await.unwrap();
     server.verify().await;
 }
@@ -610,6 +614,7 @@ fn rule_body() -> rtbit_client::RssRuleBody {
         priority: 2,
         match_regex: "Show.*1080p".into(),
         enabled: true,
+        track_episodes: false,
     }
 }
 
@@ -636,6 +641,7 @@ async fn rss_rule_add_update_and_delete_use_the_rule_routes() {
         "priority": 2,
         "match_regex": "Show.*1080p",
         "enabled": true,
+        "track_episodes": false,
     });
     Mock::given(method("POST"))
         .and(path("/rss/rules"))
@@ -671,6 +677,33 @@ async fn rss_rule_add_update_and_delete_use_the_rule_routes() {
     client.add_rss_rule(&rule_body()).await.unwrap();
     client.update_rss_rule("r 1", &rule_body()).await.unwrap();
     client.delete_rss_rule("r-1").await.unwrap();
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn rss_rule_episodes_reads_the_rule_history() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rss/rules/r%201/episodes"))
+        .and(header("authorization", "Bearer access-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"[{"show":"show name","season":1,"episode":2,"title":"Show Name S01E02",
+                "matched_at":"2026-10-31T10:00:00Z","torrent_id":4},
+               {"show":"show name","season":1,"episode":1,"title":"Show Name S01E01",
+                "matched_at":"2026-10-30T10:00:00Z","torrent_id":null}]"#,
+            "application/json",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut client = logged_in(&server).await;
+    let episodes = client.rss_rule_episodes("r 1").await.unwrap();
+    assert_eq!(episodes.len(), 2);
+    assert_eq!(episodes[0].episode, 2);
+    assert_eq!(episodes[0].torrent_id, Some(4));
+    assert_eq!(episodes[1].torrent_id, None);
+    assert_eq!(episodes[1].title, "Show Name S01E01");
     server.verify().await;
 }
 
