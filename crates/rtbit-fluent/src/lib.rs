@@ -27,6 +27,7 @@ pub fn run() {
         let main = cx.new(|cx| screens::MainScreen::new(status.clone(), cx));
         let shell = cx.new(|cx| shell::Shell::new(status.clone(), main, cx));
         WindowTitle::set_status(cx, Connection::Disconnected.label());
+        shell.update(cx, |shell, cx| shell.try_resume(cx));
         cx.new(|cx| {
             Workspace::new(cx)
                 .content(shell.into())

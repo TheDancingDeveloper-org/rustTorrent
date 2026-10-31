@@ -70,6 +70,10 @@ impl Shell {
                 self.screen = Screen::Main;
                 self.set_connection(Connection::Connected, cx);
             }
+            ConnectEvent::SetupRequired => {
+                self.screen = Screen::Setup;
+                self.set_connection(Connection::Disconnected, cx);
+            }
             ConnectEvent::Failed => self.set_connection(Connection::Error, cx),
         }
         cx.notify();
@@ -93,6 +97,12 @@ impl Shell {
             }
             cx.notify();
         }
+    }
+
+    /// Try once to continue from the stored refresh token. Silent when there is none.
+    pub fn try_resume(&mut self, cx: &mut Context<Self>) {
+        self.connect
+            .update(cx, |connect, cx| connect.try_resume(cx));
     }
 
     /// Set the sidebar status filter by its label. Unknown labels are ignored.
@@ -119,7 +129,7 @@ impl Shell {
     }
 
     fn body(&self) -> AnyElement {
-        if self.screen == Screen::Connect {
+        if matches!(self.screen, Screen::Connect | Screen::Setup) {
             return div()
                 .flex_1()
                 .p_4()
@@ -141,8 +151,7 @@ impl Shell {
                 .into_any_element();
         }
         let text = match self.screen {
-            Screen::Connect => "Connect to a daemon".to_owned(),
-            Screen::Setup => "First-run setup".to_owned(),
+            Screen::Connect | Screen::Setup => unreachable!("handled above"),
             Screen::Main => return self.main.clone().into_any_element(),
             Screen::Settings => "Settings".to_owned(),
             Screen::Rss => "RSS".to_owned(),
