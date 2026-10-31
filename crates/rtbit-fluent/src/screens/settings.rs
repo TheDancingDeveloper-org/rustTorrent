@@ -7,7 +7,8 @@
 //! the [`SettingsChanges`] that carries only the sections the user edited.
 //! Listen address, port and the DHT/LSD/UPnP switches are saved for the next
 //! start and never change the running process; the screen says so after a save.
-//! The proxy and "Use startup flags" reset are not in this slice.
+//! The proxy section, read-only peer exchange and "Use startup flags" reset
+//! follow the egui settings screen.
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -22,8 +23,8 @@ use gpui::{
 };
 use rtbit_client::{
     AdvancedConfig, AltSpeedConfig, AltSpeedSchedule, Client, DownloadsConfig, Error,
-    FoldersConfig, IpFilterConfig, NetworkConfig, NetworkSettings, RateLimits, SeedLimits,
-    SettingsSnapshot,
+    FoldersConfig, IpFilterConfig, NetworkConfig, NetworkSettings, ProxyConfig, RateLimits,
+    SeedLimits, SettingsSnapshot,
 };
 use rtbit_ui_core::{SettingsChanges, map_error};
 
@@ -79,6 +80,13 @@ pub struct SettingsDraft {
     pub dht: bool,
     pub lsd: bool,
     pub upnp: bool,
+    /// Read-only: peer exchange is always on in the daemon.
+    pub pex: bool,
+    /// The saved proxy URL, shown read-only. The daemon has already masked the password.
+    pub proxy_shown: String,
+    /// A new proxy URL. Empty means "leave the saved proxy alone".
+    pub proxy_edit: String,
+    pub clear_proxy: bool,
     pub ip_filter: String,
     pub download_folder: String,
     pub completed_folder: String,
@@ -111,6 +119,10 @@ impl SettingsDraft {
             dht: net.dht,
             lsd: net.lsd,
             upnp: net.upnp,
+            pex: snap.network.pex_enabled,
+            proxy_shown: snap.proxy.proxy_url.clone().unwrap_or_default(),
+            proxy_edit: String::new(),
+            clear_proxy: false,
             ip_filter: snap.ip_filter.filter.clone(),
             download_folder: snap.folders.download_folder.clone(),
             completed_folder: snap.folders.completed_folder.clone().unwrap_or_default(),
@@ -254,6 +266,14 @@ impl SettingsDraft {
             if edited != shown {
                 out.network = Some(network_body(&edited, &base.network)?);
             }
+        }
+
+        if self.clear_proxy {
+            out.proxy = Some(ProxyConfig { proxy_url: None });
+        } else if !self.proxy_edit.trim().is_empty() {
+            out.proxy = Some(ProxyConfig {
+                proxy_url: Some(self.proxy_edit.trim().to_owned()),
+            });
         }
 
         let filter = IpFilterConfig {
@@ -432,6 +452,7 @@ struct Form {
     listen_ip: Entity<TextInput>,
     listen_port: Entity<TextInput>,
     ip_filter: Entity<TextInput>,
+    proxy_edit: Entity<TextInput>,
     download_folder: Entity<TextInput>,
     completed_folder: Entity<TextInput>,
     download_bps: Entity<TextInput>,
@@ -457,6 +478,7 @@ impl Form {
             listen_ip: input(),
             listen_port: input(),
             ip_filter: input(),
+            proxy_edit: input(),
             download_folder: input(),
             completed_folder: input(),
             download_bps: input(),
@@ -475,7 +497,7 @@ impl Form {
 
     /// Copy a draft into the inputs (a load).
     fn write(&self, draft: &SettingsDraft, cx: &mut Context<SettingsScreen>) {
-        let pairs: [(&Entity<TextInput>, &str); 19] = [
+        let pairs: [(&Entity<TextInput>, &str); 20] = [
             (&self.connect_timeout, &draft.connect_timeout),
             (&self.read_write_timeout, &draft.read_write_timeout),
             (&self.keep_alive, &draft.keep_alive),
@@ -495,6 +517,7 @@ impl Form {
             (&self.schedule_days, &draft.schedule_days),
             (&self.ratio_limit, &draft.ratio_limit),
             (&self.seed_minutes, &draft.seed_minutes),
+            (&self.proxy_edit, &draft.proxy_edit),
         ];
         for (entity, value) in pairs {
             entity.update(cx, |field, cx| field.set_value(value, cx));
@@ -512,6 +535,11 @@ pub struct SettingsScreen {
     upnp: bool,
     alt_enabled: bool,
     schedule_enabled: bool,
+    /// Saved proxy, shown read-only. Set by the last load.
+    proxy_shown: String,
+    clear_proxy: bool,
+    /// Peer exchange is shown read-only; the daemon decides whether it is on.
+    pex: bool,
     /// The last daemon read. A save diffs against it.
     baseline: Option<SettingsSnapshot>,
     loading: bool,
@@ -532,6 +560,9 @@ impl SettingsScreen {
             dht: false,
             lsd: false,
             upnp: false,
+            proxy_shown: String::new(),
+            clear_proxy: false,
+            pex: false,
             alt_enabled: false,
             schedule_enabled: false,
             baseline: None,
@@ -575,6 +606,10 @@ impl SettingsScreen {
             dht: self.dht,
             lsd: self.lsd,
             upnp: self.upnp,
+            pex: self.pex,
+            proxy_shown: self.proxy_shown.clone(),
+            proxy_edit: text(&self.form.proxy_edit),
+            clear_proxy: self.clear_proxy,
             ip_filter: text(&self.form.ip_filter),
             download_folder: text(&self.form.download_folder),
             completed_folder: text(&self.form.completed_folder),
@@ -625,6 +660,9 @@ impl SettingsScreen {
                 self.dht = draft.dht;
                 self.lsd = draft.lsd;
                 self.upnp = draft.upnp;
+                self.pex = draft.pex;
+                self.proxy_shown = draft.proxy_shown.clone();
+                self.clear_proxy = false;
                 self.alt_enabled = draft.alt_enabled;
                 self.schedule_enabled = draft.schedule_enabled;
                 self.form.write(&draft, cx);
@@ -684,6 +722,32 @@ impl SettingsScreen {
         cx.notify();
     }
 
+    /// "Use startup flags": forget the saved network values so the next start uses the flags.
+    pub fn reset_startup_flags(&mut self, cx: &mut Context<Self>) {
+        if self.is_busy() {
+            return;
+        }
+        self.pending = true;
+        self.error = None;
+        self.notice = None;
+        let rx = cx
+            .global::<Bridge>()
+            .call(move |client: SharedClient| async move {
+                let mut client = client.lock().await;
+                client.reset_network().await
+            });
+        self._save = Some(
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let reply = match rx.await {
+                    Ok(reply) => reply,
+                    Err(_) => Err(Error::Unreachable("request cancelled".to_owned())),
+                };
+                let _ = this.update(cx, |this, cx| this.apply_saved(reply, true, cx));
+            }),
+        );
+        cx.notify();
+    }
+
     fn apply_saved(&mut self, reply: Result<(), Error>, restart: bool, cx: &mut Context<Self>) {
         self.pending = false;
         match reply {
@@ -718,6 +782,9 @@ async fn post_changes(client: &mut Client, changes: &SettingsChanges) -> Result<
     }
     if let Some(body) = &changes.advanced {
         client.set_advanced(body).await?;
+    }
+    if let Some(body) = &changes.proxy {
+        client.set_proxy(body).await?;
     }
     if let Some(body) = &changes.ip_filter {
         client.set_ip_filter(body).await?;
@@ -755,6 +822,17 @@ fn text_field(
         Some(message) => field.validation(FieldValidationState::Error, message.clone()),
         None => field,
     }
+}
+
+/// "Use startup flags": drops the saved network values; the next start uses the flags.
+fn reset_button(me: &Entity<SettingsScreen>, busy: bool) -> impl IntoElement {
+    let me = me.clone();
+    Button::new("settings-startup-flags")
+        .label("Use startup flags")
+        .disabled(busy)
+        .on_click(move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+            me.update(cx, |screen, cx| screen.reset_startup_flags(cx));
+        })
 }
 
 fn switch_row(
@@ -861,9 +939,32 @@ impl Render for SettingsScreen {
                     &me,
                     |s, v| s.lsd = v,
                 ))
+                .child(Label::new(format!(
+                    "Peer exchange is always on (read-only{}).",
+                    if self.pex { "" } else { ", off in the daemon" }
+                )))
+                .child(Label::new(if self.proxy_shown.is_empty() {
+                    "No proxy saved.".to_owned()
+                } else {
+                    format!("Saved proxy {}", self.proxy_shown)
+                }))
+                .child(text_field(
+                    "Proxy URL",
+                    &self.form.proxy_edit,
+                    &errors,
+                    "proxy_edit",
+                ))
+                .child(switch_row(
+                    "clear-proxy",
+                    "Clear proxy",
+                    self.clear_proxy,
+                    &me,
+                    |s, v| s.clear_proxy = v,
+                ))
                 .child(Label::new(
                     "Address, port and discovery switches apply on the next start.",
-                )),
+                ))
+                .child(reset_button(&me, self.is_busy())),
             SettingsTab::Speed => div()
                 .flex()
                 .flex_col()
