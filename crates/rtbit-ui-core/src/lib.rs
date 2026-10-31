@@ -1,6 +1,6 @@
 //! Toolkit-neutral core of the native rustTorrent client: the daemon session,
 //! screen view-models, list state, formatting and the token store. No UI
-//! toolkit is linked here; `rtbit-egui` draws on top of it.
+//! toolkit is linked here; `rtbit-fluent` draws on top of it.
 
 mod actions;
 pub mod error;
