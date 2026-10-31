@@ -138,6 +138,9 @@ pub struct ConnectScreen {
     epoch: u64,
 }
 
+/// Shown when the daemon has closed first-run setup (403/404 on `/auth/setup`).
+const SETUP_CLOSED: &str = "Setup is closed on this daemon. Sign in instead.";
+
 impl EventEmitter<ConnectEvent> for ConnectScreen {}
 
 impl ConnectScreen {
@@ -306,9 +309,22 @@ impl ConnectScreen {
         });
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let reply = reply_or_cancel(rx).await;
-            let _ = this.update(cx, |this, cx| this.finish(reply, cx));
+            let _ = this.update(cx, |this, cx| this.finish_setup(reply, cx));
         })
         .detach();
+    }
+
+    /// A setup reply. The daemon answers 403/404 once setup has closed, so
+    /// that case gets its own sentence instead of the generic not-set-up text.
+    fn finish_setup(&mut self, reply: Result<Reply, Error>, cx: &mut Context<Self>) {
+        if matches!(reply, Err(Error::NotSetUp)) {
+            self.pending = false;
+            self.error = Some(SETUP_CLOSED.to_owned());
+            cx.emit(ConnectEvent::Failed);
+            cx.notify();
+            return;
+        }
+        self.finish(reply, cx);
     }
 
     /// Try once to continue from the refresh token in the keychain. No token,
@@ -919,5 +935,58 @@ mod tests {
             assert!(!s.is_pending(), "a silent resume must not lock Sign in");
         });
         drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_busy()));
+    }
+
+    #[gpui::test]
+    fn setup_closed_on_the_daemon_shows_its_own_message(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let runtime = runtime();
+        let server = runtime.block_on(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/auth/status"))
+                .respond_with(ResponseTemplate::new(200).set_body_raw(
+                    r#"{"auth_enabled":true,"setup_required":true}"#,
+                    "application/json",
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/auth/setup"))
+                .respond_with(ResponseTemplate::new(403))
+                .mount(&server)
+                .await;
+            server
+        });
+        let screen = cx.new(ConnectScreen::new);
+        // Open the setup form the way a real sign-in does, when the daemon reports setup_required.
+        fill(&screen, cx, &server.uri(), "admin", "secret");
+        screen.update(cx, |screen, cx| screen.submit(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_pending()));
+        screen.read_with(cx, |s, _| assert_eq!(s.mode(), Mode::Setup));
+        fill_setup(&screen, cx, "setup-token", "admin", "secret", "secret");
+        screen.update(cx, |screen, cx| screen.submit_setup(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_pending()));
+        screen.read_with(cx, |screen, _| {
+            assert_eq!(screen.mode(), Mode::Setup);
+            assert_eq!(screen.error(), Some(SETUP_CLOSED));
+        });
+    }
+
+    #[gpui::test]
+    fn an_unreachable_daemon_shows_the_unreachable_message(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        // Bind a port, then drop the listener so nothing answers on it.
+        let url = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            format!("http://{}", listener.local_addr().unwrap())
+        };
+        let screen = cx.new(ConnectScreen::new);
+        fill(&screen, cx, &url, "admin", "secret");
+        screen.update(cx, |screen, cx| screen.submit(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_pending()));
+        screen.read_with(cx, |screen, _| {
+            assert_eq!(screen.error(), Some("The daemon is unreachable."));
+        });
     }
 }
