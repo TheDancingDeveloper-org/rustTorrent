@@ -11,6 +11,8 @@ similar are kept separate. Architecture notes live in the other files under
 | `crates/rtbit` | The `rtbit` command-line program and server entry point (the default workspace member). |
 | `crates/librtbit` | The core engine: sessions, torrent state, storage, HTTP API and the web UI (`crates/librtbit/webui`). Published as `swarmforge`. |
 | `crates/librtbit-*` | Protocol building blocks: bencode, buffers, clone-to-owned, core, DHT, LSD, peer protocol, SHA-1 wrapper, tracker communication, UPnP and UPnP serving. Published as `swarmforge-*`. |
+| `crates/rtbit-fluent` | The native desktop client, built on gpui and the Fluent design system. Ships as `rtbit-fluent` (Linux binary and `.deb`). |
+| `crates/rtbit-ui-core` | Toolkit-free client state the desktop client draws from. |
 | `desktop/` | npm workspace and Tauri application (`desktop/src-tauri`). Excluded from the CI and Docker builds because it needs glib. |
 | `fuzz/` | `cargo-fuzz` targets for the protocol parsers. Outside the workspace; needs a nightly toolchain. |
 | `benchv2/` | Rust-native benchmark harness comparing rtbit with another client. Outside the workspace, with its own `Cargo.toml`, `Dockerfile` and `docker-compose.yml`. |

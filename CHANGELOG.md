@@ -9,6 +9,20 @@ upgrade notes in each release describe what to back up and check.
 
 ## [Unreleased]
 
+### Changed
+
+- The desktop client is now the gpui-based `rtbit-fluent`. Releases ship
+  `rtbit-fluent-<tag>-linux-x86_64`, `rtbit-fluent-<tag>-amd64.deb` (installs
+  `/usr/bin/rtbit-fluent`) and its SBOM. The `rtbit-egui` artifacts are no
+  longer published; uninstall the `rtbit-egui` package and install
+  `rtbit-fluent`. Some screens of the old client are not yet at parity.
+
+### Removed
+
+- The egui client (`rtbit-egui`) and the fluent mockup example. There is no
+  Windows desktop client in this release; it returns once a native Windows
+  build job exists (WI-2779).
+
 ## [0.2.0-beta.4] - 2026-10-30
 
 ### Added
