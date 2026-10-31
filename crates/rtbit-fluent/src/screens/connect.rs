@@ -129,6 +129,16 @@ impl ConnectScreen {
         Self::build(cx, Keychain::Memory(store))
     }
 
+    /// Type the three connect fields, for tests outside this module.
+    #[cfg(test)]
+    pub(crate) fn fill_for_test(&self, cx: &mut gpui::App, url: &str, user: &str, pass: &str) {
+        self.url.update(cx, |field, cx| field.set_value(url, cx));
+        self.username
+            .update(cx, |field, cx| field.set_value(user, cx));
+        self.password
+            .update(cx, |field, cx| field.set_value(pass, cx));
+    }
+
     fn build(cx: &mut Context<Self>, keychain: Keychain) -> Self {
         let url = cx.new(|_| TextInput::new().value(DEFAULT_URL));
         let username = cx.new(|_| TextInput::new().placeholder("Username"));

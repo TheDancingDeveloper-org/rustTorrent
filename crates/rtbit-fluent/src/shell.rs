@@ -208,3 +208,130 @@ impl Render for Shell {
             .child(self.body())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use gpui::TestAppContext;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+
+    /// A daemon whose `/auth/login` answers `login`, with the snapshot routes the main screen polls.
+    fn daemon(runtime: &tokio::runtime::Runtime, login: u16) -> MockServer {
+        const FIXTURES: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../rtbit-client/tests/fixtures"
+        );
+        let json = |name: &str| {
+            let body = std::fs::read_to_string(format!("{FIXTURES}/{name}")).unwrap();
+            ResponseTemplate::new(200).set_body_raw(body, "application/json")
+        };
+        runtime.block_on(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/auth/status"))
+                .respond_with(ResponseTemplate::new(200).set_body_raw(
+                    r#"{"auth_enabled":true,"setup_required":false}"#,
+                    "application/json",
+                ))
+                .mount(&server)
+                .await;
+            let login = if login == 200 {
+                json("login.json")
+            } else {
+                ResponseTemplate::new(login)
+            };
+            Mock::given(method("POST"))
+                .and(path("/auth/login"))
+                .respond_with(login)
+                .mount(&server)
+                .await;
+            for (route, file) in [("/torrents", "torrents.json"), ("/stats", "stats.json")] {
+                Mock::given(method("GET"))
+                    .and(path(route))
+                    .respond_with(json(file))
+                    .mount(&server)
+                    .await;
+            }
+            server
+        })
+    }
+
+    fn drive(cx: &mut TestAppContext, mut done: impl FnMut(&mut TestAppContext) -> bool) {
+        for _ in 0..500 {
+            cx.run_until_parked();
+            if done(cx) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("sign-in reply never arrived");
+    }
+
+    fn shell(cx: &mut TestAppContext) -> (Entity<Shell>, Entity<StatusBar>) {
+        let status = cx.new(|_| StatusBar::new());
+        let main = cx.new(|cx| MainScreen::new(status.clone(), cx));
+        let shell = cx.new(|cx| Shell::new(status.clone(), main, cx));
+        (shell, status)
+    }
+
+    fn sign_in(shell: &Entity<Shell>, cx: &mut TestAppContext, url: &str, pass: &str) {
+        let connect = shell.read_with(cx, |s, _| s.connect.clone());
+        connect.update(cx, |screen, cx| {
+            screen.fill_for_test(cx, url, "admin", pass);
+            screen.submit(cx);
+        });
+        drive(cx, |cx| connect.read_with(cx, |s, _| !s.is_pending()));
+    }
+
+    #[gpui::test]
+    fn starts_on_connect_disconnected(cx: &mut TestAppContext) {
+        let (shell, status) = shell(cx);
+        assert_eq!(shell.read_with(cx, |s, _| s.screen()), Screen::Connect);
+        assert_eq!(
+            status.read_with(cx, |s, _| s.connection()),
+            Connection::Disconnected
+        );
+    }
+
+    #[gpui::test]
+    fn failed_login_stays_on_connect_with_an_error_badge(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = daemon(&runtime, 401);
+        let (shell, status) = shell(cx);
+        sign_in(&shell, cx, &server.uri(), "wrong");
+        assert_eq!(shell.read_with(cx, |s, _| s.screen()), Screen::Connect);
+        assert_eq!(
+            status.read_with(cx, |s, _| s.connection()),
+            Connection::Error
+        );
+        let connect = shell.read_with(cx, |s, _| s.connect.clone());
+        connect.read_with(cx, |s, _| {
+            assert_eq!(s.error(), Some("Sign-in was refused."))
+        });
+    }
+
+    #[gpui::test]
+    fn good_login_opens_main_and_nav_switches_screens(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = daemon(&runtime, 200);
+        let (shell, status) = shell(cx);
+        sign_in(&shell, cx, &server.uri(), "secret");
+        assert_eq!(shell.read_with(cx, |s, _| s.screen()), Screen::Main);
+        assert_eq!(
+            status.read_with(cx, |s, _| s.connection()),
+            Connection::Connected
+        );
+        shell.update(cx, |s, cx| s.select_screen("nope", cx));
+        assert_eq!(shell.read_with(cx, |s, _| s.screen()), Screen::Main);
+        shell.update(cx, |s, cx| s.select_screen("settings", cx));
+        assert_eq!(shell.read_with(cx, |s, _| s.screen()), Screen::Settings);
+        shell.update(cx, |s, cx| s.select_screen("torrents", cx));
+        assert_eq!(shell.read_with(cx, |s, _| s.screen()), Screen::Main);
+    }
+}

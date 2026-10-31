@@ -8514,6 +8514,7 @@ dependencies = [
  "gpui",
  "rtbit-client",
  "rtbit-ui-core",
+ "serde_json",
  "tokio",
  "wiremock",
 ]

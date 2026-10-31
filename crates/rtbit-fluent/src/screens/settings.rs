@@ -1124,4 +1124,120 @@ mod tests {
         assert_eq!(body.listen_ip, None);
         assert_eq!(body.listen_port, Some(6881));
     }
+
+    /// Serve login and every settings GET from the client fixtures, plus a seed-limits POST.
+    fn daemon(cx: &mut gpui::TestAppContext) -> (tokio::runtime::Runtime, wiremock::MockServer) {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        const FIXTURES: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../rtbit-client/tests/fixtures"
+        );
+        cx.executor().allow_parking();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(async {
+            let server = MockServer::start().await;
+            let json = |name: &str| {
+                let body = std::fs::read_to_string(format!("{FIXTURES}/{name}")).unwrap();
+                ResponseTemplate::new(200).set_body_raw(body, "application/json")
+            };
+            Mock::given(method("POST"))
+                .and(path("/auth/login"))
+                .respond_with(json("login.json"))
+                .mount(&server)
+                .await;
+            for (route, file) in [
+                ("/session/downloads", "downloads.json"),
+                ("/session/advanced", "advanced.json"),
+                ("/session/network", "network.json"),
+                ("/session/proxy", "proxy.json"),
+                ("/session/ip-filter", "ip-filter.json"),
+                ("/session/folders", "folders.json"),
+                ("/torrents/limits", "limits.json"),
+                ("/speed/alt", "alt.json"),
+                ("/speed/schedule", "schedule.json"),
+                ("/torrents/seed_limits", "seed.json"),
+            ] {
+                Mock::given(method("GET"))
+                    .and(path(route))
+                    .respond_with(json(file))
+                    .mount(&server)
+                    .await;
+            }
+            Mock::given(method("POST"))
+                .and(path("/torrents/seed_limits"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+            server
+        });
+        let bridge = Bridge::new(&server.uri()).unwrap();
+        let login =
+            bridge.call(|client| async move { client.lock().await.login("admin", "secret").await });
+        bridge.runtime().block_on(login).unwrap().unwrap();
+        cx.update(|cx| bridge.install(cx));
+        (runtime, server)
+    }
+
+    fn drive(
+        cx: &mut gpui::TestAppContext,
+        mut done: impl FnMut(&mut gpui::TestAppContext) -> bool,
+    ) {
+        for _ in 0..500 {
+            cx.run_until_parked();
+            if done(cx) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("daemon reply never arrived");
+    }
+
+    #[gpui::test]
+    fn a_save_posts_only_the_changed_ratio(cx: &mut gpui::TestAppContext) {
+        let (runtime, server) = daemon(cx);
+        let screen = cx.new(SettingsScreen::new);
+        screen.update(cx, |screen, cx| screen.load(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_busy()));
+        screen.read_with(cx, |s, _| assert!(s.error().is_none(), "{:?}", s.error()));
+        let ratio = screen.read_with(cx, |s, _| s.form.ratio_limit.clone());
+        ratio.update(cx, |field, cx| field.set_value("3.5", cx));
+        screen.update(cx, |screen, cx| screen.save(cx));
+        drive(cx, |cx| {
+            screen.read_with(cx, |s, _| !s.is_busy() && s.notice.is_some())
+        });
+        screen.read_with(cx, |s, _| {
+            assert!(s.error().is_none(), "{:?}", s.error());
+            assert_eq!(s.notice.as_deref(), Some("Saved."));
+        });
+        let posts: Vec<_> = runtime
+            .block_on(server.received_requests())
+            .unwrap()
+            .into_iter()
+            .filter(|req| req.method.as_str() == "POST" && req.url.path() != "/auth/login")
+            .collect();
+        assert_eq!(posts.len(), 1, "only the seed limits change is posted");
+        assert_eq!(posts[0].url.path(), "/torrents/seed_limits");
+        let body: serde_json::Value = serde_json::from_slice(&posts[0].body).unwrap();
+        assert_eq!(body["ratio_limit"], 3.5);
+    }
+
+    #[gpui::test]
+    fn an_unchanged_form_saves_nothing(cx: &mut gpui::TestAppContext) {
+        let (runtime, server) = daemon(cx);
+        let screen = cx.new(SettingsScreen::new);
+        screen.update(cx, |screen, cx| screen.load(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_busy()));
+        screen.update(cx, |screen, cx| screen.save(cx));
+        screen.read_with(cx, |s, _| {
+            assert_eq!(s.notice.as_deref(), Some("Nothing to save."));
+        });
+        let posts = runtime
+            .block_on(server.received_requests())
+            .unwrap()
+            .iter()
+            .filter(|req| req.method.as_str() == "POST" && req.url.path() != "/auth/login")
+            .count();
+        assert_eq!(posts, 0);
+    }
 }

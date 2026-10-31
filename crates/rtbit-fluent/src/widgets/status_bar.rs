@@ -23,6 +23,12 @@ impl StatusBar {
         }
     }
 
+    /// The connection state the badge shows.
+    #[must_use]
+    pub fn connection(&self) -> Connection {
+        self.connection
+    }
+
     pub fn set_connection(&mut self, connection: Connection, cx: &mut Context<Self>) {
         self.connection = connection;
         cx.notify();
