@@ -2,7 +2,7 @@
 # Build and stage the desktop client (crates/rtbit-fluent, gpui) release assets.
 #
 #   build-desktop.sh linux   <tag> <dir>   binary + .deb, built in a container
-#   build-desktop.sh windows <tag> <dir>   not built yet; exits 2 (WI-2779)
+#   build-desktop.sh windows <tag> <dir>   stages the native Windows .exe; run on windows-latest
 #   build-desktop.sh sbom    <tag> <dir>   CycloneDX SBOM of the client graph
 #
 # Artifacts are named rtbit-fluent-<tag>-*.
@@ -62,11 +62,13 @@ case "$mode" in
     cp "$bin" "$dir/rtbit-$client-$tag-linux-x86_64"
     ;;
   windows)
-    # TODO(WI-2779): the gpui client has no Windows build until a native
-    # Windows job exists; gpui_windows DirectX shaders cannot cross-compile
-    # from Linux.
-    echo "::error::rtbit-fluent has no Windows build until a native Windows job exists (WI-2779)" >&2
-    exit 2
+    # Native build only: gpui_windows compiles DirectX shaders with the
+    # Windows SDK, so this cannot cross-compile from Linux. The caller has
+    # already run `cargo build -p rtbit-fluent --release --target
+    # x86_64-pc-windows-msvc`.
+    bin="target/x86_64-pc-windows-msvc/release/$crate.exe"
+    test -s "$bin"
+    cp "$bin" "$dir/rtbit-$client-$tag-windows-x86_64.exe"
     ;;
   sbom)
     if ! command -v cargo-cyclonedx >/dev/null 2>&1; then
