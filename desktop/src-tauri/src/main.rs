@@ -408,6 +408,7 @@ fn run_app() {
         default_rust_log_value: Some("info"),
         log_file: None,
         log_file_rust_log: None,
+        ..Default::default()
     })
     .unwrap();
 
