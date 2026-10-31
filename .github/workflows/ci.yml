@@ -120,6 +120,15 @@ jobs:
       RUST_CACHE_SAVE_IF: ${{ github.event_name != 'pull_request' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # rtbit-fluent builds gpui, whose Linux dependencies (fontconfig via
+      # yeslogic-fontconfig-sys, xcb, xkbcommon, Vulkan, Wayland) are not on
+      # the runner image; without them its build.rs panics on fontconfig.pc.
+      - name: Install gpui system libraries
+        shell: bash
+        run: |
+          apt-get update
+          apt-get install -y libfontconfig1-dev libxcb1-dev libxkbcommon-dev \
+            libxkbcommon-x11-dev libvulkan-dev libwayland-dev
       # `cargo` resolves `--features` against the selected packages, and
       # `default-tls` exists only on `swarmforge` (crates/librtbit) and
       # `rtbit`. Any other crate, and any path that can change how the
