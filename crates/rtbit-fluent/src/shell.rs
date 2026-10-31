@@ -75,6 +75,10 @@ impl Shell {
                 self.set_connection(Connection::Disconnected, cx);
             }
             ConnectEvent::Failed => self.set_connection(Connection::Error, cx),
+            ConnectEvent::SignedOut => {
+                self.screen = Screen::Connect;
+                self.set_connection(Connection::Disconnected, cx);
+            }
         }
         cx.notify();
     }
