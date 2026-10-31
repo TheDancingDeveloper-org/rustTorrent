@@ -25,7 +25,7 @@ fluent2-egui = { git = "https://github.com/TheDancingDeveloper-org/fluent2-egui"
 fluent2-icons = { git = "https://github.com/TheDancingDeveloper-org/fluent2-egui", tag = "v0.4.2" }
 rtbit-client = { path = "../rtbit-client" }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
-rfd = { version = "0.16", optional = true, default-features = false, features = ["gtk3"] }
+rfd = { version = "0.17", optional = true, default-features = false, features = ["gtk3"] }
 
 [dev-dependencies]
 egui_kittest = "0.37"
