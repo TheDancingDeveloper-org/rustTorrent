@@ -21,6 +21,7 @@ use rtbit_client::{Torrent, TorrentState};
 use rtbit_ui_core::{RowAction, Snapshot, StatusFilter, format, map_error};
 
 use crate::bridge::{Bridge, Poller, fetch_snapshot};
+use crate::screens::detail::DetailPane;
 use crate::widgets::status_bar::StatusBar;
 
 /// Torrent table, toolbar and context menu. Owns the snapshot the poll fills.
@@ -28,6 +29,8 @@ pub struct MainScreen {
     pub(crate) snapshot: AsyncResource<Snapshot, String>,
     filter: StatusFilter,
     status: Entity<StatusBar>,
+    /// Detail pane for the selected row.
+    detail: Entity<DetailPane>,
     /// Selected row id (the daemon id, or the info hash when the daemon omits one).
     selected: Option<String>,
     sort: Option<(String, DataSortDirection)>,
@@ -41,11 +44,12 @@ pub struct MainScreen {
 
 impl MainScreen {
     #[must_use]
-    pub fn new(status: Entity<StatusBar>) -> Self {
+    pub fn new(status: Entity<StatusBar>, cx: &mut Context<Self>) -> Self {
         Self {
             snapshot: AsyncResource::new(),
             filter: StatusFilter::All,
             status,
+            detail: cx.new(DetailPane::new),
             selected: None,
             sort: None,
             menu: None,
@@ -81,6 +85,17 @@ impl MainScreen {
             .find(|torrent| row_id(torrent) == selected)
     }
 
+    /// Select a row and load its detail. A row with no daemon id clears the pane.
+    fn select_row(&mut self, row: &str, cx: &mut Context<Self>) {
+        self.selected = Some(row.to_owned());
+        let id = self.selected_torrent().and_then(|torrent| torrent.id);
+        self.detail.update(cx, |pane, cx| match id {
+            Some(id) => pane.select_torrent(id, cx),
+            None => pane.clear(cx),
+        });
+        cx.notify();
+    }
+
     /// Ask for a fresh snapshot now, in addition to the poll.
     fn refresh(&mut self, cx: &mut Context<Self>) {
         if !cx.has_global::<Bridge>() {
@@ -110,7 +125,7 @@ impl MainScreen {
     }
 
     fn open_menu(&mut self, row: &str, position: Point<Pixels>, cx: &mut Context<Self>) {
-        self.selected = Some(row.to_owned());
+        self.select_row(row, cx);
         let screen = cx.entity();
         let (resume, pause, delete) = (screen.clone(), screen.clone(), screen);
         let menu = cx.new(|_| {
@@ -149,7 +164,7 @@ impl MainScreen {
         )
         .confirm_label("Delete")
         .on_confirm(move |app| {
-            dispatch(&me, app, RowAction::Delete);
+            confirm_delete(&me, app);
         })
         .show(cx);
         cx.notify();
@@ -188,6 +203,7 @@ impl MainScreen {
                         screen.action_error = None;
                         if action == RowAction::Delete {
                             screen.selected = None;
+                            screen.detail.update(cx, |pane, cx| pane.clear(cx));
                         }
                         screen.refresh(cx);
                     }
@@ -264,10 +280,7 @@ impl MainScreen {
             .empty_message("No torrents yet.")
             .on_row_select(move |id: SharedString, _, app| {
                 let id = id.to_string();
-                select_me.update(app, |screen, cx| {
-                    screen.selected = Some(id);
-                    cx.notify();
-                });
+                select_me.update(app, |screen, cx| screen.select_row(&id, cx));
             })
             .on_row_click(move |id: SharedString, event: &ClickEvent, _, app| {
                 if event.click_count() < 2 {
@@ -319,6 +332,7 @@ impl Render for MainScreen {
             root = root.child(Label::new(message).size(LabelSize::Caption));
         }
         root = root.child(self.table(&me));
+        root = root.child(self.detail.clone());
         if let Some(menu) = &self.menu {
             root = root.child(menu.clone());
         }
@@ -332,6 +346,11 @@ fn toolbar_click(
 ) -> impl Fn(&ClickEvent, &mut gpui::Window, &mut App) + 'static {
     let me = me.clone();
     move |_, _, app| dispatch(&me, app, action)
+}
+
+/// Run a confirmed delete. Calls the daemon path directly: `request` would open the modal again.
+fn confirm_delete(me: &Entity<MainScreen>, app: &mut App) {
+    me.update(app, |screen, cx| screen.act(RowAction::Delete, cx));
 }
 
 /// Hand a row command to the screen entity from a toolbar, menu or dialog.
@@ -560,7 +579,7 @@ mod tests {
     fn poll_fills_rows_and_feeds_status_bar(cx: &mut TestAppContext) {
         let (_runtime, _server) = daemon(cx);
         let status = cx.new(|_| StatusBar::new());
-        let screen = cx.new(|_| MainScreen::new(status.clone()));
+        let screen = cx.new(|cx| MainScreen::new(status.clone(), cx));
         screen.update(cx, |screen, cx| {
             screen._poller = Some(Bridge::poll_snapshot(cx, snapshot_of));
         });
@@ -572,10 +591,78 @@ mod tests {
     }
 
     #[gpui::test]
+    fn confirmed_delete_hits_daemon_once(cx: &mut TestAppContext) {
+        let (runtime, server) = daemon(cx);
+        runtime.block_on(
+            Mock::given(method("POST"))
+                .and(path("/torrents/3/delete"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server),
+        );
+        let status = cx.new(|_| StatusBar::new());
+        let screen = cx.new(|cx| MainScreen::new(status.clone(), cx));
+        screen.update(cx, |screen, cx| {
+            screen._load = Some(Bridge::load(screen, cx, snapshot_of, fetch_snapshot));
+        });
+        drive(cx, |cx| screen.read_with(cx, |s, _| s.torrent_count() > 0));
+        screen.update(cx, |screen, cx| screen.select_row("3", cx));
+        // The modal's on_confirm path.
+        let me = screen.clone();
+        cx.update(|app| confirm_delete(&me, app));
+        // A successful delete clears the selection.
+        drive(cx, |cx| screen.read_with(cx, |s, _| s.selected.is_none()));
+        screen.read_with(cx, |s, _| assert!(s.action_error.is_none()));
+        std::thread::sleep(Duration::from_millis(50));
+        let hits = runtime
+            .block_on(server.received_requests())
+            .unwrap()
+            .iter()
+            .filter(|req| req.method.as_str() == "POST" && req.url.path() == "/torrents/3/delete")
+            .count();
+        assert_eq!(hits, 1, "confirmed delete must hit the daemon exactly once");
+    }
+
+    #[gpui::test]
+    fn selecting_a_row_loads_its_detail(cx: &mut TestAppContext) {
+        let (runtime, server) = daemon(cx);
+        let bitfield = ResponseTemplate::new(200)
+            .set_body_bytes(vec![0b1000_0000u8])
+            .insert_header("x-bitfield-len", "10");
+        let json =
+            |name: &str| ResponseTemplate::new(200).set_body_raw(fixture(name), "application/json");
+        for (route, response) in [
+            ("/torrents/3", json("torrent.json")),
+            ("/torrents/3/trackers", json("trackers.json")),
+            ("/torrents/3/peer_stats", json("peers.json")),
+            ("/torrents/3/haves", bitfield),
+        ] {
+            runtime.block_on(
+                Mock::given(method("GET"))
+                    .and(path(route))
+                    .respond_with(response)
+                    .mount(&server),
+            );
+        }
+        let status = cx.new(|_| StatusBar::new());
+        let screen = cx.new(|cx| MainScreen::new(status.clone(), cx));
+        screen.update(cx, |screen, cx| {
+            screen._load = Some(Bridge::load(screen, cx, snapshot_of, fetch_snapshot));
+        });
+        drive(cx, |cx| screen.read_with(cx, |s, _| s.torrent_count() > 0));
+        screen.update(cx, |screen, cx| screen.select_row("3", cx));
+        let detail = screen.read_with(cx, |s, _| s.detail.clone());
+        drive(cx, |cx| detail.read_with(cx, |p, _| p.snapshot().is_some()));
+        detail.read_with(cx, |pane, _| {
+            assert_eq!(pane.torrent_id(), Some(3));
+            assert!(pane.error().is_none());
+        });
+    }
+
+    #[gpui::test]
     fn pause_action_hits_daemon_endpoint(cx: &mut TestAppContext) {
         let (runtime, server) = daemon(cx);
         let status = cx.new(|_| StatusBar::new());
-        let screen = cx.new(|_| MainScreen::new(status.clone()));
+        let screen = cx.new(|cx| MainScreen::new(status.clone(), cx));
         screen.update(cx, |screen, cx| {
             screen._load = Some(Bridge::load(screen, cx, snapshot_of, fetch_snapshot));
         });

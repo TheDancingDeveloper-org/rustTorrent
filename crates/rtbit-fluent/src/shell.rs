@@ -7,10 +7,10 @@ use gpui::{
 };
 use rtbit_ui_core::{Connection, Screen, Snapshot, StatusFilter};
 
+use crate::screens::MainScreen;
 use crate::screens::connect::{ConnectEvent, ConnectScreen};
 use crate::screens::rss::RssScreen;
 use crate::screens::settings::SettingsScreen;
-use crate::screens::MainScreen;
 use crate::widgets::status_bar::StatusBar;
 
 /// Screens reachable from the sidebar. Connect and Setup come before login and are not listed.
