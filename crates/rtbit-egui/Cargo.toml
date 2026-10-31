@@ -31,4 +31,4 @@ rfd = { version = "0.16", optional = true, default-features = false, features = 
 egui_kittest = "0.37"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-secret-service = { version = "4", default-features = false, features = ["rt-async-io-crypto-rust"] }
+secret-service = { version = "5", default-features = false, features = ["rt-async-io-crypto-rust"] }
