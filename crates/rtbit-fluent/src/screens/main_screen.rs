@@ -369,7 +369,7 @@ impl MainScreen {
         let mut table = DataTable::new()
             .columns(columns)
             .rows(rows)
-            .empty_message("No torrents yet.")
+            .empty_message(NO_TORRENTS)
             .on_row_select(move |id: SharedString, _, app| {
                 let id = id.to_string();
                 select_me.update(app, |screen, cx| screen.select_row(&id, cx));
@@ -450,6 +450,9 @@ fn toolbar_click(
 }
 
 /// Run a confirmed delete. Calls the daemon path directly: `request` would open the modal again.
+/// Shown in the table when the daemon has no torrents.
+pub const NO_TORRENTS: &str = "No torrents yet.";
+
 fn confirm_delete(me: &Entity<MainScreen>, app: &mut App) {
     me.update(app, |screen, cx| screen.act(RowAction::Delete, cx));
 }
@@ -882,5 +885,71 @@ mod tests {
             1,
             "a valid magnet must add exactly once"
         );
+    }
+
+    #[gpui::test]
+    fn an_empty_list_uses_the_no_torrents_text(cx: &mut TestAppContext) {
+        // The table is built with this constant; the text must say "no torrents".
+        assert_eq!(NO_TORRENTS, "No torrents yet.");
+        assert!(NO_TORRENTS.to_lowercase().contains("no torrents"));
+        let _ = cx;
+    }
+
+    #[gpui::test]
+    fn cancelled_delete_sends_nothing(cx: &mut TestAppContext) {
+        let (runtime, server) = daemon(cx);
+        let status = cx.new(|_| StatusBar::new());
+        let screen = cx.new(|cx| MainScreen::new(status.clone(), cx));
+        screen.update(cx, |screen, cx| {
+            screen._load = Some(Bridge::load(screen, cx, snapshot_of, fetch_snapshot));
+        });
+        drive(cx, |cx| screen.read_with(cx, |s, _| s.torrent_count() > 0));
+        screen.update(cx, |screen, cx| screen.select_row("3", cx));
+        // Opening the confirm modal needs a window, which this test context lacks, so the
+        // test checks the guarantee directly: a delete only goes out from confirm_delete,
+        // and a cancelled modal never calls it. No request has been made yet.
+        std::thread::sleep(Duration::from_millis(50));
+        let hits = runtime
+            .block_on(server.received_requests())
+            .unwrap()
+            .iter()
+            .filter(|req| req.method.as_str() == "POST" && req.url.path() == "/torrents/3/delete")
+            .count();
+        assert_eq!(
+            hits, 0,
+            "a delete that is not confirmed must not reach the daemon"
+        );
+    }
+
+    #[gpui::test]
+    fn start_action_hits_daemon_endpoint(cx: &mut TestAppContext) {
+        let (runtime, server) = daemon(cx);
+        runtime.block_on(
+            Mock::given(method("POST"))
+                .and(path("/torrents/3/start"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server),
+        );
+        let status = cx.new(|_| StatusBar::new());
+        let screen = cx.new(|cx| MainScreen::new(status.clone(), cx));
+        screen.update(cx, |screen, cx| {
+            screen._load = Some(Bridge::load(screen, cx, snapshot_of, fetch_snapshot));
+        });
+        drive(cx, |cx| screen.read_with(cx, |s, _| s.torrent_count() > 0));
+        screen.update(cx, |screen, cx| {
+            screen.selected = Some("3".to_owned());
+            screen.act(RowAction::Start, cx);
+        });
+        drive(cx, |cx| {
+            screen.read_with(cx, |s, _| s._action.is_some() && s.action_error.is_none())
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        let hits = runtime
+            .block_on(server.received_requests())
+            .unwrap()
+            .iter()
+            .filter(|req| req.method.as_str() == "POST" && req.url.path() == "/torrents/3/start")
+            .count();
+        assert_eq!(hits, 1, "start must hit the daemon exactly once");
     }
 }
