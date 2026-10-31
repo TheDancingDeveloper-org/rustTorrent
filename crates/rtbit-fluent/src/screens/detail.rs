@@ -160,14 +160,16 @@ impl DetailPane {
             let mut client = client.lock().await;
             client.update_only_files(id, &indices).await
         });
-        self._action = Some(cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let reply = match rx.await {
-                Ok(Ok(())) => Ok(()),
-                Ok(Err(err)) => Err(map_error(&err)),
-                Err(_) => Err("request cancelled".to_owned()),
-            };
-            let _ = this.update(cx, |this, cx| this.finish_action(id, reply, cx));
-        }));
+        self._action = Some(
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let reply = match rx.await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(err)) => Err(map_error(&err)),
+                    Err(_) => Err("request cancelled".to_owned()),
+                };
+                let _ = this.update(cx, |this, cx| this.finish_action(id, reply, cx));
+            }),
+        );
     }
 
     fn finish_action(&mut self, id: u64, reply: Result<(), String>, cx: &mut Context<Self>) {
@@ -359,9 +361,8 @@ mod tests {
         let runtime = scratch.runtime().clone();
         let server = runtime.block_on(async {
             let server = MockServer::start().await;
-            let json = |body: String| {
-                ResponseTemplate::new(200).set_body_raw(body, "application/json")
-            };
+            let json =
+                |body: String| ResponseTemplate::new(200).set_body_raw(body, "application/json");
             Mock::given(method("POST"))
                 .and(path("/auth/login"))
                 .respond_with(json(fixture("login.json")))
@@ -461,7 +462,13 @@ mod tests {
                 .count()
         };
         drive(cx, |_| count_posts(&runtime, &server) == 1);
-        assert_eq!(count_posts(&runtime, &server), 1, "exactly one selection post reaches the daemon");
-        pane.read_with(cx, |p, _| assert!(p.error().is_none(), "post must not fail"));
+        assert_eq!(
+            count_posts(&runtime, &server),
+            1,
+            "exactly one selection post reaches the daemon"
+        );
+        pane.read_with(cx, |p, _| {
+            assert!(p.error().is_none(), "post must not fail")
+        });
     }
 }
