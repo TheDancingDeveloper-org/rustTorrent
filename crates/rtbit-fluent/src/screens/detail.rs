@@ -19,11 +19,12 @@ use rtbit_ui_core::{DetailSnapshot, format, map_error};
 use crate::bridge::{Bridge, Poller, SharedClient};
 
 /// Tab ids, in strip order.
-const TABS: [(&str, &str); 4] = [
+const TABS: [(&str, &str); 5] = [
     ("general", "General"),
     ("files", "Files"),
     ("peers", "Peers"),
     ("trackers", "Trackers"),
+    ("pieces", "Pieces"),
 ];
 
 /// The detail pane for one selected torrent.
@@ -195,6 +196,7 @@ impl DetailPane {
             "files" => files(snapshot, cx).into_any_element(),
             "peers" => peers_table(snapshot).into_any_element(),
             "trackers" => trackers_table(snapshot).into_any_element(),
+            "pieces" => pieces_summary(snapshot).into_any_element(),
             _ => general(snapshot).into_any_element(),
         }
     }
@@ -227,6 +229,17 @@ fn files(snapshot: &DetailSnapshot, cx: &mut Context<DetailPane>) -> impl IntoEl
                 )))
         });
     div().flex().flex_col().gap_1().children(rows)
+}
+
+/// The piece bar's numbers: how many pieces are held out of the total.
+fn pieces_summary(snapshot: &DetailSnapshot) -> impl IntoElement {
+    let have = snapshot.pieces.have.iter().filter(|h| **h).count();
+    let total = snapshot.pieces.have.len();
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(Label::new(format!("Pieces held: {have} of {total}")))
 }
 
 fn general(snapshot: &DetailSnapshot) -> impl IntoElement {
@@ -415,6 +428,28 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!("bridge reply never arrived");
+    }
+
+    #[test]
+    fn tabs_match_the_old_client_after_general() {
+        let labels: Vec<&str> = TABS.iter().map(|(_, label)| *label).collect();
+        assert_eq!(labels, ["General", "Files", "Peers", "Trackers", "Pieces"]);
+    }
+
+    #[gpui::test]
+    fn pieces_tab_shows_held_out_of_total(cx: &mut TestAppContext) {
+        let (_runtime, _server) = daemon(cx);
+        let pane = cx.new(DetailPane::new);
+        pane.update(cx, |pane, cx| pane.select_torrent(7, cx));
+        drive(cx, |cx| pane.read_with(cx, |p, _| p.snapshot().is_some()));
+        pane.update(cx, |pane, cx| {
+            pane.tabs.update(cx, |strip, _| strip.active = 4);
+            assert_eq!(pane.active_tab(cx), "pieces");
+        });
+        pane.read_with(cx, |pane, _| {
+            let snapshot = pane.snapshot().unwrap();
+            assert_eq!(snapshot.pieces.have.iter().filter(|h| **h).count(), 1);
+        });
     }
 
     #[gpui::test]
