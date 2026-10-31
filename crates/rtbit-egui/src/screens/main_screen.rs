@@ -16,6 +16,7 @@ use rtbit_client::Torrent;
 
 use crate::format;
 use crate::state::{ANY, ListCache, StatusFilter};
+pub use rtbit_ui_core::{AddRequest, AddSource, RowAction};
 
 /// What the command bar or the add dialog asked for this frame.
 #[derive(Clone, Debug, Default)]
@@ -23,36 +24,6 @@ pub struct MainAction {
     pub selected: Option<u64>,
     pub action: Option<RowAction>,
     pub add: Option<AddRequest>,
-}
-
-/// A torrent the user wants the daemon to add.
-///
-/// Either a magnet link or the bytes of a `.torrent` file, plus the save path,
-/// an optional category and whether to start paused. The dialog has already
-/// checked the magnet and the path; the daemon checks them again.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AddRequest {
-    pub source: AddSource,
-    pub save_path: String,
-    pub category: String,
-    pub start_paused: bool,
-}
-
-/// Where the torrent comes from.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AddSource {
-    /// A magnet link, already checked as `magnet:?xt=urn:btih:`.
-    Magnet(String),
-    /// Bytes of a `.torrent` file the user picked.
-    File { name: String, bytes: Vec<u8> },
-}
-
-/// A row command the daemon understands.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RowAction {
-    Start,
-    Pause,
-    Delete,
 }
 
 /// Row selection, the delete confirmation and the add dialog, owned by the shell.

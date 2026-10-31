@@ -16,6 +16,8 @@ use rtbit_client::{
     SeedLimits, SettingsSnapshot,
 };
 
+pub use rtbit_ui_core::SettingsChanges;
+
 /// What the settings screen asked for this frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsAction {
@@ -312,52 +314,6 @@ impl SettingsDraft {
             out.seed_limits = Some(seed);
         }
         Ok(out)
-    }
-}
-
-/// One section to post. `None` means that section was not edited.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct SettingsChanges {
-    pub downloads: Option<DownloadsConfig>,
-    /// Saved for the next start. Includes `reset` for "Use startup flags".
-    pub network: Option<NetworkSettings>,
-    pub advanced: Option<AdvancedConfig>,
-    pub proxy: Option<ProxyConfig>,
-    pub ip_filter: Option<IpFilterConfig>,
-    pub folders: Option<FoldersConfig>,
-    pub limits: Option<RateLimits>,
-    pub alt_enabled: Option<bool>,
-    pub alt_config: Option<AltSpeedConfig>,
-    pub schedule: Option<AltSpeedSchedule>,
-    pub seed_limits: Option<SeedLimits>,
-}
-
-impl SettingsChanges {
-    pub fn is_empty(&self) -> bool {
-        self.downloads.is_none()
-            && self.network.is_none()
-            && self.advanced.is_none()
-            && self.proxy.is_none()
-            && self.ip_filter.is_none()
-            && self.folders.is_none()
-            && self.limits.is_none()
-            && self.alt_enabled.is_none()
-            && self.alt_config.is_none()
-            && self.schedule.is_none()
-            && self.seed_limits.is_none()
-    }
-}
-
-impl SettingsChanges {
-    /// Only the network reset: forget every saved network value.
-    pub fn use_startup_flags() -> Self {
-        Self {
-            network: Some(NetworkSettings {
-                reset: Some(true),
-                ..NetworkSettings::default()
-            }),
-            ..Self::default()
-        }
     }
 }
 
