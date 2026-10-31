@@ -8,7 +8,7 @@
 //! Listen address, port and the DHT/LSD/UPnP switches are saved for the next
 //! start and never change the running process; the screen says so after a save.
 //! The proxy section, read-only peer exchange and "Use startup flags" reset
-//! follow the egui settings screen.
+//! follow the settings behaviour of the previous client.
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -772,7 +772,7 @@ impl SettingsScreen {
     }
 }
 
-/// Post the edited sections in the daemon's order, as the egui shell does.
+/// Post the edited sections in the daemon's order.
 async fn post_changes(client: &mut Client, changes: &SettingsChanges) -> Result<(), Error> {
     if let Some(body) = &changes.network {
         client.set_network(body).await?;

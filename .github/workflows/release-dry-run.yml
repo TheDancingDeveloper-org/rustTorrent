@@ -37,41 +37,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-windows-fluent:
-    # Mirrors build-windows-fluent in release.yml. rtbit-fluent (gpui) cannot
-    # be cross-compiled from Linux, so it builds natively on Windows.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: windows-latest
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Derive the tag a release would use
-        id: tag
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(sed -n 's/^version = "\(.*\)"/\1/p' crates/rtbit/Cargo.toml | head -1)"
-          test -n "$version"
-          printf 'tag=v%s\n' "$version" >>"$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          toolchain: "1.95"
-          targets: x86_64-pc-windows-msvc
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - name: Build rtbit-fluent (native Windows)
-        shell: bash
-        run: |
-          cargo build -p rtbit-fluent --release --target x86_64-pc-windows-msvc
-          tag="${{ steps.tag.outputs.tag }}"
-          test -n "$tag"
-          rm -rf target/desktop-stage
-          bash packaging/scripts/build-desktop.sh windows "$tag" target/desktop-stage
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release-dry-run-windows-fluent-${{ github.sha }}
-          path: target/desktop-stage/
-          if-no-files-found: error
-          retention-days: 7
+    # native Windows gpui build parked until a self-hosted Windows runner exists (WI-2779)
 
   dry-run:
     # The build runs on a self-hosted runner and needs no secrets, but a fork
@@ -79,7 +45,6 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, rust-heavy]
     timeout-minutes: 120
-    needs: build-windows-fluent
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Derive the tag a release would use
@@ -127,8 +92,8 @@ jobs:
       # pinned container with the wayland/X11/GL -dev packages; see
       # packaging/scripts/build-desktop.sh. It does not change the shared
       # runner's apt or dpkg state.
-      # TODO(WI-2779): no Windows desktop build until a native Windows job
-      # exists (gpui_windows DirectX shaders cannot cross-compile from Linux).
+      # Windows desktop client parked (WI-2779): gpui_windows DirectX shaders
+      # cannot cross-compile from Linux and no self-hosted Windows runner exists.
       - name: Build native client artifacts
         shell: bash
         run: |
@@ -140,10 +105,6 @@ jobs:
           rm -rf target/desktop-stage
           bash packaging/scripts/build-desktop.sh linux "$tag" target/desktop-stage
           bash packaging/scripts/build-desktop.sh sbom "$tag" target/desktop-stage
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: release-dry-run-windows-fluent-${{ github.sha }}
-          path: windows-fluent/
       - name: Stage and checksum artifacts
         shell: bash
         run: |
@@ -184,8 +145,6 @@ jobs:
           mv crates/rtbit/rtbit-sbom.json "release-artifacts/rtbit-$tag-sbom.cdx.json"
           # Desktop client binary, .deb and SBOM, named rtbit-fluent-<tag>-*.
           cp target/desktop-stage/rtbit-fluent-* release-artifacts/
-          # Windows desktop client, built natively by build-windows-fluent.
-          cp windows-fluent/rtbit-fluent-* release-artifacts/
           (cd release-artifacts && sha256sum rtbit-*) > "release-artifacts/SHA256SUMS-$tag.txt"
       - name: Verify the staged set
         shell: bash
@@ -202,8 +161,7 @@ jobs:
             "rtbit-$tag-sbom.cdx.json" \
             "rtbit-fluent-$tag-linux-x86_64" \
             "rtbit-fluent-$tag-amd64.deb" \
-            "rtbit-fluent-$tag-sbom.cdx.json" \
-            "rtbit-fluent-$tag-windows-x86_64.exe"; do
+            "rtbit-fluent-$tag-sbom.cdx.json"; do
             test -s "release-artifacts/$file" || { echo "::error::missing $file"; exit 1; }
           done
           (cd release-artifacts && sha256sum -c "SHA256SUMS-$tag.txt")
@@ -258,5 +216,5 @@ jobs:
             grep -q '^Timestamp Server Signature verification: ok' "$cert/verify.log"
             count=$((count + 1))
           done
-          test "$count" -eq 2 || { echo "::error::expected 2 signed executables, verified $count"; exit 1; }
+          test "$count" -eq 1 || { echo "::error::expected 1 signed executable, verified $count"; exit 1; }
           (cd release-artifacts && sha256sum -c "SHA256SUMS-$tag.txt")

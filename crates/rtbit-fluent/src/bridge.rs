@@ -1,6 +1,6 @@
 //! Async bridge between the tokio-based `rtbit-client` and gpui.
 //!
-//! The egui shell calls `block_on` on a current-thread runtime every frame.
+//! The earlier immediate-mode shell called `block_on` on a current-thread runtime every frame.
 //! gpui has its own executor and the main thread must never block, so the
 //! bridge owns a multi-thread tokio runtime in a gpui [`Global`]. Client calls
 //! run there; each result comes back over a oneshot channel that a gpui task

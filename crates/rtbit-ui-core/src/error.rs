@@ -1,6 +1,6 @@
 //! Safe daemon error text.
 //!
-//! The egui shell paints it with `fluent2_egui::surfaces::MessageBar`. This
+//! The client paints it with `fluent2_egui::surfaces::MessageBar`. This
 //! module only maps a client error onto a fixed sentence so a transport failure never
 //! shows a token, a body or a host detail. A 400 keeps the daemon's
 //! validation sentence, which is already safe.
