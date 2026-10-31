@@ -2,9 +2,12 @@
 
 use fluent_app::WindowTitle;
 use fluent_layout::{SelectableList, SelectableListItem};
-use gpui::{Context, Entity, IntoElement, Render, Window, div, prelude::*, px};
+use gpui::{
+    AnyElement, Context, Entity, IntoElement, Render, Subscription, Window, div, prelude::*, px,
+};
 use rtbit_ui_core::{Connection, Screen, Snapshot, StatusFilter};
 
+use crate::screens::connect::{ConnectEvent, ConnectScreen};
 use crate::widgets::status_bar::StatusBar;
 
 /// Screens reachable from the sidebar. Connect and Setup come before login and are not listed.
@@ -19,16 +22,43 @@ pub struct Shell {
     screen: Screen,
     filter: StatusFilter,
     status: Entity<StatusBar>,
+    connect: Entity<ConnectScreen>,
+    _connect_events: Subscription,
 }
 
 impl Shell {
     #[must_use]
-    pub fn new(status: Entity<StatusBar>) -> Self {
+    pub fn new(status: Entity<StatusBar>, cx: &mut Context<Self>) -> Self {
+        let connect = cx.new(ConnectScreen::new);
+        let connect_events = cx.subscribe(
+            &connect,
+            |shell: &mut Self,
+             _: Entity<ConnectScreen>,
+             event: &ConnectEvent,
+             cx: &mut Context<Self>| {
+                shell.on_connect_event(*event, cx);
+            },
+        );
         Self {
-            screen: Screen::Main,
+            screen: Screen::Connect,
             filter: StatusFilter::All,
             status,
+            connect,
+            _connect_events: connect_events,
         }
+    }
+
+    /// Follow a sign-in attempt: badge and title always; the main screen on success.
+    fn on_connect_event(&mut self, event: ConnectEvent, cx: &mut Context<Self>) {
+        match event {
+            ConnectEvent::Connecting => self.set_connection(Connection::Connecting, cx),
+            ConnectEvent::Connected => {
+                self.screen = Screen::Main;
+                self.set_connection(Connection::Connected, cx);
+            }
+            ConnectEvent::Failed => self.set_connection(Connection::Error, cx),
+        }
+        cx.notify();
     }
 
     /// The screen currently shown.
@@ -66,7 +96,14 @@ impl Shell {
             .update(cx, |bar, cx| bar.apply_snapshot(snapshot, cx));
     }
 
-    fn body(&self) -> impl IntoElement {
+    fn body(&self) -> AnyElement {
+        if self.screen == Screen::Connect {
+            return div()
+                .flex_1()
+                .p_4()
+                .child(self.connect.clone())
+                .into_any_element();
+        }
         let text = match self.screen {
             Screen::Connect => "Connect to a daemon".to_owned(),
             Screen::Setup => "First-run setup".to_owned(),
@@ -78,6 +115,7 @@ impl Shell {
             .flex_1()
             .p_4()
             .child(fluent_primitives::Label::new(text))
+            .into_any_element()
     }
 }
 
