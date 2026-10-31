@@ -6,6 +6,9 @@ use tracing::info;
 
 use super::models::{RssItem, RssRule, RssRuleEpisode};
 
+/// Matched-episode history kept per rule; older entries are pruned on insert.
+pub const RULE_EPISODES_KEEP: usize = 200;
+
 /// Database handle for RSS feed item and rule persistence.
 pub struct RssDatabase {
     conn: Connection,
@@ -40,7 +43,8 @@ impl RssDatabase {
 
         if version < 1 {
             info!("Applying RSS database migration v1");
-            self.conn.execute_batch(
+            let tx = self.conn.unchecked_transaction()?;
+            tx.execute_batch(
                 "
                 CREATE TABLE IF NOT EXISTS rss_items (
                     id TEXT PRIMARY KEY,
@@ -71,13 +75,15 @@ impl RssDatabase {
                 INSERT INTO schema_version (version) VALUES (1);
                 ",
             )?;
+            tx.commit()?;
         }
 
         // Store RSS feed configs in the database so they persist across restarts
         // without needing a config file.
         if version < 2 {
             info!("Applying RSS database migration v2");
-            self.conn.execute_batch(
+            let tx = self.conn.unchecked_transaction()?;
+            tx.execute_batch(
                 "
                 CREATE TABLE IF NOT EXISTS rss_feeds (
                     name TEXT PRIMARY KEY,
@@ -92,11 +98,13 @@ impl RssDatabase {
                 UPDATE schema_version SET version = 2;
                 ",
             )?;
+            tx.commit()?;
         }
 
         if version < 3 {
             info!("Applying RSS database migration v3");
-            self.conn.execute_batch(
+            let tx = self.conn.unchecked_transaction()?;
+            tx.execute_batch(
                 "
                 CREATE TABLE IF NOT EXISTS rss_episodes (
                     series TEXT NOT NULL,
@@ -108,15 +116,27 @@ impl RssDatabase {
                 UPDATE schema_version SET version = 3;
                 ",
             )?;
+            tx.commit()?;
         }
 
         // Per-rule smart-episode setting, and the episodes each rule matched.
         if version < 4 {
             info!("Applying RSS database migration v4");
-            self.conn.execute_batch(
+            let tx = self.conn.unchecked_transaction()?;
+            // Idempotent: a v4 run interrupted before the version bump may
+            // already have added the column.
+            let has_track_episodes: bool = tx.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('rss_rules') WHERE name = 'track_episodes'",
+                [],
+                |row| row.get::<_, i64>(0).map(|n| n > 0),
+            )?;
+            if !has_track_episodes {
+                tx.execute_batch(
+                    "ALTER TABLE rss_rules ADD COLUMN track_episodes INTEGER NOT NULL DEFAULT 1;",
+                )?;
+            }
+            tx.execute_batch(
                 "
-                ALTER TABLE rss_rules ADD COLUMN track_episodes INTEGER NOT NULL DEFAULT 1;
-
                 CREATE TABLE IF NOT EXISTS rss_rule_episodes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     rule_id TEXT NOT NULL,
@@ -134,6 +154,7 @@ impl RssDatabase {
                 UPDATE schema_version SET version = 4;
                 ",
             )?;
+            tx.commit()?;
         }
 
         Ok(())
@@ -406,12 +427,13 @@ impl RssDatabase {
 
     /// Delete an RSS download rule.
     pub fn rss_rule_delete(&self, id: &str) -> anyhow::Result<()> {
-        self.conn
-            .execute("DELETE FROM rss_rules WHERE id=?1", params![id])?;
-        self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM rss_rules WHERE id=?1", params![id])?;
+        tx.execute(
             "DELETE FROM rss_rule_episodes WHERE rule_id=?1",
             params![id],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -452,9 +474,20 @@ impl RssDatabase {
         Ok(())
     }
 
-    /// Record that a rule matched and downloaded an episode.
+    /// Record that a rule matched and downloaded an episode, keeping only the
+    /// newest [`RULE_EPISODES_KEEP`] entries for the rule.
     pub fn rule_episode_record(&self, rule_id: &str, entry: &RssRuleEpisode) -> anyhow::Result<()> {
-        self.conn.execute(
+        self.rule_episode_record_keep(rule_id, entry, RULE_EPISODES_KEEP)
+    }
+
+    fn rule_episode_record_keep(
+        &self,
+        rule_id: &str,
+        entry: &RssRuleEpisode,
+        keep: usize,
+    ) -> anyhow::Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
             "INSERT INTO rss_rule_episodes
              (rule_id, show, season, episode, title, matched_at, torrent_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -468,6 +501,13 @@ impl RssDatabase {
                 entry.torrent_id.and_then(|id| i64::try_from(id).ok()),
             ],
         )?;
+        tx.execute(
+            "DELETE FROM rss_rule_episodes WHERE rule_id = ?1 AND id NOT IN (
+                SELECT id FROM rss_rule_episodes WHERE rule_id = ?1 ORDER BY id DESC LIMIT ?2
+            )",
+            params![rule_id, i64::try_from(keep).unwrap_or(i64::MAX)],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -698,5 +738,57 @@ mod tests {
 
         db.rss_rule_delete("r").unwrap();
         assert!(db.rule_episodes_list("r", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn reopens_after_a_v4_migration_interrupted_before_the_version_bump() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rss.db");
+        drop(RssDatabase::open(&path).unwrap());
+        {
+            // Column added, but the run died before recording version 4.
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "DROP TABLE rss_rule_episodes; UPDATE schema_version SET version = 3;",
+            )
+            .unwrap();
+        }
+
+        let db = RssDatabase::open(&path).unwrap();
+        let version: u32 = db
+            .conn
+            .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 4);
+        assert!(db.rule_episodes_list("any", 10).unwrap().is_empty());
+        drop(db);
+        RssDatabase::open(&path).unwrap();
+    }
+
+    #[test]
+    fn rule_episodes_are_capped_to_the_newest_per_rule() {
+        let (_dir, db) = test_db();
+        let entry = |episode: u32| RssRuleEpisode {
+            show: "show".into(),
+            season: 1,
+            episode,
+            title: format!("E{episode}"),
+            matched_at: Utc::now(),
+            torrent_id: None,
+        };
+        for episode in 1..=5 {
+            db.rule_episode_record_keep("a", &entry(episode), 3)
+                .unwrap();
+        }
+        db.rule_episode_record_keep("b", &entry(1), 3).unwrap();
+
+        let listed = db.rule_episodes_list("a", 10).unwrap();
+        assert_eq!(
+            listed.iter().map(|e| e.episode).collect::<Vec<_>>(),
+            [5, 4, 3]
+        );
+        assert_eq!(db.rule_episodes_list("b", 10).unwrap().len(), 1);
     }
 }
