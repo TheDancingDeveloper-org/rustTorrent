@@ -6842,7 +6842,7 @@ dependencies = [
  "fluent2-icons",
  "rfd",
  "rtbit-client",
- "secret-service",
+ "rtbit-ui-core",
  "tokio",
 ]
 
@@ -6857,6 +6857,15 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "winit",
+]
+
+[[package]]
+name = "rtbit-ui-core"
+version = "0.2.0-beta.4"
+dependencies = [
+ "rtbit-client",
+ "secret-service",
+ "tokio",
 ]
 
 [[package]]
