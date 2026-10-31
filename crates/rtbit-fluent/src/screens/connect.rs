@@ -41,6 +41,8 @@ pub enum ConnectEvent {
     SetupRequired,
     /// The attempt failed. The message is shown on this screen.
     Failed,
+    /// The user signed out. The shell returns to the connect form.
+    SignedOut,
 }
 
 /// Which form the screen shows.
@@ -83,6 +85,14 @@ impl Keychain {
             Self::Memory(store) => store.store(url, token),
         }
     }
+
+    fn clear(&self, url: &str) -> Option<()> {
+        match self {
+            Self::Os(store) => store.clear(url),
+            #[cfg(test)]
+            Self::Memory(store) => store.clear(url),
+        }
+    }
 }
 
 /// Read the stored refresh token on a blocking thread. `None` when there is no
@@ -100,6 +110,12 @@ async fn load_token(keychain: Keychain, url: String) -> Option<String> {
 async fn remember_token(keychain: Keychain, url: String, token: Option<String>) {
     let Some(token) = token else { return };
     let _ = tokio::task::spawn_blocking(move || keychain.store(&url, &token)).await;
+}
+
+/// Drop the stored refresh token on a blocking thread. Used by sign-out and by
+/// a resume the daemon refused, so a dead token is not retried on each launch.
+async fn forget_token(keychain: Keychain, url: String) {
+    let _ = tokio::task::spawn_blocking(move || keychain.clear(&url)).await;
 }
 
 /// The connect and first-run setup form. Fields are read when the user submits;
@@ -304,10 +320,21 @@ impl ConnectScreen {
                 return Err(Error::Unauthorised);
             };
             let mut client = client.lock().await;
-            client.resume(&refresh).await?;
-            let rotated = client.refresh_token().map(str::to_owned);
-            remember_token(keychain, url, rotated).await;
-            Ok(Reply::Connected)
+            match client.resume(&refresh).await {
+                Ok(()) => {
+                    let rotated = client.refresh_token().map(str::to_owned);
+                    remember_token(keychain, url, rotated).await;
+                    Ok(Reply::Connected)
+                }
+                Err(err) => {
+                    // The daemon no longer accepts the stored token: forget it,
+                    // so each launch does not retry a dead token.
+                    if matches!(err, Error::Unauthorised) {
+                        forget_token(keychain, url).await;
+                    }
+                    Err(err)
+                }
+            }
         });
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let reply = reply_or_cancel(rx).await;
@@ -352,6 +379,34 @@ impl ConnectScreen {
         for field in [&self.password, &self.setup_token, &self.confirm] {
             field.update(cx, |field, cx| field.set_value("", cx));
         }
+    }
+
+    /// Sign out: drop the live daemon session and the stored refresh token on
+    /// the bridge, clear the secret fields, and return to the connect form.
+    pub fn sign_out(&mut self, cx: &mut Context<Self>) {
+        if self.pending {
+            return;
+        }
+        let url = self.url.read(cx).text().trim().to_owned();
+        if let Ok(bridge) = Bridge::new(&url) {
+            bridge.install(cx);
+            let keychain = self.keychain.clone();
+            let rx = cx.global::<Bridge>().call(move |client| async move {
+                let mut client = client.lock().await;
+                client.logout();
+                forget_token(keychain, url).await;
+                Ok::<(), Error>(())
+            });
+            cx.spawn(async move |_this: WeakEntity<Self>, _cx: &mut AsyncApp| {
+                let _ = rx.await;
+            })
+            .detach();
+        }
+        self.mode = Mode::Connect;
+        self.error = None;
+        self.clear_secrets(cx);
+        cx.emit(ConnectEvent::SignedOut);
+        cx.notify();
     }
 
     fn fail(&mut self, message: &str, cx: &mut Context<Self>) {
@@ -739,5 +794,68 @@ mod tests {
         drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_pending()));
         assert!(events.borrow().is_empty());
         screen.read_with(cx, |screen, _| assert!(screen.error().is_none()));
+    }
+
+    #[gpui::test]
+    fn sign_out_clears_the_stored_token_and_returns_to_connect(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let runtime = runtime();
+        let server = daemon(&runtime, 200, false);
+        let store = MemoryStore::default();
+        store.store(&server.uri(), "refresh-1");
+        let screen = cx.new(|cx| ConnectScreen::with_memory_store(cx, store.clone()));
+        let (events, _subscription) = record_events(&screen, cx);
+        let url = screen.read_with(cx, |s, _| s.url.clone());
+        url.update(cx, |field, cx| field.set_value(server.uri(), cx));
+        screen.update(cx, |screen, cx| screen.try_resume(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_pending()));
+        assert_eq!(*events.borrow(), vec![ConnectEvent::Connected]);
+
+        screen.update(cx, |screen, cx| screen.sign_out(cx));
+        // The clear runs on the bridge, so wait for it rather than assert early.
+        drive(cx, |_| store.load(&server.uri()) == Some(None));
+        assert_eq!(
+            *events.borrow(),
+            vec![ConnectEvent::Connected, ConnectEvent::SignedOut]
+        );
+        screen.read_with(cx, |screen, _| {
+            assert_eq!(screen.mode(), Mode::Connect);
+            assert!(screen.error().is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn a_refused_stored_token_is_cleared_from_the_keychain(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let runtime = runtime();
+        // A daemon that refuses every refresh: the stored token is dead.
+        let server = runtime.block_on(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/auth/status"))
+                .respond_with(ResponseTemplate::new(200).set_body_raw(
+                    r#"{"auth_enabled":true,"setup_required":false}"#,
+                    "application/json",
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/auth/refresh"))
+                .respond_with(ResponseTemplate::new(401))
+                .mount(&server)
+                .await;
+            server
+        });
+        let store = MemoryStore::default();
+        store.store(&server.uri(), "dead-token");
+        let screen = cx.new(|cx| ConnectScreen::with_memory_store(cx, store.clone()));
+        let (events, _subscription) = record_events(&screen, cx);
+        let url = screen.read_with(cx, |s, _| s.url.clone());
+        url.update(cx, |field, cx| field.set_value(server.uri(), cx));
+        screen.update(cx, |screen, cx| screen.try_resume(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_pending()));
+        assert!(events.borrow().is_empty(), "a refused resume stays silent");
+        // The forget runs on the bridge; wait for it.
+        drive(cx, |_| store.load(&server.uri()) == Some(None));
     }
 }
