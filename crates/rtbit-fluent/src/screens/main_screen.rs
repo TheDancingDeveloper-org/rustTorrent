@@ -684,4 +684,20 @@ mod tests {
             .count();
         assert_eq!(hits, 1, "pause must hit the daemon exactly once");
     }
+
+    #[gpui::test]
+    fn status_filter_hides_rows_that_do_not_match(cx: &mut TestAppContext) {
+        let (_runtime, _server) = daemon(cx);
+        let status = cx.new(|_| StatusBar::new());
+        let screen = cx.new(|cx| MainScreen::new(status.clone(), cx));
+        screen.update(cx, |screen, cx| {
+            screen._load = Some(Bridge::load(screen, cx, snapshot_of, fetch_snapshot));
+        });
+        drive(cx, |cx| screen.read_with(cx, |s, _| s.torrent_count() > 0));
+        // The fixture row reports no state, so only "All" keeps it.
+        screen.update(cx, |screen, cx| screen.set_filter(StatusFilter::Live, cx));
+        screen.read_with(cx, |s, _| assert!(s.visible_rows().is_empty()));
+        screen.update(cx, |screen, cx| screen.set_filter(StatusFilter::All, cx));
+        screen.read_with(cx, |s, _| assert_eq!(s.visible_rows().len(), 1));
+    }
 }
