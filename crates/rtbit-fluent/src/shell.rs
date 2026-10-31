@@ -8,6 +8,7 @@ use gpui::{
 use rtbit_ui_core::{Connection, Screen, Snapshot, StatusFilter};
 
 use crate::screens::connect::{ConnectEvent, ConnectScreen};
+use crate::screens::MainScreen;
 use crate::widgets::status_bar::StatusBar;
 
 /// Screens reachable from the sidebar. Connect and Setup come before login and are not listed.
@@ -23,12 +24,17 @@ pub struct Shell {
     filter: StatusFilter,
     status: Entity<StatusBar>,
     connect: Entity<ConnectScreen>,
+    main: Entity<MainScreen>,
     _connect_events: Subscription,
 }
 
 impl Shell {
     #[must_use]
-    pub fn new(status: Entity<StatusBar>, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        status: Entity<StatusBar>,
+        main: Entity<MainScreen>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let connect = cx.new(ConnectScreen::new);
         let connect_events = cx.subscribe(
             &connect,
@@ -44,6 +50,7 @@ impl Shell {
             filter: StatusFilter::All,
             status,
             connect,
+            main,
             _connect_events: connect_events,
         }
     }
@@ -79,6 +86,8 @@ impl Shell {
     pub fn select_filter(&mut self, label: &str, cx: &mut Context<Self>) {
         if let Some(filter) = StatusFilter::ALL.iter().find(|f| f.label() == label) {
             self.filter = *filter;
+            let filter = *filter;
+            self.main.update(cx, |main, cx| main.set_filter(filter, cx));
             cx.notify();
         }
     }
@@ -107,7 +116,7 @@ impl Shell {
         let text = match self.screen {
             Screen::Connect => "Connect to a daemon".to_owned(),
             Screen::Setup => "First-run setup".to_owned(),
-            Screen::Main => format!("Torrents · {}", self.filter.label()),
+            Screen::Main => return self.main.clone().into_any_element(),
             Screen::Settings => "Settings".to_owned(),
             Screen::Rss => "RSS".to_owned(),
         };
