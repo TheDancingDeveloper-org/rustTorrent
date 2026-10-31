@@ -10,17 +10,18 @@ use std::cmp::Ordering;
 use fluent_core::AsyncResource;
 use fluent_layout::{
     ConfirmModal, ContextMenu, DataCell, DataColumn, DataRow, DataSortDirection, DataTable,
-    Toolbar, ToolbarItem,
+    MessageIntent, Toast, ToastHost, ToastStack, Toolbar, ToolbarItem,
 };
 use fluent_primitives::{Label, LabelSize};
 use gpui::{
     App, AsyncApp, ClickEvent, Context, Entity, IntoElement, Pixels, Point, Render, SharedString,
-    Task, WeakEntity, Window, div, prelude::*,
+    Subscription, Task, WeakEntity, Window, div, prelude::*,
 };
 use rtbit_client::{Torrent, TorrentState};
-use rtbit_ui_core::{RowAction, Snapshot, StatusFilter, format, map_error};
+use rtbit_ui_core::{AddRequest, AddSource, RowAction, Snapshot, StatusFilter, format, map_error};
 
 use crate::bridge::{Bridge, Poller, fetch_snapshot};
+use crate::screens::add_dialog::{AddDialog, AddDialogEvent};
 use crate::screens::detail::DetailPane;
 use crate::widgets::status_bar::StatusBar;
 
@@ -37,6 +38,11 @@ pub struct MainScreen {
     menu: Option<Entity<ContextMenu>>,
     action_error: Option<String>,
     applied_generation: u64,
+    /// Add-torrent dialog, while it is open.
+    add: Option<Entity<AddDialog>>,
+    _add_events: Option<Subscription>,
+    _add_send: Option<Task<()>>,
+    toasts: Entity<ToastHost>,
     pub(crate) _poller: Option<Poller>,
     pub(crate) _load: Option<Task<()>>,
     _action: Option<Task<()>>,
@@ -55,10 +61,96 @@ impl MainScreen {
             menu: None,
             action_error: None,
             applied_generation: 0,
+            add: None,
+            _add_events: None,
+            _add_send: None,
+            toasts: cx.new(ToastHost::new),
             _poller: None,
             _load: None,
             _action: None,
         }
+    }
+
+    /// Open the add-torrent dialog over the table.
+    pub(crate) fn open_add(&mut self, cx: &mut Context<Self>) {
+        self.menu = None;
+        let dialog = cx.new(AddDialog::new);
+        let events = cx.subscribe(
+            &dialog,
+            |screen: &mut Self, dialog: Entity<AddDialog>, event: &AddDialogEvent, cx| match event {
+                AddDialogEvent::Cancel => screen.close_add(cx),
+                AddDialogEvent::Submit(request) => screen.send_add(dialog, request.clone(), cx),
+            },
+        );
+        self.add = Some(dialog);
+        self._add_events = Some(events);
+        cx.notify();
+    }
+
+    /// Close the add dialog. Nothing is sent.
+    fn close_add(&mut self, cx: &mut Context<Self>) {
+        self.add = None;
+        self._add_events = None;
+        cx.notify();
+    }
+
+    /// Send an add request through the bridge. The dialog closes on success and
+    /// shows the daemon's reason on failure.
+    fn send_add(&mut self, dialog: Entity<AddDialog>, request: AddRequest, cx: &mut Context<Self>) {
+        if !cx.has_global::<Bridge>() {
+            dialog.update(cx, |dialog, cx| {
+                dialog.refused("Not connected to a daemon.".to_owned(), cx);
+            });
+            return;
+        }
+        let rx = cx.global::<Bridge>().call(move |client| async move {
+            let AddRequest {
+                source,
+                save_path,
+                category,
+                start_paused,
+            } = request;
+            let category = (!category.is_empty()).then_some(category);
+            let mut client = client.lock().await;
+            match source {
+                AddSource::Magnet(magnet) => {
+                    client
+                        .add_magnet(&magnet, Some(&save_path), category.as_deref(), start_paused)
+                        .await
+                }
+                AddSource::File { bytes, .. } => {
+                    client
+                        .add_torrent_file(
+                            &bytes,
+                            Some(&save_path),
+                            category.as_deref(),
+                            start_paused,
+                        )
+                        .await
+                }
+            }
+        });
+        self._add_send = Some(
+            cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let reply = match rx.await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(err)) => Err(map_error(&err)),
+                    Err(_) => Err("request cancelled".to_owned()),
+                };
+                let _ = view.update(cx, |screen, cx| match reply {
+                    Ok(()) => {
+                        screen.close_add(cx);
+                        ToastStack::push(
+                            Toast::new("add-torrent", "Torrent added.")
+                                .intent(MessageIntent::Success),
+                            cx,
+                        );
+                        screen.refresh(cx);
+                    }
+                    Err(message) => dialog.update(cx, |dialog, cx| dialog.refused(message, cx)),
+                });
+            }),
+        );
     }
 
     /// Set the sidebar status filter the table shows.
@@ -310,7 +402,12 @@ impl Render for MainScreen {
         }
 
         let me = cx.entity();
+        let add_me = me.clone();
         let toolbar = Toolbar::new().items([
+            ToolbarItem::action("add", "Add", move |_, _, app| {
+                add_me.update(app, |screen, cx| screen.open_add(cx));
+            }),
+            ToolbarItem::separator(),
             ToolbarItem::action("resume", "Resume", toolbar_click(&me, RowAction::Start)),
             ToolbarItem::action("pause", "Pause", toolbar_click(&me, RowAction::Pause)),
             ToolbarItem::separator(),
@@ -336,6 +433,10 @@ impl Render for MainScreen {
         if let Some(menu) = &self.menu {
             root = root.child(menu.clone());
         }
+        if let Some(add) = &self.add {
+            root = root.child(add.clone());
+        }
+        root = root.child(self.toasts.clone());
         root
     }
 }
@@ -699,5 +800,87 @@ mod tests {
         screen.read_with(cx, |s, _| assert!(s.visible_rows().is_empty()));
         screen.update(cx, |screen, cx| screen.set_filter(StatusFilter::All, cx));
         screen.read_with(cx, |s, _| assert_eq!(s.visible_rows().len(), 1));
+    }
+
+    const HASH_MAGNET: &str =
+        "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Example";
+
+    /// Count the POSTs the daemon has seen on `/torrents` (adds, not the list GET).
+    fn add_posts(runtime: &tokio::runtime::Runtime, server: &MockServer) -> usize {
+        runtime
+            .block_on(server.received_requests())
+            .unwrap()
+            .iter()
+            .filter(|req| req.method.as_str() == "POST" && req.url.path() == "/torrents")
+            .count()
+    }
+
+    #[gpui::test]
+    fn bad_magnet_is_refused_without_a_request(cx: &mut TestAppContext) {
+        let (runtime, server) = daemon(cx);
+        let status = cx.new(|_| StatusBar::new());
+        let screen = cx.new(|cx| MainScreen::new(status.clone(), cx));
+        screen.update(cx, |screen, cx| screen.open_add(cx));
+        let dialog = screen.read_with(cx, |s, _| s.add.clone()).unwrap();
+        dialog.update(cx, |dialog, cx| {
+            dialog.fill_for_test(cx, "https://example.com/not-a-magnet", "/data");
+            dialog.submit(cx);
+        });
+        dialog.read_with(cx, |dialog, _| {
+            assert_eq!(dialog.error(), Some("magnet link must start with magnet:?"));
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            add_posts(&runtime, &server),
+            0,
+            "a refused magnet must send nothing"
+        );
+    }
+
+    #[gpui::test]
+    fn cancel_closes_the_dialog_without_a_request(cx: &mut TestAppContext) {
+        let (runtime, server) = daemon(cx);
+        let status = cx.new(|_| StatusBar::new());
+        let screen = cx.new(|cx| MainScreen::new(status.clone(), cx));
+        screen.update(cx, |screen, cx| screen.open_add(cx));
+        let dialog = screen.read_with(cx, |s, _| s.add.clone()).unwrap();
+        dialog.update(cx, |dialog, cx| {
+            dialog.fill_for_test(cx, HASH_MAGNET, "/data");
+            dialog.cancel(cx);
+        });
+        screen.read_with(cx, |s, _| {
+            assert!(s.add.is_none(), "cancel must close the dialog")
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(add_posts(&runtime, &server), 0, "cancel must send nothing");
+    }
+
+    #[gpui::test]
+    fn valid_magnet_adds_exactly_once(cx: &mut TestAppContext) {
+        let (runtime, server) = daemon(cx);
+        cx.update(ToastStack::init);
+        runtime.block_on(
+            Mock::given(method("POST"))
+                .and(path("/torrents"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server),
+        );
+        let status = cx.new(|_| StatusBar::new());
+        let screen = cx.new(|cx| MainScreen::new(status.clone(), cx));
+        screen.update(cx, |screen, cx| screen.open_add(cx));
+        let dialog = screen.read_with(cx, |s, _| s.add.clone()).unwrap();
+        dialog.update(cx, |dialog, cx| {
+            dialog.fill_for_test(cx, HASH_MAGNET, "/data");
+            dialog.submit(cx);
+            // A second submit while the first is in flight must not send again.
+            dialog.submit(cx);
+        });
+        drive(cx, |cx| screen.read_with(cx, |s, _| s.add.is_none()));
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            add_posts(&runtime, &server),
+            1,
+            "a valid magnet must add exactly once"
+        );
     }
 }
