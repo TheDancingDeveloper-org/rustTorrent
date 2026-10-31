@@ -43,4 +43,26 @@ pub struct RssRule {
     pub match_regex: String,
     /// Whether this rule is active
     pub enabled: bool,
+    /// Skip an episode already downloaded for the series (smart episode
+    /// filter). Rules stored before the setting existed keep this on.
+    #[serde(default = "default_true")]
+    pub track_episodes: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// One episode a rule matched and downloaded, newest first in listings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RssRuleEpisode {
+    /// Series key the episode was recorded under.
+    pub show: String,
+    pub season: u32,
+    pub episode: u32,
+    /// Feed item title that matched.
+    pub title: String,
+    pub matched_at: DateTime<Utc>,
+    /// Torrent the item was added as, when the session reported one.
+    pub torrent_id: Option<usize>,
 }

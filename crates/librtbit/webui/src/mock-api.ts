@@ -653,6 +653,7 @@ export const MockRssAPI = {
   deleteRule: async (id: string) => {
     mockRssRules = mockRssRules.filter((rule) => rule.id !== id);
   },
+  getRuleEpisodes: async (_id: string) => [],
   getSettings: async () => ({ rss_history_limit: 500 }),
 };
 

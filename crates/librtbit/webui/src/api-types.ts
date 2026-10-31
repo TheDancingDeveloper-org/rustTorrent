@@ -143,11 +143,7 @@ export interface LimitsConfig {
 
 // Per-tracker announce status
 export type TrackerAnnounceState =
-  | "not_contacted"
-  | "updating"
-  | "working"
-  | "error"
-  | "disabled";
+  "not_contacted" | "updating" | "working" | "error" | "disabled";
 
 export interface TrackerStatusEntry {
   url: string;
@@ -468,6 +464,18 @@ export interface RssRule {
   priority: number;
   match_regex: string;
   enabled: boolean;
+  /** Skip episodes already downloaded. Missing from older daemons: treat as on. */
+  track_episodes?: boolean;
+}
+
+/** One episode a rule matched, from `GET /rss/rules/{id}/episodes`. */
+export interface RssRuleEpisode {
+  show: string;
+  season: number;
+  episode: number;
+  title: string;
+  matched_at: string;
+  torrent_id: number | null;
 }
 
 export interface RssSettings {
@@ -500,7 +508,6 @@ export interface ProxyConfig {
 export interface IpFilterConfig {
   filter: string;
 }
-
 
 export interface NetworkConfig {
   listen_ip: string | null;

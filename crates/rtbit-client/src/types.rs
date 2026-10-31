@@ -678,6 +678,31 @@ pub struct RssRule {
     pub match_regex: String,
     #[serde(default)]
     pub enabled: bool,
+    /// Skip episodes already downloaded. A daemon that predates the setting
+    /// always does, so a missing field reads as on.
+    #[serde(default = "rule_tracks_episodes")]
+    pub track_episodes: bool,
+}
+
+fn rule_tracks_episodes() -> bool {
+    true
+}
+
+/// `GET /rss/rules/{id}/episodes`. One episode a rule matched, newest first.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+pub struct RssRuleEpisode {
+    #[serde(default)]
+    pub show: String,
+    #[serde(default)]
+    pub season: u32,
+    #[serde(default)]
+    pub episode: u32,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub matched_at: String,
+    #[serde(default)]
+    pub torrent_id: Option<u64>,
 }
 
 /// Body of `POST /rss/rules` and `PUT /rss/rules/{id}`. The daemon compiles
@@ -690,6 +715,7 @@ pub struct RssRuleBody {
     pub priority: i32,
     pub match_regex: String,
     pub enabled: bool,
+    pub track_episodes: bool,
 }
 
 /// Feeds, items and rules the RSS screen shows.
