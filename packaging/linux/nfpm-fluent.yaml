@@ -1,0 +1,34 @@
+# nfpm config for the rtbit-fluent (native client) .deb.
+# Built in CI by packaging/scripts/build-egui.sh from the release-github
+# binary; VERSION, ARCH and BINARY are set by the caller.
+name: rtbit-fluent
+arch: "${ARCH}"
+platform: linux
+version: "${VERSION}"
+section: net
+priority: optional
+maintainer: "AusAgentSmith <admin@rusttorrent.dev>"
+description: |
+  Native desktop client for the rustTorrent daemon.
+vendor: rusttorrent
+homepage: https://github.com/TheDancingDeveloper-org/rustTorrent
+license: "Apache-2.0"
+depends:
+  - libc6
+  - libgl1
+  - libegl1
+  - libwayland-client0
+  - libxkbcommon0
+  - libx11-6
+  - libxkbcommon-x11-0
+  - libxcb1
+  - libfontconfig1
+  - libvulkan1
+
+contents:
+  - src: "${BINARY}"
+    dst: /usr/bin/rtbit-fluent
+    # nfpm only expands environment variables in src when asked to.
+    expand: true
+    file_info:
+      mode: 0755
