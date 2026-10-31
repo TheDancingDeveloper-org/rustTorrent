@@ -6,6 +6,10 @@ use librtbit::{
     Api, TorrentStatsState,
     api::{ApiTorrentListOpts, TorrentIdOrHash},
 };
+use rtbit_desktop_menu::{
+    MenuAction, QuitDecision, browser_url, quit_decision,
+    tray::{TrayEntry, tray_entries},
+};
 use tauri::{
     AppHandle, Manager, Wry,
     menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItem, MenuItemBuilder},
@@ -23,6 +27,9 @@ use crate::{
 };
 
 pub const TRAY_ID: &str = "main";
+
+/// Whether this build has the in-app update check.
+const SELF_UPDATE: bool = cfg!(feature = "self-update");
 
 /// Below this many MB/s a speed is shown as idle.
 const IDLE_MBPS: f64 = 1.0 / 1024.0;
@@ -57,32 +64,43 @@ pub fn show_main_window(app: &AppHandle) {
 }
 
 pub fn setup(app: &AppHandle) -> anyhow::Result<()> {
-    let show = MenuItemBuilder::with_id("show", "Show rtbit").build(app)?;
-    let add = MenuItemBuilder::with_id("add", "Add .torrent file…").build(app)?;
-    let speed = MenuItemBuilder::with_id("speed", "Speed: idle")
-        .enabled(false)
-        .build(app)?;
-    let pause = MenuItemBuilder::with_id("pause", "Pause All").build(app)?;
-    let browser = MenuItemBuilder::with_id("browser", "Open in Browser").build(app)?;
-    let autostart = CheckMenuItemBuilder::with_id("autostart", "Start at login")
-        .checked(app.autolaunch().is_enabled().unwrap_or(false))
-        .build(app)?;
-    #[cfg(feature = "self-update")]
-    let updates = MenuItemBuilder::with_id("updates", "Check for Updates…").build(app)?;
-    let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
-
-    let menu = MenuBuilder::new(app)
-        .item(&show)
-        .item(&add)
-        .item(&speed)
-        .separator()
-        .item(&pause)
-        .item(&browser)
-        .separator()
-        .item(&autostart);
-    #[cfg(feature = "self-update")]
-    let menu = menu.item(&updates);
-    let menu = menu.separator().item(&quit).build()?;
+    let mut menu = MenuBuilder::new(app);
+    let mut speed = None;
+    let mut pause = None;
+    let mut autostart = None;
+    for entry in tray_entries(SELF_UPDATE) {
+        menu = match entry {
+            TrayEntry::Separator => menu.separator(),
+            TrayEntry::Status { id, label } => {
+                let item = MenuItemBuilder::with_id(id, label)
+                    .enabled(false)
+                    .build(app)?;
+                let menu = menu.item(&item);
+                speed = Some(item);
+                menu
+            }
+            TrayEntry::Action { action, label } => {
+                let item = MenuItemBuilder::with_id(action.id(), label).build(app)?;
+                let menu = menu.item(&item);
+                if action == MenuAction::ToggleTransfers {
+                    pause = Some(item);
+                }
+                menu
+            }
+            TrayEntry::Check { action, label } => {
+                let item = CheckMenuItemBuilder::with_id(action.id(), label)
+                    .checked(app.autolaunch().is_enabled().unwrap_or(false))
+                    .build(app)?;
+                let menu = menu.item(&item);
+                autostart = Some(item);
+                menu
+            }
+        };
+    }
+    let menu = menu.build()?;
+    let (Some(speed), Some(pause), Some(autostart)) = (speed, pause, autostart) else {
+        anyhow::bail!("tray menu is missing its status, pause or autostart item");
+    };
 
     app.manage(TrayItems {
         speed,
@@ -114,22 +132,26 @@ pub fn setup(app: &AppHandle) -> anyhow::Result<()> {
 }
 
 pub fn on_menu_id(app: &AppHandle, id: &str) {
-    match id {
-        "show" => show_main_window(app),
-        "add" => pick_torrent_files(app),
-        "pause" => {
+    let Some(action) = MenuAction::from_id(id, SELF_UPDATE) else {
+        return;
+    };
+    match action {
+        MenuAction::ShowWindow => show_main_window(app),
+        MenuAction::AddTorrentFile => pick_torrent_files(app),
+        MenuAction::ToggleTransfers => {
             tauri::async_runtime::spawn(toggle_transfers(app.clone()));
         }
-        "browser" => {
+        MenuAction::OpenInBrowser => {
             if let Some(state) = app.try_state::<EngineState>() {
-                let _ = open::that(format!("http://{}", state.listen_addr));
+                let _ = open::that(browser_url(&state.listen_addr.to_string()));
             }
         }
-        "autostart" => toggle_autostart(app),
-        #[cfg(feature = "self-update")]
-        "updates" => updates::check_for_updates(app.clone()),
-        "quit" => confirm_quit(app),
-        _ => {}
+        MenuAction::ToggleAutostart => toggle_autostart(app),
+        MenuAction::CheckForUpdates => {
+            #[cfg(feature = "self-update")]
+            updates::check_for_updates(app.clone());
+        }
+        MenuAction::Quit => confirm_quit(app),
     }
 }
 
@@ -235,15 +257,16 @@ fn confirm_quit(app: &AppHandle) {
             .filter(|(_, s)| is_active(s))
             .count()
     });
-    if active == 0 {
-        app.exit(0);
-        return;
-    }
+    let message = match quit_decision(active) {
+        QuitDecision::ExitNow => {
+            app.exit(0);
+            return;
+        }
+        QuitDecision::Confirm { message } => message,
+    };
     let handle = app.clone();
     app.dialog()
-        .message(format!(
-            "{active} torrent(s) are still downloading or seeding. Quit anyway?"
-        ))
+        .message(message)
         .title("Quit rtbit?")
         .buttons(MessageDialogButtons::OkCancelCustom(
             "Quit".to_owned(),

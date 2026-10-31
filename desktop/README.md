@@ -58,7 +58,23 @@ With an empty `pubkey`, "Check for Updates" can still find a release, but it wil
 
 ## Manual verification
 
-Nothing in the CI gate runs this crate (`ci.yml` excludes `rtbit-desktop`), so these runs are the only check of the OS integration. Do them on an installed package, not `cargo tauri dev`, except where a step says so. Build first with `cd desktop && npm install`, then `cd src-tauri && cargo tauri build`.
+## Automated tests
+
+CI cannot build `rtbit-desktop` (the runner has no webkit), so the wrapper's behaviour lives in the `rtbit-desktop-menu` crate (`desktop/menu`), which CI builds and tests. The Tauri code in `src-tauri` only maps its results onto Tauri calls.
+
+- `action`: every tray and menu-bar id dispatches to the expected action; unknown ids and `updates` without the `self-update` feature do nothing; Quit exits at once when idle and asks otherwise; Open in Browser targets the API address.
+- `tray`: the tray menu's items, order and separators, with and without `self-update`; every menu-bar item is also in the tray.
+- `update`: the update check against a fake release feed (no network): up to date, offer and install, decline, unreachable feed, and a signature failure after the offer.
+- `lib`: the menu-bar structure.
+- `src-tauri`: launch-argument parsing and the tray's status text and Pause/Resume choice (these need the full build: `cargo test -p rtbit-desktop` on a host with webkit2gtk).
+
+`e2e/desktop-splash.spec.ts` covers the splash page.
+
+A WebDriver run of the real window (`tauri-driver` with `WebKitWebDriver` under Xvfb) is not in CI: it needs the full webkit2gtk build and a display server on the runner, and the tray and native menus it would most need to exercise are not reachable through WebDriver anyway.
+
+## Manual verification
+
+These runs check what the tests above cannot: the OS integration and the native UI itself. Do them on an installed package, not `cargo tauri dev`, except where a step says so. Build first with `cd desktop && npm install`, then `cd src-tauri && cargo tauri build`.
 
 ### Linux (deb)
 
@@ -67,14 +83,13 @@ Nothing in the CI gate runs this crate (`ci.yml` excludes `rtbit-desktop`), so t
 3. Torrent file: in the file manager, open a `.torrent` with rtbit-desktop. The torrent appears in the web UI list.
 4. Magnet: `xdg-open 'magnet:?xt=urn:btih:cab507494d02ebb1178b38f2e9d7be299c86b862'`. The torrent is added.
 5. Single instance: with the app running, run `rtbit-desktop /path/to/file.torrent`. The existing window is raised, the torrent is added, and `ss -ltnp | grep 3030` shows one listener from the first process.
-6. Tray (use the menu, not a click; left-click does not fire on Linux AppIndicator):
-   - Show brings the window back.
-   - Add `.torrent` file opens a picker and adds the chosen file.
-   - Pause All / Resume All flips its label as torrents change state.
-   - Open in Browser opens the web UI.
+6. Tray (use the menu, not a click; left-click does not fire on Linux AppIndicator). The tests cover which action each item runs; check the OS side of each:
+   - The tray icon appears and its menu matches the `tray` tests.
+   - Add `.torrent` file opens the native picker and adds the chosen file.
+   - Open in Browser opens the default browser.
    - Start at login creates `~/.config/autostart/rtbit-desktop.desktop` when checked, and removes it when unchecked.
-   - Check for Updates shows a dialog. With the empty pubkey it should report a failure, not install anything.
-   - Quit with an active torrent asks for confirmation. Cancel keeps the app running.
+   - Check for Updates against the real endpoint shows a dialog. With the empty pubkey it should report a failure, not install anything.
+   - Quit with an active torrent shows the native confirmation. Cancel keeps the app running.
 7. Close to tray: close the window. The process keeps running and the tray Show restores the window.
 8. Autostart: enable Start at login, log out and back in. The window does not appear, and the tray icon does.
 9. Engine failure: in a terminal, run `python3 -m http.server 3030 --bind 127.0.0.1`, then launch rtbit-desktop. A native error dialog names the cause and the config path. The process exits with code 1. Stop the server afterwards.

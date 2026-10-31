@@ -2,7 +2,7 @@
 
 use rtbit_desktop_menu::{MenuEntry, menus};
 use tauri::{
-    AppHandle,
+    AppHandle, Manager,
     menu::{Menu, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder},
 };
 
@@ -10,7 +10,7 @@ use crate::tray;
 
 /// Build the menu bar and attach it to the window named `main`.
 pub fn install(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let mut bar = Menu::new(app)?;
+    let bar = Menu::new(app)?;
     for menu in menus() {
         let mut submenu = SubmenuBuilder::new(app, menu.label);
         for entry in menu.entries {

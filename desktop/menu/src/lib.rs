@@ -1,5 +1,12 @@
-//! The native menu bar as plain data. The desktop binary turns this into a
-//! Tauri menu; the tests here run without the window toolkit.
+//! The native menu bar, the tray menu, their click actions and the update
+//! check's decisions, as plain data and logic. The desktop binary turns these
+//! into Tauri calls; the tests here run without the window toolkit.
+
+pub mod action;
+pub mod tray;
+pub mod update;
+
+pub use action::{MenuAction, QuitDecision, browser_url, quit_decision};
 
 /// One entry in the menu bar.
 #[derive(Debug, Clone, PartialEq, Eq)]
