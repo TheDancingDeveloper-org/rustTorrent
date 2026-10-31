@@ -31,6 +31,7 @@ jobs:
       rust: ${{ steps.classify.outputs.rust }}
       rust_full: ${{ steps.classify.outputs.rust_full }}
       rust_packages: ${{ steps.classify.outputs.rust_packages }}
+      desktop: ${{ steps.classify.outputs.desktop }}
       webui: ${{ steps.classify.outputs.webui }}
       website: ${{ steps.classify.outputs.website }}
     steps:
@@ -45,11 +46,11 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$EVENT" != pull_request ]]; then
-            printf 'rust=true\nrust_full=true\nrust_packages=\nwebui=true\nwebsite=true\n' >>"$GITHUB_OUTPUT"
+            printf 'rust=true\nrust_full=true\nrust_packages=\ndesktop=true\nwebui=true\nwebsite=true\n' >>"$GITHUB_OUTPUT"
             exit 0
           fi
           files="$(git diff --name-only "$(git merge-base "$BASE_SHA" HEAD)" HEAD)"
-          rust=false full=false webui=false website=false
+          rust=false full=false desktop=false webui=false website=false
           packages=()
           add_package() {
             local pkg
@@ -67,20 +68,24 @@ jobs:
               # workspace.
               .github/*|ci/*|Dockerfile*|.dockerignore|rust-toolchain.toml|.cargo/*|\
               Cargo.toml|Cargo.lock|fuzz/*|tests/*|benchv2/*)
-                rust=true webui=true website=true full=true ;;
+                rust=true desktop=true webui=true website=true full=true ;;
+              # The Tauri app links librtbit (crates/librtbit, which also
+              # carries the web UI it embeds), so either side can break it.
+              desktop/src-tauri/*) desktop=true ;;
+              packaging/scripts/check-desktop.sh) desktop=true ;;
               # The web UI is tested by its own jobs, not by a Rust build.
               crates/librtbit/webui/*) webui=true ;;
               # The desktop splash is tested by the web UI e2e suite.
-              desktop/src/*) webui=true ;;
+              desktop/src/*) webui=true desktop=true ;;
               # The menu description has no window toolkit, so CI can test it.
               # The Tauri binary stays excluded: the runner has no webkit.
-              desktop/menu/*) rust=true; add_package rtbit-desktop-menu ;;
-              crates/librtbit/*) rust=true; add_package swarmforge ;;
+              desktop/menu/*) rust=true desktop=true; add_package rtbit-desktop-menu ;;
+              crates/librtbit/*) rust=true desktop=true; add_package swarmforge ;;
               crates/rtbit/*) rust=true; add_package rtbit ;;
               website/*) website=true ;;
               # An unrecognised crate path (a new member, or a path we have not
               # mapped yet) is not safe to narrow, so it takes everything.
-              crates/*) rust=true full=true ;;
+              crates/*) rust=true full=true desktop=true ;;
             esac
           done <<<"$files"
           # A Rust change we could not attribute to a package still needs the
@@ -88,8 +93,8 @@ jobs:
           if [[ "$rust" == true && "$full" == false && ${#packages[@]} -eq 0 ]]; then
             full=true
           fi
-          printf 'rust=%s\nrust_full=%s\nrust_packages=%s\nwebui=%s\nwebsite=%s\n' \
-            "$rust" "$full" "${packages[*]-}" "$webui" "$website" | tee -a "$GITHUB_OUTPUT"
+          printf 'rust=%s\nrust_full=%s\nrust_packages=%s\ndesktop=%s\nwebui=%s\nwebsite=%s\n' \
+            "$rust" "$full" "${packages[*]-}" "$desktop" "$webui" "$website" | tee -a "$GITHUB_OUTPUT"
 
   # Shell checks for the release scripts and repository layout. They take
   # seconds and touch no network, so they run on every event.
@@ -176,6 +181,18 @@ jobs:
       - name: Build the release binary
         if: steps.scope.outputs.full == 'true' || contains(format(' {0} ', needs.changes.outputs.rust_packages), ' rtbit ')
         run: cargo build --profile release-github -p rtbit --no-default-features --features default-tls
+
+  # The Tauri app (rtbit-desktop) and its menu crate. The rust job excludes
+  # rtbit-desktop because the runner has no webkit, so this job builds, lints
+  # and tests both inside a pinned container with the webkit and GTK -dev
+  # packages (packaging/scripts/check-desktop.sh). Not a required check yet.
+  desktop:
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: [self-hosted, rust-heavy]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: bash packaging/scripts/check-desktop.sh
 
   webui:
     needs: changes
