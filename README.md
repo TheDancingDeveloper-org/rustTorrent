@@ -30,6 +30,9 @@ already run.
 - **Docker ready** — multi-stage build producing a minimal scratch-based image.
 - **Desktop app** — native Tauri application for Windows, macOS, and Linux with system
   tray integration.
+- **Native desktop client** — `rtbit-fluent`, a GPU-rendered client built on gpui with
+  the Fluent design system, for managing a local or remote daemon. Linux `.deb` and
+  binary ship with each release; a Windows build is not available yet.
 - **Memory safe** — written entirely in Rust; the bencode, DHT, and peer-protocol parsers
   are additionally fuzz-tested.
 
@@ -115,6 +118,8 @@ Most behaviour is configurable from the web UI's settings dialog or via CLI flag
 | `crates/rtbit` | CLI binary and server entry point |
 | `crates/librtbit` | Core session, torrent state machine, storage, HTTP API, web UI |
 | `crates/librtbit-*` | Protocol building blocks: bencode, DHT, peer protocol, trackers, UPnP, LSD |
+| `crates/rtbit-fluent` | Native desktop client (gpui) |
+| `crates/rtbit-ui-core`, `crates/rtbit-client` | Toolkit-free client state and the daemon API client it uses |
 | `desktop/` | Tauri desktop application |
 | `website/` | Static rusttorrent.dev website and deployment assets |
 | `fuzz/` | Fuzz targets for the protocol parsers |
