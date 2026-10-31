@@ -28,13 +28,22 @@ See [TESTING.md](TESTING.md#webui-api-v2-compatibility-client-replay-and-differe
 | Changed paths | Runs |
 |---|---|
 | `.github/`, `ci/`, `.cargo/`, `Dockerfile*`, `.dockerignore`, `rust-toolchain.toml` | everything, as in the queue |
-| `crates/librtbit/` (outside the web UI) | `rust`, scoped to `swarmforge` |
+| `crates/librtbit/` (outside the web UI) | `rust`, scoped to `swarmforge`; `desktop` |
 | `crates/rtbit/` | `rust`, scoped to `rtbit` |
-| `crates/librtbit/webui/`, `desktop/src/` (the splash, tested by `e2e/desktop-splash.spec.ts`) | `webui`, `gui-e2e` |
-| `Cargo.toml`, `Cargo.lock`, `fuzz/`, `tests/`, `benchv2/`, any other `crates/*` path | `rust`, full workspace |
+| `crates/librtbit/webui/` | `webui`, `gui-e2e` |
+| `desktop/src/` (the splash, tested by `e2e/desktop-splash.spec.ts`) | `webui`, `gui-e2e`, `desktop` |
+| `desktop/src-tauri/`, `packaging/scripts/check-desktop.sh` | `desktop` |
+| `Cargo.toml`, `Cargo.lock`, `fuzz/`, `tests/`, `benchv2/`, any other `crates/*` path | `rust`, full workspace; `desktop` |
 | `website/` | `website` |
-| `desktop/menu/` | `rust` for `rtbit-desktop-menu` only (no webkit) |
-| anything else (docs, design, the rest of desktop) | nothing; the skipped jobs report success |
+| `desktop/menu/` | `rust` for `rtbit-desktop-menu`; `desktop` |
+| anything else (docs, design) | nothing; the skipped jobs report success |
+
+The `rust` job excludes `rtbit-desktop` because the shared runners have no
+webkit. The `desktop` job builds, lints (clippy `-D warnings`) and tests
+`rtbit-desktop` and `rtbit-desktop-menu` inside the pinned `rust:1.95-bookworm`
+container with the webkit and GTK `-dev` packages
+(`packaging/scripts/check-desktop.sh`). The merge queue runs it on every
+entry. It is not a required check yet.
 
 The scope is deliberately conservative. `cargo` resolves `--features` against
 the packages it selects, and `default-tls` exists only on `swarmforge`
