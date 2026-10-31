@@ -137,6 +137,12 @@ impl AddDialog {
         );
     }
 
+    /// Stand in for the native picker: set the chosen `.torrent` file, for tests.
+    #[cfg(test)]
+    pub(crate) fn set_file_for_test(&mut self, name: &str, bytes: &[u8]) {
+        self.file = Some((name.to_owned(), bytes.to_vec()));
+    }
+
     /// Type a magnet and a save path, for tests outside this module.
     #[cfg(test)]
     pub(crate) fn fill_for_test(&self, cx: &mut gpui::App, magnet: &str, save_path: &str) {

@@ -888,6 +888,39 @@ mod tests {
     }
 
     #[gpui::test]
+    fn a_torrent_file_is_posted_as_its_bytes_without_is_url(cx: &mut TestAppContext) {
+        let (runtime, server) = daemon(cx);
+        cx.update(ToastStack::init);
+        // Only the exact shape counts: the file bytes, and no is_url query.
+        runtime.block_on(
+            Mock::given(method("POST"))
+                .and(path("/torrents"))
+                .and(wiremock::matchers::query_param_is_missing("is_url"))
+                .and(wiremock::matchers::body_bytes(b"d8:announce0:e".as_slice()))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(1)
+                .mount(&server),
+        );
+        let status = cx.new(|_| StatusBar::new());
+        let screen = cx.new(|cx| MainScreen::new(status.clone(), cx));
+        screen.update(cx, |screen, cx| screen.open_add(cx));
+        let dialog = screen.read_with(cx, |s, _| s.add.clone()).unwrap();
+        dialog.update(cx, |dialog, cx| {
+            dialog.fill_for_test(cx, "", "/data");
+            dialog.set_file_for_test("ubuntu.torrent", b"d8:announce0:e");
+            dialog.submit(cx);
+        });
+        drive(cx, |cx| screen.read_with(cx, |s, _| s.add.is_none()));
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            add_posts(&runtime, &server),
+            1,
+            "a .torrent file must be posted once"
+        );
+        runtime.block_on(server.verify());
+    }
+
+    #[gpui::test]
     fn an_empty_list_uses_the_no_torrents_text(cx: &mut TestAppContext) {
         // The table is built with this constant; the text must say "no torrents".
         assert_eq!(NO_TORRENTS, "No torrents yet.");
