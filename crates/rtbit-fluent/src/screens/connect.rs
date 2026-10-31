@@ -130,6 +130,12 @@ pub struct ConnectScreen {
     keychain: Keychain,
     error: Option<String>,
     pending: bool,
+    /// A silent start-up resume is in flight. It does not count as `pending`,
+    /// so Sign in stays usable while the daemon answers.
+    resuming: bool,
+    /// Bumped whenever a sign-in or setup starts, so a resume reply that
+    /// arrives after that is ignored.
+    epoch: u64,
 }
 
 impl EventEmitter<ConnectEvent> for ConnectScreen {}
@@ -175,6 +181,8 @@ impl ConnectScreen {
             keychain,
             error: None,
             pending: false,
+            resuming: false,
+            epoch: 0,
         }
     }
 
@@ -188,6 +196,12 @@ impl ConnectScreen {
     #[must_use]
     pub fn is_pending(&self) -> bool {
         self.pending
+    }
+
+    /// `true` while any request is in flight, including a silent resume.
+    #[must_use]
+    pub fn is_busy(&self) -> bool {
+        self.pending || self.resuming
     }
 
     /// The form currently shown.
@@ -220,6 +234,7 @@ impl ConnectScreen {
         };
         bridge.install(cx);
 
+        self.epoch += 1;
         self.pending = true;
         self.error = None;
         cx.emit(ConnectEvent::Connecting);
@@ -275,6 +290,7 @@ impl ConnectScreen {
         };
         bridge.install(cx);
 
+        self.epoch += 1;
         self.pending = true;
         self.error = None;
         cx.emit(ConnectEvent::Connecting);
@@ -299,7 +315,7 @@ impl ConnectScreen {
     /// an unavailable keychain, or a token the daemon refuses all leave the
     /// connect form as it is, with no error bar.
     pub fn try_resume(&mut self, cx: &mut Context<Self>) {
-        if self.pending || self.mode != Mode::Connect {
+        if self.pending || self.resuming || self.mode != Mode::Connect {
             return;
         }
         let url = self.url.read(cx).text().trim().to_owned();
@@ -311,7 +327,8 @@ impl ConnectScreen {
         };
         bridge.install(cx);
 
-        self.pending = true;
+        self.resuming = true;
+        let epoch = self.epoch;
         cx.notify();
 
         let keychain = self.keychain.clone();
@@ -338,7 +355,7 @@ impl ConnectScreen {
         });
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let reply = reply_or_cancel(rx).await;
-            let _ = this.update(cx, |this, cx| this.finish_resume(reply, cx));
+            let _ = this.update(cx, |this, cx| this.finish_resume(epoch, reply, cx));
         })
         .detach();
     }
@@ -366,8 +383,13 @@ impl ConnectScreen {
 
     /// A resume is silent: success opens the main screen, anything else leaves
     /// the form as it was.
-    fn finish_resume(&mut self, reply: Result<Reply, Error>, cx: &mut Context<Self>) {
-        self.pending = false;
+    fn finish_resume(&mut self, epoch: u64, reply: Result<Reply, Error>, cx: &mut Context<Self>) {
+        self.resuming = false;
+        // A sign-in started after this resume: its own reply decides the screen.
+        if epoch != self.epoch {
+            cx.notify();
+            return;
+        }
         if matches!(reply, Ok(Reply::Connected)) {
             self.clear_secrets(cx);
             cx.emit(ConnectEvent::Connected);
@@ -771,7 +793,7 @@ mod tests {
         let url = screen.read_with(cx, |s, _| s.url.clone());
         url.update(cx, |field, cx| field.set_value(server.uri(), cx));
         screen.update(cx, |screen, cx| screen.try_resume(cx));
-        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_pending()));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_busy()));
         assert_eq!(*events.borrow(), vec![ConnectEvent::Connected]);
         screen.read_with(cx, |screen, _| assert!(screen.error().is_none()));
         assert_eq!(
@@ -791,7 +813,7 @@ mod tests {
         let url = screen.read_with(cx, |s, _| s.url.clone());
         url.update(cx, |field, cx| field.set_value(server.uri(), cx));
         screen.update(cx, |screen, cx| screen.try_resume(cx));
-        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_pending()));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_busy()));
         assert!(events.borrow().is_empty());
         screen.read_with(cx, |screen, _| assert!(screen.error().is_none()));
     }
@@ -808,7 +830,7 @@ mod tests {
         let url = screen.read_with(cx, |s, _| s.url.clone());
         url.update(cx, |field, cx| field.set_value(server.uri(), cx));
         screen.update(cx, |screen, cx| screen.try_resume(cx));
-        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_pending()));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_busy()));
         assert_eq!(*events.borrow(), vec![ConnectEvent::Connected]);
 
         screen.update(cx, |screen, cx| screen.sign_out(cx));
@@ -853,9 +875,49 @@ mod tests {
         let url = screen.read_with(cx, |s, _| s.url.clone());
         url.update(cx, |field, cx| field.set_value(server.uri(), cx));
         screen.update(cx, |screen, cx| screen.try_resume(cx));
-        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_pending()));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_busy()));
         assert!(events.borrow().is_empty(), "a refused resume stays silent");
         // The forget runs on the bridge; wait for it.
         drive(cx, |_| store.load(&server.uri()) == Some(None));
+    }
+
+    #[gpui::test]
+    fn sign_in_stays_enabled_while_a_stored_token_resume_is_in_flight(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let runtime = runtime();
+        // The refresh answers slowly, so the resume is still in flight for a while.
+        let server = runtime.block_on(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/auth/status"))
+                .respond_with(ResponseTemplate::new(200).set_body_raw(
+                    r#"{"auth_enabled":true,"setup_required":false}"#,
+                    "application/json",
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/auth/refresh"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_raw(fixture("refresh.json"), "application/json")
+                        .set_delay(std::time::Duration::from_millis(1500)),
+                )
+                .mount(&server)
+                .await;
+            server
+        });
+        let store = MemoryStore::default();
+        store.store(&server.uri(), "refresh-1");
+        let screen = cx.new(|cx| ConnectScreen::with_memory_store(cx, store.clone()));
+        let url = screen.read_with(cx, |s, _| s.url.clone());
+        url.update(cx, |field, cx| field.set_value(server.uri(), cx));
+        screen.update(cx, |screen, cx| screen.try_resume(cx));
+        // While the resume is in flight, Sign in is not locked: `pending` stays false.
+        screen.read_with(cx, |s, _| {
+            assert!(s.is_busy());
+            assert!(!s.is_pending(), "a silent resume must not lock Sign in");
+        });
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_busy()));
     }
 }
