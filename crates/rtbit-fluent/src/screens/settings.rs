@@ -1240,4 +1240,49 @@ mod tests {
             .count();
         assert_eq!(posts, 0);
     }
+
+    #[gpui::test]
+    fn load_fills_the_form_from_the_daemon(cx: &mut gpui::TestAppContext) {
+        let (_runtime, _server) = daemon(cx);
+        let screen = cx.new(SettingsScreen::new);
+        screen.update(cx, |screen, cx| screen.load(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_busy()));
+        screen.read_with(cx, |s, cx| {
+            assert!(s.error().is_none(), "{:?}", s.error());
+            let draft = s.draft(cx);
+            assert_eq!(draft.download_folder, "/data/in");
+            assert_eq!(draft.download_bps, "1000000");
+            assert_eq!(draft.peer_limit, "50");
+            assert_eq!(draft.listen_port, "6881");
+            assert!(draft.dht);
+            assert!(!draft.lsd);
+            let baseline = s.baseline.as_ref().expect("baseline kept for save");
+            assert!(draft.changes(baseline).unwrap().is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn refused_save_shows_the_error_bar(cx: &mut gpui::TestAppContext) {
+        let (runtime, server) = daemon(cx);
+        runtime.block_on(async {
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path("/torrents/seed_limits"))
+                .respond_with(wiremock::ResponseTemplate::new(500))
+                .up_to_n_times(1)
+                .with_priority(1)
+                .mount(&server)
+                .await;
+        });
+        let screen = cx.new(SettingsScreen::new);
+        screen.update(cx, |screen, cx| screen.load(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_busy()));
+        let ratio = screen.read_with(cx, |s, _| s.form.ratio_limit.clone());
+        ratio.update(cx, |field, cx| field.set_value("3.5", cx));
+        screen.update(cx, |screen, cx| screen.save(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_busy()));
+        screen.read_with(cx, |s, _| {
+            assert!(s.error().is_some(), "refused save must show the error bar");
+            assert!(s.notice.is_none());
+        });
+    }
 }
