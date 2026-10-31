@@ -9,6 +9,7 @@ use fluent_layout::Workspace;
 use gpui::AppContext;
 use rtbit_ui_core::Connection;
 
+pub mod bridge;
 pub mod shell;
 pub mod widgets;
 
