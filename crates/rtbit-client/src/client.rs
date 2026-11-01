@@ -251,9 +251,13 @@ impl Client {
         self.authed_post_json("session/downloads", body).await
     }
 
-    /// `POST /session/advanced`. The daemon refuses 0 and values over its caps.
-    pub async fn set_advanced(&mut self, body: &crate::types::AdvancedConfig) -> Result<(), Error> {
-        self.authed_post_json("session/advanced", body).await
+    /// `POST /session/advanced`. The daemon refuses values outside its caps with 400.
+    /// The reply says whether a saved restart knob needs a daemon restart.
+    pub async fn set_advanced(
+        &mut self,
+        body: &crate::types::AdvancedConfig,
+    ) -> Result<crate::types::AdvancedSaved, Error> {
+        self.authed_post_json_as("session/advanced", body).await
     }
 
     /// `POST /session/network`. Saved for the next start; nothing changes live.
@@ -460,6 +464,22 @@ impl Client {
         }
     }
 
+    /// Like `authed_post_json`, but decodes the reply body. An empty body reads as the default.
+    async fn authed_post_json_as<T: DeserializeOwned + Default>(
+        &mut self,
+        path: &str,
+        body: &impl Serialize,
+    ) -> Result<T, Error> {
+        let response = self.post_json_once(path, body).await?;
+        let response = if response.status() == StatusCode::UNAUTHORIZED {
+            self.refresh_once().await?;
+            self.post_json_once(path, body).await?
+        } else {
+            response
+        };
+        decode_or_default(response).await
+    }
+
     async fn authed_post_empty(&mut self, path: &str) -> Result<(), Error> {
         let response = self.post_once(path).await?;
         if response.status() == StatusCode::UNAUTHORIZED {
@@ -657,6 +677,23 @@ async fn decode_empty(response: reqwest::Response) -> Result<(), Error> {
         return Err(error_with_body(status, response).await);
     }
     Ok(())
+}
+
+async fn decode_or_default<T: DeserializeOwned + Default>(
+    response: reqwest::Response,
+) -> Result<T, Error> {
+    let status = response.status();
+    if !status.is_success() {
+        return Err(error_with_body(status, response).await);
+    }
+    let text = response
+        .text()
+        .await
+        .map_err(|err| Error::Unreachable(format!("bad body: {err}")))?;
+    if text.trim().is_empty() {
+        return Ok(T::default());
+    }
+    serde_json::from_str(&text).map_err(|err| Error::Unreachable(format!("bad json: {err}")))
 }
 
 async fn error_with_body(status: http::StatusCode, response: reqwest::Response) -> Error {

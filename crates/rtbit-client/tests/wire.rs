@@ -798,3 +798,109 @@ async fn set_file_included_posts_one_file_and_surfaces_bad_index() {
     assert!(client.set_file_included(7, 9, true).await.is_err());
     server.verify().await;
 }
+
+#[test]
+fn advanced_decodes_legacy_and_full_bodies() {
+    // An older daemon sends only the three timeouts. The new knobs read as None.
+    let legacy: rtbit_client::AdvancedConfig =
+        serde_json::from_str(&fixture("advanced-legacy.json")).unwrap();
+    assert_eq!(legacy.connect_timeout_secs, Some(10));
+    assert_eq!(legacy.keep_alive_secs, Some(120));
+    assert_eq!(legacy.peer_limit, None);
+    assert_eq!(legacy.fastresume_validation_denom, None);
+
+    let full: rtbit_client::AdvancedConfig =
+        serde_json::from_str(&fixture("advanced.json")).unwrap();
+    assert_eq!(full.peer_limit, Some(200));
+    assert_eq!(full.concurrent_init_limit, Some(3));
+    assert_eq!(full.upload_slots, Some(4));
+    assert_eq!(full.magnet_resolution_timeout_secs, Some(120));
+    assert_eq!(full.max_concurrent_handshakes, Some(64));
+    assert_eq!(full.fastresume_validation_denom, Some(50));
+}
+
+#[test]
+fn advanced_post_body_omits_unset_knobs() {
+    // A legacy-only body must serialise to the three-field shape an old daemon expects.
+    let legacy = rtbit_client::AdvancedConfig {
+        connect_timeout_secs: Some(10),
+        read_write_timeout_secs: Some(30),
+        keep_alive_secs: Some(120),
+        ..Default::default()
+    };
+    let value = serde_json::to_value(&legacy).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({"connect_timeout_secs": 10, "read_write_timeout_secs": 30, "keep_alive_secs": 120})
+    );
+}
+
+#[tokio::test]
+async fn set_advanced_round_trips_body_and_reads_restart_flag() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("login.json"), "application/json"),
+        )
+        .mount(&server)
+        .await;
+    let body = rtbit_client::AdvancedConfig {
+        connect_timeout_secs: Some(10),
+        read_write_timeout_secs: Some(30),
+        keep_alive_secs: Some(120),
+        peer_limit: Some(200),
+        concurrent_init_limit: Some(3),
+        upload_slots: Some(4),
+        magnet_resolution_timeout_secs: Some(120),
+        max_concurrent_handshakes: Some(64),
+        fastresume_validation_denom: Some(50),
+    };
+    Mock::given(method("POST"))
+        .and(path("/session/advanced"))
+        .and(header("authorization", "Bearer access-1"))
+        .and(body_json(serde_json::to_value(&body).unwrap()))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(r#"{"restart_required": true}"#, "application/json"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut client = Client::new(server.uri()).unwrap();
+    client.login("ada", "secret").await.unwrap();
+    let saved = client.set_advanced(&body).await.unwrap();
+    assert!(saved.restart_required);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn set_advanced_treats_empty_reply_as_no_restart() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("login.json"), "application/json"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/session/advanced"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut client = Client::new(server.uri()).unwrap();
+    client.login("ada", "secret").await.unwrap();
+    let saved = client
+        .set_advanced(&rtbit_client::AdvancedConfig {
+            connect_timeout_secs: Some(10),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(!saved.restart_required);
+    server.verify().await;
+}
