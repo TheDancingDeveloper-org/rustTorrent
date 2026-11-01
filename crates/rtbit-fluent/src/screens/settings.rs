@@ -1,5 +1,5 @@
-//! Settings screen: five tabs (General, Connection, Speed, Folders, Seeding)
-//! behind a `SelectableList` nav, bound to a [`SettingsDraft`] that mirrors
+//! Settings screen: six tabs (General, Connection, Speed, Folders, Seeding,
+//! Advanced) behind a `SelectableList` nav, bound to a [`SettingsDraft`] that mirrors
 //! the daemon's `SettingsSnapshot`.
 //!
 //! Load and save run on the bridge's tokio runtime; the UI thread only sets a
@@ -22,9 +22,15 @@ use gpui::{
     prelude::*, px,
 };
 use rtbit_client::{
-    AdvancedConfig, AltSpeedConfig, AltSpeedSchedule, Client, DownloadsConfig, Error,
-    FoldersConfig, IpFilterConfig, NetworkConfig, NetworkSettings, ProxyConfig, RateLimits,
-    SeedLimits, SettingsSnapshot,
+    AdvancedConfig, AltSpeedConfig, AltSpeedSchedule, CONCURRENT_INIT_LIMIT_MAX,
+    CONCURRENT_INIT_LIMIT_MIN, CONNECT_TIMEOUT_SECS_MAX, CONNECT_TIMEOUT_SECS_MIN, Client,
+    DownloadsConfig, Error, FASTRESUME_VALIDATION_DENOM_MAX, FASTRESUME_VALIDATION_DENOM_MIN,
+    FoldersConfig, IpFilterConfig, KEEP_ALIVE_SECS_MAX, KEEP_ALIVE_SECS_MIN,
+    MAGNET_RESOLUTION_TIMEOUT_SECS_MAX, MAGNET_RESOLUTION_TIMEOUT_SECS_MIN,
+    MAX_CONCURRENT_HANDSHAKES_MAX, MAX_CONCURRENT_HANDSHAKES_MIN, NetworkConfig, NetworkSettings,
+    PEER_LIMIT_MAX, PEER_LIMIT_MIN, ProxyConfig, READ_WRITE_TIMEOUT_SECS_MAX,
+    READ_WRITE_TIMEOUT_SECS_MIN, RateLimits, SeedLimits, SettingsSnapshot, UPLOAD_SLOTS_MAX,
+    UPLOAD_SLOTS_MIN,
 };
 use rtbit_ui_core::{SettingsChanges, map_error};
 
@@ -39,15 +45,17 @@ pub enum SettingsTab {
     Speed,
     Folders,
     Seeding,
+    Advanced,
 }
 
 impl SettingsTab {
-    const ALL: [(Self, &'static str, &'static str); 5] = [
+    const ALL: [(Self, &'static str, &'static str); 6] = [
         (Self::General, "general", "General"),
         (Self::Connection, "connection", "Connection"),
         (Self::Speed, "speed", "Speed"),
         (Self::Folders, "folders", "Folders"),
         (Self::Seeding, "seeding", "Seeding"),
+        (Self::Advanced, "advanced", "Advanced"),
     ];
 
     fn from_id(id: &str) -> Option<Self> {
@@ -67,6 +75,12 @@ impl SettingsTab {
 
 const PORT_ERROR: &str = "Enter a port from 1 to 65535.";
 const FOLDER_ERROR: &str = "Download folder is required.";
+const RESTART_NOTICE: &str = "Saved. Restart to apply.";
+
+/// The caption under an Advanced field: its caps, and what blank means.
+fn range_caption(min: u64, max: u64) -> String {
+    format!("Allowed {min}-{max}, blank = default")
+}
 
 /// Editable copy of the settings. Strings so a half-typed number is not lost.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -75,6 +89,10 @@ pub struct SettingsDraft {
     pub connect_timeout: String,
     pub read_write_timeout: String,
     pub keep_alive: String,
+    pub upload_slots: String,
+    pub magnet_timeout: String,
+    pub max_handshakes: String,
+    pub fastresume_denom: String,
     pub listen_ip: String,
     pub listen_port: String,
     pub dht: bool,
@@ -114,6 +132,10 @@ impl SettingsDraft {
             connect_timeout: opt_num(snap.advanced.connect_timeout_secs),
             read_write_timeout: opt_num(snap.advanced.read_write_timeout_secs),
             keep_alive: opt_num(snap.advanced.keep_alive_secs),
+            upload_slots: opt_num(snap.advanced.upload_slots),
+            magnet_timeout: opt_num(snap.advanced.magnet_resolution_timeout_secs),
+            max_handshakes: opt_num(snap.advanced.max_concurrent_handshakes),
+            fastresume_denom: opt_num(snap.advanced.fastresume_validation_denom),
             listen_ip: net.listen_ip,
             listen_port: net.listen_port,
             dht: net.dht,
@@ -152,18 +174,69 @@ impl SettingsDraft {
 
     /// Per-field validation messages, keyed by field name. Empty when the draft is valid.
     pub fn errors(&self) -> BTreeMap<&'static str, String> {
-        let checks: [(&'static str, Option<String>); 18] = [
+        let checks: [(&'static str, Option<String>); 22] = [
             (
                 "connect_timeout",
-                parse_error::<u64>(&self.connect_timeout, "Connect timeout"),
+                range_error(
+                    &self.connect_timeout,
+                    "Connect timeout",
+                    CONNECT_TIMEOUT_SECS_MIN,
+                    CONNECT_TIMEOUT_SECS_MAX,
+                ),
             ),
             (
                 "read_write_timeout",
-                parse_error::<u64>(&self.read_write_timeout, "Read/write timeout"),
+                range_error(
+                    &self.read_write_timeout,
+                    "Read/write timeout",
+                    READ_WRITE_TIMEOUT_SECS_MIN,
+                    READ_WRITE_TIMEOUT_SECS_MAX,
+                ),
             ),
             (
                 "keep_alive",
-                parse_error::<u64>(&self.keep_alive, "Keep-alive"),
+                range_error(
+                    &self.keep_alive,
+                    "Keep-alive",
+                    KEEP_ALIVE_SECS_MIN,
+                    KEEP_ALIVE_SECS_MAX,
+                ),
+            ),
+            (
+                "upload_slots",
+                range_error(
+                    &self.upload_slots,
+                    "Upload slots",
+                    UPLOAD_SLOTS_MIN,
+                    UPLOAD_SLOTS_MAX,
+                ),
+            ),
+            (
+                "magnet_timeout",
+                range_error(
+                    &self.magnet_timeout,
+                    "Magnet resolution timeout",
+                    MAGNET_RESOLUTION_TIMEOUT_SECS_MIN,
+                    MAGNET_RESOLUTION_TIMEOUT_SECS_MAX,
+                ),
+            ),
+            (
+                "max_handshakes",
+                range_error(
+                    &self.max_handshakes,
+                    "Concurrent handshakes",
+                    MAX_CONCURRENT_HANDSHAKES_MIN,
+                    MAX_CONCURRENT_HANDSHAKES_MAX,
+                ),
+            ),
+            (
+                "fastresume_denom",
+                range_error(
+                    &self.fastresume_denom,
+                    "Fastresume validation",
+                    FASTRESUME_VALIDATION_DENOM_MIN,
+                    FASTRESUME_VALIDATION_DENOM_MAX,
+                ),
             ),
             (
                 "listen_ip",
@@ -192,11 +265,21 @@ impl SettingsDraft {
             ),
             (
                 "peer_limit",
-                parse_error::<u64>(&self.peer_limit, "Peer limit"),
+                range_error(
+                    &self.peer_limit,
+                    "Peer limit",
+                    PEER_LIMIT_MIN,
+                    PEER_LIMIT_MAX,
+                ),
             ),
             (
                 "init_limit",
-                parse_error::<u64>(&self.init_limit, "Connection limit"),
+                range_error(
+                    &self.init_limit,
+                    "Connection limit",
+                    CONCURRENT_INIT_LIMIT_MIN,
+                    CONCURRENT_INIT_LIMIT_MAX,
+                ),
             ),
             (
                 "alt_down",
@@ -245,12 +328,31 @@ impl SettingsDraft {
             out.downloads = Some(downloads);
         }
 
+        // Peer limit and connection limit are edited on this tab but saved through
+        // the limits call below, so they stay out of the advanced body and the diff.
         let advanced = AdvancedConfig {
             connect_timeout_secs: parse_opt(&self.connect_timeout, "Connect timeout")?,
             read_write_timeout_secs: parse_opt(&self.read_write_timeout, "Read/write timeout")?,
             keep_alive_secs: parse_opt(&self.keep_alive, "Keep-alive")?,
+            peer_limit: None,
+            concurrent_init_limit: None,
+            upload_slots: parse_opt(&self.upload_slots, "Upload slots")?,
+            magnet_resolution_timeout_secs: parse_opt(
+                &self.magnet_timeout,
+                "Magnet resolution timeout",
+            )?,
+            max_concurrent_handshakes: parse_opt(&self.max_handshakes, "Concurrent handshakes")?,
+            fastresume_validation_denom: parse_opt(
+                &self.fastresume_denom,
+                "Fastresume validation",
+            )?,
         };
-        if advanced != base.advanced {
+        let shown = AdvancedConfig {
+            peer_limit: None,
+            concurrent_init_limit: None,
+            ..base.advanced.clone()
+        };
+        if advanced != shown {
             out.advanced = Some(advanced);
         }
 
@@ -416,6 +518,17 @@ fn parse_error<T: FromStr>(text: &str, label: &str) -> Option<String> {
     parse_opt::<T>(text, label).err()
 }
 
+/// A whole number inside `min..=max`, or blank. Blocks save with a field message otherwise.
+fn range_error(text: &str, label: &str, min: u64, max: u64) -> Option<String> {
+    match parse_opt::<u64>(text, label) {
+        Err(message) => Some(message),
+        Ok(Some(n)) if !(min..=max).contains(&n) => {
+            Some(format!("{label} must be from {min} to {max}."))
+        }
+        Ok(_) => None,
+    }
+}
+
 fn parse_opt<T: FromStr>(text: &str, label: &str) -> Result<Option<T>, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -449,6 +562,10 @@ struct Form {
     connect_timeout: Entity<TextInput>,
     read_write_timeout: Entity<TextInput>,
     keep_alive: Entity<TextInput>,
+    upload_slots: Entity<TextInput>,
+    magnet_timeout: Entity<TextInput>,
+    max_handshakes: Entity<TextInput>,
+    fastresume_denom: Entity<TextInput>,
     listen_ip: Entity<TextInput>,
     listen_port: Entity<TextInput>,
     ip_filter: Entity<TextInput>,
@@ -475,6 +592,10 @@ impl Form {
             connect_timeout: input(),
             read_write_timeout: input(),
             keep_alive: input(),
+            upload_slots: input(),
+            magnet_timeout: input(),
+            max_handshakes: input(),
+            fastresume_denom: input(),
             listen_ip: input(),
             listen_port: input(),
             ip_filter: input(),
@@ -497,10 +618,14 @@ impl Form {
 
     /// Copy a draft into the inputs (a load).
     fn write(&self, draft: &SettingsDraft, cx: &mut Context<SettingsScreen>) {
-        let pairs: [(&Entity<TextInput>, &str); 20] = [
+        let pairs: [(&Entity<TextInput>, &str); 24] = [
             (&self.connect_timeout, &draft.connect_timeout),
             (&self.read_write_timeout, &draft.read_write_timeout),
             (&self.keep_alive, &draft.keep_alive),
+            (&self.upload_slots, &draft.upload_slots),
+            (&self.magnet_timeout, &draft.magnet_timeout),
+            (&self.max_handshakes, &draft.max_handshakes),
+            (&self.fastresume_denom, &draft.fastresume_denom),
             (&self.listen_ip, &draft.listen_ip),
             (&self.listen_port, &draft.listen_port),
             (&self.ip_filter, &draft.ip_filter),
@@ -601,6 +726,10 @@ impl SettingsScreen {
             connect_timeout: text(&self.form.connect_timeout),
             read_write_timeout: text(&self.form.read_write_timeout),
             keep_alive: text(&self.form.keep_alive),
+            upload_slots: text(&self.form.upload_slots),
+            magnet_timeout: text(&self.form.magnet_timeout),
+            max_handshakes: text(&self.form.max_handshakes),
+            fastresume_denom: text(&self.form.fastresume_denom),
             listen_ip: text(&self.form.listen_ip),
             listen_port: text(&self.form.listen_port),
             dht: self.dht,
@@ -629,7 +758,7 @@ impl SettingsScreen {
         }
     }
 
-    /// Read the five settings tabs from the daemon.
+    /// Read the six settings tabs from the daemon.
     pub fn load(&mut self, cx: &mut Context<Self>) {
         self.loading = true;
         self.error = None;
@@ -703,7 +832,12 @@ impl SettingsScreen {
         self.pending = true;
         self.error = None;
         self.notice = None;
-        let restart = changes.network.is_some();
+        // Network values and the two restart knobs only apply on the next start.
+        let restart = changes.network.is_some()
+            || changes.advanced.as_ref().is_some_and(|adv| {
+                adv.max_concurrent_handshakes != base.advanced.max_concurrent_handshakes
+                    || adv.fastresume_validation_denom != base.advanced.fastresume_validation_denom
+            });
         let rx = cx
             .global::<Bridge>()
             .call(move |client: SharedClient| async move {
@@ -734,7 +868,7 @@ impl SettingsScreen {
             .global::<Bridge>()
             .call(move |client: SharedClient| async move {
                 let mut client = client.lock().await;
-                client.reset_network().await
+                client.reset_network().await.map(|()| false)
             });
         self._save = Some(
             cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -748,12 +882,13 @@ impl SettingsScreen {
         cx.notify();
     }
 
-    fn apply_saved(&mut self, reply: Result<(), Error>, restart: bool, cx: &mut Context<Self>) {
+    /// `daemon_restart` is the restart flag the daemon returned for an advanced save.
+    fn apply_saved(&mut self, reply: Result<bool, Error>, restart: bool, cx: &mut Context<Self>) {
         self.pending = false;
         match reply {
-            Ok(()) => {
-                self.notice = Some(if restart {
-                    "Saved. Restart to apply.".to_owned()
+            Ok(daemon_restart) => {
+                self.notice = Some(if restart || daemon_restart {
+                    RESTART_NOTICE.to_owned()
                 } else {
                     "Saved.".to_owned()
                 });
@@ -772,8 +907,10 @@ impl SettingsScreen {
     }
 }
 
-/// Post the edited sections in the daemon's order.
-async fn post_changes(client: &mut Client, changes: &SettingsChanges) -> Result<(), Error> {
+/// Post the edited sections in the daemon's order. `true` when the daemon says a
+/// saved advanced value needs a restart.
+async fn post_changes(client: &mut Client, changes: &SettingsChanges) -> Result<bool, Error> {
+    let mut restart_required = false;
     if let Some(body) = &changes.network {
         client.set_network(body).await?;
     }
@@ -781,7 +918,7 @@ async fn post_changes(client: &mut Client, changes: &SettingsChanges) -> Result<
         client.set_downloads(body).await?;
     }
     if let Some(body) = &changes.advanced {
-        client.set_advanced(body).await?;
+        restart_required = client.set_advanced(body).await?.restart_required;
     }
     if let Some(body) = &changes.proxy {
         client.set_proxy(body).await?;
@@ -807,7 +944,7 @@ async fn post_changes(client: &mut Client, changes: &SettingsChanges) -> Result<
     if let Some(body) = &changes.seed_limits {
         client.set_seed_limits(body).await?;
     }
-    Ok(())
+    Ok(restart_required)
 }
 
 /// A text field with its validation message, if the draft has one for `key`.
@@ -822,6 +959,17 @@ fn text_field(
         Some(message) => field.validation(FieldValidationState::Error, message.clone()),
         None => field,
     }
+}
+
+/// A numeric field with its caps shown as a caption.
+fn range_field(
+    label: &'static str,
+    input: &Entity<TextInput>,
+    errors: &BTreeMap<&'static str, String>,
+    key: &'static str,
+    (min, max): (u64, u64),
+) -> Field {
+    text_field(label, input, errors, key).helper_text(range_caption(min, max))
 }
 
 /// "Use startup flags": drops the saved network values; the next start uses the flags.
@@ -883,24 +1031,6 @@ impl Render for SettingsScreen {
                     self.incomplete_suffix,
                     &me,
                     |s, v| s.incomplete_suffix = v,
-                ))
-                .child(text_field(
-                    "Connect timeout (s)",
-                    &self.form.connect_timeout,
-                    &errors,
-                    "connect_timeout",
-                ))
-                .child(text_field(
-                    "Read/write timeout (s)",
-                    &self.form.read_write_timeout,
-                    &errors,
-                    "read_write_timeout",
-                ))
-                .child(text_field(
-                    "Keep-alive (s)",
-                    &self.form.keep_alive,
-                    &errors,
-                    "keep_alive",
                 ))
                 .child(text_field(
                     "IP filter",
@@ -981,18 +1111,6 @@ impl Render for SettingsScreen {
                     &errors,
                     "upload_bps",
                 ))
-                .child(text_field(
-                    "Peer limit",
-                    &self.form.peer_limit,
-                    &errors,
-                    "peer_limit",
-                ))
-                .child(text_field(
-                    "Connection limit",
-                    &self.form.init_limit,
-                    &errors,
-                    "init_limit",
-                ))
                 .child(switch_row(
                     "alt-enabled",
                     "Alternative speed limits",
@@ -1071,6 +1189,85 @@ impl Render for SettingsScreen {
                     &self.form.seed_minutes,
                     &errors,
                     "seed_minutes",
+                )),
+            SettingsTab::Advanced => div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(Label::new("Timeouts"))
+                .child(range_field(
+                    "Connect timeout (s)",
+                    &self.form.connect_timeout,
+                    &errors,
+                    "connect_timeout",
+                    (CONNECT_TIMEOUT_SECS_MIN, CONNECT_TIMEOUT_SECS_MAX),
+                ))
+                .child(range_field(
+                    "Read/write timeout (s)",
+                    &self.form.read_write_timeout,
+                    &errors,
+                    "read_write_timeout",
+                    (READ_WRITE_TIMEOUT_SECS_MIN, READ_WRITE_TIMEOUT_SECS_MAX),
+                ))
+                .child(range_field(
+                    "Keep-alive (s)",
+                    &self.form.keep_alive,
+                    &errors,
+                    "keep_alive",
+                    (KEEP_ALIVE_SECS_MIN, KEEP_ALIVE_SECS_MAX),
+                ))
+                .child(range_field(
+                    "Magnet resolution timeout (s)",
+                    &self.form.magnet_timeout,
+                    &errors,
+                    "magnet_timeout",
+                    (
+                        MAGNET_RESOLUTION_TIMEOUT_SECS_MIN,
+                        MAGNET_RESOLUTION_TIMEOUT_SECS_MAX,
+                    ),
+                ))
+                .child(Label::new("Limits"))
+                .child(range_field(
+                    "Peer limit (per torrent)",
+                    &self.form.peer_limit,
+                    &errors,
+                    "peer_limit",
+                    (PEER_LIMIT_MIN, PEER_LIMIT_MAX),
+                ))
+                .child(range_field(
+                    "Connection limit (torrent starts at once)",
+                    &self.form.init_limit,
+                    &errors,
+                    "init_limit",
+                    (CONCURRENT_INIT_LIMIT_MIN, CONCURRENT_INIT_LIMIT_MAX),
+                ))
+                .child(range_field(
+                    "Upload slots (per torrent)",
+                    &self.form.upload_slots,
+                    &errors,
+                    "upload_slots",
+                    (UPLOAD_SLOTS_MIN, UPLOAD_SLOTS_MAX),
+                ))
+                .child(Label::new("Needs restart"))
+                .child(range_field(
+                    "Concurrent handshakes",
+                    &self.form.max_handshakes,
+                    &errors,
+                    "max_handshakes",
+                    (MAX_CONCURRENT_HANDSHAKES_MIN, MAX_CONCURRENT_HANDSHAKES_MAX),
+                ))
+                .child(range_field(
+                    "Fastresume validation (0 = skip)",
+                    &self.form.fastresume_denom,
+                    &errors,
+                    "fastresume_denom",
+                    (
+                        FASTRESUME_VALIDATION_DENOM_MIN,
+                        FASTRESUME_VALIDATION_DENOM_MAX,
+                    ),
+                ))
+                .child(Label::new(
+                    "Handshake and fastresume values apply after a restart.",
                 )),
         };
 
@@ -1179,6 +1376,81 @@ mod tests {
     }
 
     #[test]
+    fn over_cap_and_under_min_advanced_values_block_changes() {
+        let snap = snapshot();
+        type Setter = fn(&mut SettingsDraft, String);
+        let cases: [(&str, Setter); 8] = [
+            ("connect_timeout", |d, v| d.connect_timeout = v),
+            ("read_write_timeout", |d, v| d.read_write_timeout = v),
+            ("keep_alive", |d, v| d.keep_alive = v),
+            ("upload_slots", |d, v| d.upload_slots = v),
+            ("magnet_timeout", |d, v| d.magnet_timeout = v),
+            ("max_handshakes", |d, v| d.max_handshakes = v),
+            ("peer_limit", |d, v| d.peer_limit = v),
+            ("init_limit", |d, v| d.init_limit = v),
+        ];
+        let bounds = [
+            (CONNECT_TIMEOUT_SECS_MIN, CONNECT_TIMEOUT_SECS_MAX),
+            (READ_WRITE_TIMEOUT_SECS_MIN, READ_WRITE_TIMEOUT_SECS_MAX),
+            (KEEP_ALIVE_SECS_MIN, KEEP_ALIVE_SECS_MAX),
+            (UPLOAD_SLOTS_MIN, UPLOAD_SLOTS_MAX),
+            (
+                MAGNET_RESOLUTION_TIMEOUT_SECS_MIN,
+                MAGNET_RESOLUTION_TIMEOUT_SECS_MAX,
+            ),
+            (MAX_CONCURRENT_HANDSHAKES_MIN, MAX_CONCURRENT_HANDSHAKES_MAX),
+            (PEER_LIMIT_MIN, PEER_LIMIT_MAX),
+            (CONCURRENT_INIT_LIMIT_MIN, CONCURRENT_INIT_LIMIT_MAX),
+        ];
+        for ((key, set), (min, max)) in cases.into_iter().zip(bounds) {
+            for ok in [min, max] {
+                let mut draft = SettingsDraft::from_snapshot(&snap);
+                set(&mut draft, ok.to_string());
+                assert!(!draft.errors().contains_key(key), "{key}={ok} is allowed");
+                assert!(draft.changes(&snap).is_ok(), "{key}={ok} saves");
+            }
+            for bad in [max + 1, min.wrapping_sub(1)] {
+                if bad == u64::MAX {
+                    continue; // a minimum of 0 has no under-min value
+                }
+                let mut draft = SettingsDraft::from_snapshot(&snap);
+                set(&mut draft, bad.to_string());
+                let message = draft.errors().get(key).cloned();
+                assert!(message.is_some(), "{key}={bad} is refused");
+                assert_eq!(draft.changes(&snap), Err(message.unwrap()));
+            }
+        }
+    }
+
+    #[test]
+    fn fastresume_zero_is_allowed_and_one_over_is_not() {
+        let snap = snapshot();
+        let mut draft = SettingsDraft::from_snapshot(&snap);
+        draft.fastresume_denom = "0".into();
+        let body = draft.changes(&snap).unwrap().advanced.unwrap();
+        assert_eq!(body.fastresume_validation_denom, Some(0));
+        draft.fastresume_denom = (FASTRESUME_VALIDATION_DENOM_MAX + 1).to_string();
+        assert!(draft.changes(&snap).is_err());
+    }
+
+    #[test]
+    fn blank_advanced_fields_mean_default_and_post_nothing() {
+        let snap = snapshot();
+        let mut draft = SettingsDraft::from_snapshot(&snap);
+        draft.upload_slots = String::new();
+        assert!(draft.changes(&snap).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_advanced_tab_is_listed() {
+        assert_eq!(
+            SettingsTab::from_id("advanced"),
+            Some(SettingsTab::Advanced)
+        );
+        assert!(SettingsTab::ALL.contains(&(SettingsTab::Advanced, "advanced", "Advanced")));
+    }
+
+    #[test]
     fn clearing_the_suffix_switch_posts_downloads() {
         let mut snap = snapshot();
         snap.downloads.incomplete_file_suffix = true;
@@ -1270,6 +1542,14 @@ mod tests {
                 .respond_with(ResponseTemplate::new(200))
                 .mount(&server)
                 .await;
+            Mock::given(method("POST"))
+                .and(path("/session/advanced"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_raw(r#"{"restart_required":true}"#, "application/json"),
+                )
+                .mount(&server)
+                .await;
             server
         });
         let bridge = Bridge::new(&server.uri()).unwrap();
@@ -1321,6 +1601,69 @@ mod tests {
         assert_eq!(posts[0].url.path(), "/torrents/seed_limits");
         let body: serde_json::Value = serde_json::from_slice(&posts[0].body).unwrap();
         assert_eq!(body["ratio_limit"], 3.5);
+    }
+
+    #[gpui::test]
+    fn an_advanced_save_posts_the_edited_knob_and_shows_the_restart_notice(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (runtime, server) = daemon(cx);
+        let screen = cx.new(SettingsScreen::new);
+        screen.update(cx, |screen, cx| screen.load(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_busy()));
+        screen.read_with(cx, |s, cx| {
+            assert!(s.error().is_none(), "{:?}", s.error());
+            let draft = s.draft(cx);
+            assert_eq!(draft.upload_slots, "4");
+            assert_eq!(draft.max_handshakes, "64");
+        });
+        let slots = screen.read_with(cx, |s, _| s.form.upload_slots.clone());
+        slots.update(cx, |field, cx| field.set_value("8", cx));
+        screen.update(cx, |screen, cx| screen.save(cx));
+        drive(cx, |cx| {
+            screen.read_with(cx, |s, _| !s.is_busy() && s.notice.is_some())
+        });
+        screen.read_with(cx, |s, _| {
+            assert!(s.error().is_none(), "{:?}", s.error());
+            assert_eq!(s.notice.as_deref(), Some(RESTART_NOTICE));
+        });
+        let posts: Vec<_> = runtime
+            .block_on(server.received_requests())
+            .unwrap()
+            .into_iter()
+            .filter(|req| req.method.as_str() == "POST" && req.url.path() != "/auth/login")
+            .collect();
+        assert_eq!(posts.len(), 1, "only the advanced section is posted");
+        assert_eq!(posts[0].url.path(), "/session/advanced");
+        let body: serde_json::Value = serde_json::from_slice(&posts[0].body).unwrap();
+        assert_eq!(body["upload_slots"], 8);
+        assert_eq!(body["connect_timeout_secs"], 10);
+        assert_eq!(body["max_concurrent_handshakes"], 64);
+        assert!(body.get("peer_limit").is_none(), "limits post separately");
+    }
+
+    #[gpui::test]
+    fn an_over_cap_advanced_field_blocks_the_save(cx: &mut gpui::TestAppContext) {
+        let (runtime, server) = daemon(cx);
+        let screen = cx.new(SettingsScreen::new);
+        screen.update(cx, |screen, cx| screen.load(cx));
+        drive(cx, |cx| screen.read_with(cx, |s, _| !s.is_busy()));
+        let slots = screen.read_with(cx, |s, _| s.form.upload_slots.clone());
+        slots.update(cx, |field, cx| {
+            field.set_value((UPLOAD_SLOTS_MAX + 1).to_string(), cx);
+        });
+        screen.update(cx, |screen, cx| screen.save(cx));
+        screen.read_with(cx, |s, _| {
+            assert!(s.error().unwrap().contains("Upload slots"));
+            assert!(!s.is_busy());
+        });
+        let posts = runtime
+            .block_on(server.received_requests())
+            .unwrap()
+            .iter()
+            .filter(|req| req.method.as_str() == "POST" && req.url.path() != "/auth/login")
+            .count();
+        assert_eq!(posts, 0);
     }
 
     #[gpui::test]
