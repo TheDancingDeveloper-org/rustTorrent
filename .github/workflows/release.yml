@@ -144,6 +144,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.tag || github.ref_name }}
+      # The runner service runs as LocalSystem, so its PATH lacks the cargo bin
+      # dir. Put it on PATH for this and every later step (cmd and Git Bash).
+      - name: Add cargo to PATH
+        shell: cmd
+        run: |
+          set "CH=%CARGO_HOME%"
+          if "%CH%"=="" set "CH=C:\Users\Sprooty\.cargo"
+          if not exist "%CH%\bin\rustup.exe" (echo ::error::rustup.exe not found in %CH%\bin & exit /b 1)
+          echo %CH%\bin>> %GITHUB_PATH%
       # CARGO_HOME and RUSTUP_HOME come from the runner's .env. The toolchain
       # matches the Linux jobs (1.95); MSVC and the Windows SDK are on the box.
       - name: Install Rust toolchain
