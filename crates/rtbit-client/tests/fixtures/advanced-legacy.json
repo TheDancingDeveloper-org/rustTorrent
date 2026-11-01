@@ -1,0 +1,1 @@
+{"connect_timeout_secs": 10, "read_write_timeout_secs": 30, "keep_alive_secs": 120}
