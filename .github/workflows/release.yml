@@ -34,7 +34,7 @@ jobs:
     # the toolchain, the profile environment and the artefact names in step.
     # Each target's profile environment is exported in its own step, so one
     # target's flags never reach the other build.
-    runs-on: [self-hosted, rust-heavy]
+    runs-on: [self-hosted, linux, rust-heavy]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -147,14 +147,16 @@ jobs:
       # CARGO_HOME and RUSTUP_HOME come from the runner's .env. The toolchain
       # matches the Linux jobs (1.95); MSVC and the Windows SDK are on the box.
       - name: Install Rust toolchain
-        shell: powershell
+        # cmd, not powershell: the runner writes a temp .ps1, which the box's
+        # execution policy refuses to run.
+        shell: cmd
         run: |
-          $ErrorActionPreference = 'Stop'
           rustup toolchain install 1.95 --profile minimal --target x86_64-pc-windows-msvc
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if errorlevel 1 exit /b 1
           rustc +1.95 --version
       - name: Build rtbit-fluent (native Windows)
-        shell: bash
+        # Git Bash by path: plain `bash` on this runner is the WSL launcher.
+        shell: '"C:\Program Files\Git\bin\bash.exe" --noprofile --norc -eo pipefail {0}'
         env:
           RUSTUP_TOOLCHAIN: "1.95"
         run: |
@@ -176,7 +178,7 @@ jobs:
     needs: [build, build-windows-fluent]
     # Signing secrets never run from a manual dispatch off a feature branch.
     if: github.event_name != 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux]
     permissions:
       contents: read
       id-token: write
@@ -274,7 +276,7 @@ jobs:
     needs: sign
     # Reads the Authenticode certificate, so it follows the same dispatch rule as sign.
     if: github.event_name != 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux]
     permissions:
       contents: read
     steps:
@@ -379,7 +381,7 @@ jobs:
 
   publish:
     needs: [build, sign, channels]
-    runs-on: [self-hosted, docker, publish]
+    runs-on: [self-hosted, linux, docker, publish]
     permissions:
       contents: write
     outputs:
@@ -470,7 +472,7 @@ jobs:
   submit:
     needs: publish
     if: needs.publish.outputs.prerelease == 'false'
-    runs-on: [self-hosted, docker, publish]
+    runs-on: [self-hosted, linux, docker, publish]
     permissions:
       contents: read
     strategy:
