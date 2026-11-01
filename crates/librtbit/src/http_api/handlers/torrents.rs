@@ -556,6 +556,37 @@ pub async fn h_torrent_action_update_only_files(
         .map(axum::Json)
 }
 
+#[derive(Deserialize)]
+#[cfg_attr(feature = "swagger", derive(utoipa::ToSchema))]
+pub struct SetFileIncludedRequest {
+    included: bool,
+}
+
+#[cfg_attr(feature = "swagger", utoipa::path(
+    post,
+    path = "/torrents/{id}/files/{index}/included",
+    params(
+        ("id" = String, Path, description = "Torrent ID or info hash"),
+        ("index" = usize, Path, description = "File index"),
+    ),
+    request_body(content = SetFileIncludedRequest, description = "Whether the file is downloaded"),
+    responses(
+        (status = 200, description = "File selection updated", body = EmptyJsonResponse),
+        (status = 400, description = "File index out of range or metadata not resolved")
+    )
+))]
+pub async fn h_torrent_file_set_included(
+    State(state): State<ApiState>,
+    Path((idx, file_index)): Path<(TorrentIdOrHash, usize)>,
+    axum::Json(req): axum::Json<SetFileIncludedRequest>,
+) -> Result<impl IntoResponse> {
+    state
+        .api
+        .api_torrent_file_set_included(idx, file_index, req.included)
+        .await
+        .map(axum::Json)
+}
+
 #[cfg_attr(feature = "swagger", utoipa::path(
     get,
     path = "/stats",

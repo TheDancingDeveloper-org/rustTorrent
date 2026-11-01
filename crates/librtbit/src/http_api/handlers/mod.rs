@@ -85,6 +85,7 @@ async fn h_api_root(parts: Parts) -> impl IntoResponse {
             "POST /torrents/{id_or_infohash}/delete": "Forget about the torrent, remove the files",
             "POST /torrents/{id_or_infohash}/add_peers": "Add peers (newline-delimited)",
             "POST /torrents/{id_or_infohash}/update_only_files": "Change the selection of files to download. You need to POST json of the following form {\"only_files\": [0, 1, 2]}",
+            "POST /torrents/{id_or_infohash}/files/{index}/included": "Include or exclude one file. POST json of the form {\"included\": true}; 400 if the index is out of range",
             "POST /rust_log": "Set RUST_LOG to this post launch (for debugging)",
         },
         "server": "rtbit",
@@ -198,6 +199,10 @@ pub fn make_api_router(state: ApiState) -> Router {
             .route(
                 "/torrents/{id}/update_only_files",
                 post(torrents::h_torrent_action_update_only_files),
+            )
+            .route(
+                "/torrents/{id}/files/{index}/included",
+                post(torrents::h_torrent_file_set_included),
             )
             .route("/torrents/{id}/add_peers", post(torrents::h_add_peers))
             .route("/torrents/create", post(torrents::h_create_torrent))

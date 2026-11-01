@@ -156,10 +156,10 @@ impl DetailPane {
         let Some(file) = files.get(index) else {
             return;
         };
-        let indices = next_selection(&files, index, !file.included);
+        let included = !file.included;
         let rx = cx.global::<Bridge>().call(move |client| async move {
             let mut client = client.lock().await;
-            client.update_only_files(id, &indices).await
+            client.set_file_included(id, index, included).await
         });
         self._action = Some(
             cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -475,8 +475,8 @@ mod tests {
         // skip.bin (index 1) is excluded in the fixture, so including it posts [0, 1].
         runtime.block_on(
             Mock::given(method("POST"))
-                .and(path("/torrents/7/update_only_files"))
-                .and(body_string(r#"{"only_files":[0,1]}"#))
+                .and(path("/torrents/7/files/1/included"))
+                .and(body_string(r#"{"included":true}"#))
                 .respond_with(ResponseTemplate::new(200))
                 .expect(1)
                 .mount(&server),
@@ -492,7 +492,7 @@ mod tests {
                 .unwrap()
                 .iter()
                 .filter(|r| {
-                    r.method.as_str() == "POST" && r.url.path() == "/torrents/7/update_only_files"
+                    r.method.as_str() == "POST" && r.url.path() == "/torrents/7/files/1/included"
                 })
                 .count()
         };
