@@ -1187,3 +1187,80 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+mod epoch_write_tests {
+    use std::sync::mpsc;
+    use std::thread;
+
+    use super::*;
+
+    #[test]
+    fn a_stale_write_is_skipped_and_a_current_write_runs() {
+        let epoch = Epoch::default();
+        let stale = Some(epoch.get());
+        epoch.bump();
+
+        let mut stale_ran = false;
+        epoch.write_if_current(stale, || stale_ran = true);
+        assert!(
+            !stale_ran,
+            "a write from before a newer attempt must be skipped"
+        );
+
+        let current = Some(epoch.get());
+        let mut current_ran = false;
+        epoch.write_if_current(current, || current_ran = true);
+        assert!(current_ran, "a write from the current attempt must run");
+
+        let mut unconditional_ran = false;
+        epoch.write_if_current(None, || unconditional_ran = true);
+        assert!(unconditional_ran, "an unconditional write must always run");
+    }
+
+    #[test]
+    fn a_stale_write_holding_the_lock_is_ordered_before_the_newer_write() {
+        let epoch = Epoch::default();
+        let store = MemoryStore::default();
+        let stale_expected = Some(epoch.get());
+        let (entered_tx, entered_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+
+        // Stale writer: passes the epoch check, then holds the lock inside the write.
+        let stale = {
+            let epoch = epoch.clone();
+            let store = store.clone();
+            thread::spawn(move || {
+                epoch.write_if_current(stale_expected, || {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    let _ = store.store("daemon", "stale");
+                });
+            })
+        };
+        entered_rx.recv().unwrap();
+
+        // Newer attempt: bumps the epoch and tries to write while the stale write holds the lock.
+        let newer = {
+            let epoch = epoch.clone();
+            let store = store.clone();
+            thread::spawn(move || {
+                epoch.bump();
+                let now = Some(epoch.get());
+                epoch.write_if_current(now, || {
+                    let _ = store.store("daemon", "current");
+                });
+            })
+        };
+
+        release_tx.send(()).unwrap();
+        stale.join().unwrap();
+        newer.join().unwrap();
+
+        assert_eq!(
+            store.load("daemon"),
+            Some(Some("current".to_owned())),
+            "the newer attempt's token must win regardless of thread timing"
+        );
+    }
+}
