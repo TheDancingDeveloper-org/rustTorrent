@@ -2,7 +2,7 @@
 # Build and stage the desktop client (crates/rtbit-fluent, gpui) release assets.
 #
 #   build-desktop.sh linux   <tag> <dir>   binary + .deb, built in a container
-#   build-desktop.sh windows <tag> <dir>   stages the native Windows .exe; run on windows-latest
+#   build-desktop.sh windows <tag> <dir>   stages the native Windows .exe; run on the self-hosted Windows runner
 #   build-desktop.sh sbom    <tag> <dir>   CycloneDX SBOM of the client graph
 #
 # Artifacts are named rtbit-fluent-<tag>-*.
