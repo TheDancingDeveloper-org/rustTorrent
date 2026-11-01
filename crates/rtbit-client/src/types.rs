@@ -440,7 +440,7 @@ pub struct DownloadsConfig {
     pub incomplete_file_suffix: bool,
 }
 
-/// Caps for `AdvancedConfig`, mirrored from the daemon so the UI validates
+/// Caps for `AdvancedConfig` and `RateLimits`, mirrored from the daemon so the UI validates
 /// with the same limits. The daemon refuses values outside these with 400.
 pub const CONNECT_TIMEOUT_SECS_MIN: u64 = 1;
 pub const CONNECT_TIMEOUT_SECS_MAX: u64 = 300;
@@ -464,6 +464,11 @@ pub const FASTRESUME_VALIDATION_DENOM_MAX: u64 = 1000;
 
 /// `GET /session/advanced`. Seconds; null is the engine default.
 ///
+/// The peer limit and the concurrent-init limit are not Advanced knobs: they
+/// belong to `RateLimits` (`GET`/`POST /torrents/limits`, `Client::set_limits`).
+/// The field set here must match the daemon's `AdvancedConfig`; the shared
+/// fixture `advanced.json` pins the two together.
+///
 /// The knobs after `keep_alive_secs` are additive: an older daemon omits them
 /// and they decode as `None`. A `None` is left out of a POST body, so an old
 /// daemon sees the same three-field body it always did.
@@ -472,12 +477,6 @@ pub struct AdvancedConfig {
     pub connect_timeout_secs: Option<u64>,
     pub read_write_timeout_secs: Option<u64>,
     pub keep_alive_secs: Option<u64>,
-    /// Per-torrent peer cap for torrents started after the save.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub peer_limit: Option<u64>,
-    /// Concurrent torrent initialisations.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub concurrent_init_limit: Option<u64>,
     /// Upload slots per torrent, for torrents started after the save.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upload_slots: Option<u64>,
