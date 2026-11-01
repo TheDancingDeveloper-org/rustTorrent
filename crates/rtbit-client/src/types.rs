@@ -440,12 +440,65 @@ pub struct DownloadsConfig {
     pub incomplete_file_suffix: bool,
 }
 
+/// Caps for `AdvancedConfig`, mirrored from the daemon so the UI validates
+/// with the same limits. The daemon refuses values outside these with 400.
+pub const CONNECT_TIMEOUT_SECS_MIN: u64 = 1;
+pub const CONNECT_TIMEOUT_SECS_MAX: u64 = 300;
+pub const READ_WRITE_TIMEOUT_SECS_MIN: u64 = 1;
+pub const READ_WRITE_TIMEOUT_SECS_MAX: u64 = 600;
+pub const KEEP_ALIVE_SECS_MIN: u64 = 1;
+pub const KEEP_ALIVE_SECS_MAX: u64 = 600;
+pub const PEER_LIMIT_MIN: u64 = 1;
+pub const PEER_LIMIT_MAX: u64 = 5000;
+pub const CONCURRENT_INIT_LIMIT_MIN: u64 = 1;
+pub const CONCURRENT_INIT_LIMIT_MAX: u64 = 32;
+pub const UPLOAD_SLOTS_MIN: u64 = 1;
+pub const UPLOAD_SLOTS_MAX: u64 = 64;
+pub const MAGNET_RESOLUTION_TIMEOUT_SECS_MIN: u64 = 10;
+pub const MAGNET_RESOLUTION_TIMEOUT_SECS_MAX: u64 = 900;
+pub const MAX_CONCURRENT_HANDSHAKES_MIN: u64 = 8;
+pub const MAX_CONCURRENT_HANDSHAKES_MAX: u64 = 512;
+/// 0 means skip fastresume validation.
+pub const FASTRESUME_VALIDATION_DENOM_MIN: u64 = 0;
+pub const FASTRESUME_VALIDATION_DENOM_MAX: u64 = 1000;
+
 /// `GET /session/advanced`. Seconds; null is the engine default.
+///
+/// The knobs after `keep_alive_secs` are additive: an older daemon omits them
+/// and they decode as `None`. A `None` is left out of a POST body, so an old
+/// daemon sees the same three-field body it always did.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
 pub struct AdvancedConfig {
     pub connect_timeout_secs: Option<u64>,
     pub read_write_timeout_secs: Option<u64>,
     pub keep_alive_secs: Option<u64>,
+    /// Per-torrent peer cap for torrents started after the save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_limit: Option<u64>,
+    /// Concurrent torrent initialisations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concurrent_init_limit: Option<u64>,
+    /// Upload slots per torrent, for torrents started after the save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload_slots: Option<u64>,
+    /// Session default for magnet resolution. A per-add value still wins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnet_resolution_timeout_secs: Option<u64>,
+    /// Restart knob: the daemon reads this at startup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_handshakes: Option<u64>,
+    /// Restart knob: 0 skips fastresume validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fastresume_validation_denom: Option<u64>,
+}
+
+/// Reply to `POST /session/advanced`. `restart_required` is true when a saved
+/// value only applies after the daemon restarts. An older daemon sends an
+/// empty object, which reads as `false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub struct AdvancedSaved {
+    #[serde(default)]
+    pub restart_required: bool,
 }
 
 /// `GET /session/network`. A POST saves values for the next start; they never apply live.
