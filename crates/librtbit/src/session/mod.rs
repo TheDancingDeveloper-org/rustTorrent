@@ -50,7 +50,7 @@ use crate::{
     merge_streams::merge_streams,
     peer_connection::PeerConnectionOptions,
     session_persistence::{
-        NetworkSettings, SessionPersistenceStore, SessionSettings,
+        AdvancedSettings, NetworkSettings, SessionPersistenceStore, SessionSettings,
         json::JsonSessionPersistenceStore,
     },
     session_stats::SessionStats,
@@ -148,6 +148,19 @@ pub struct Session {
     peer_connect_timeout_secs: AtomicU64,
     peer_read_write_timeout_secs: AtomicU64,
     peer_keep_alive_secs: AtomicU64,
+    /// Upload slots given to each torrent started from now on. Live.
+    upload_slots: AtomicUsize,
+    /// Session default for resolving a magnet link, in seconds. A per-add
+    /// value still wins. 0 means no timeout. Live.
+    magnet_resolution_timeout_secs: AtomicU64,
+    /// Incoming handshakes allowed at once. Read when the listener starts.
+    max_concurrent_handshakes: usize,
+    /// Advanced knobs as saved (and as they will be written back). Absent
+    /// fields are at their default.
+    saved_advanced: parking_lot::RwLock<AdvancedSettings>,
+    /// What the saved knobs were when this process started: the restart
+    /// knobs in here are the ones actually running.
+    startup_advanced: AdvancedSettings,
     default_storage_factory: Option<BoxStorageFactory>,
     persistence: Option<Arc<dyn SessionPersistenceStore>>,
     trackers: HashSet<url::Url>,
@@ -404,6 +417,7 @@ impl Session {
             let mut seed_limits = crate::session::ShareLimits::default();
             let mut persisted_proxy: Option<String> = None;
             let mut pending_network: Option<NetworkSettings> = None;
+            let mut saved_advanced = AdvancedSettings::default();
             if let Some(p) = persistence.as_ref() {
                 match p.load_session_settings().await {
                     Ok(settings) => {
@@ -421,6 +435,7 @@ impl Session {
                         use_part_files = settings.part_files.unwrap_or(false);
                         persisted_proxy = settings.proxy_url;
                         pending_network = settings.network;
+                        saved_advanced = settings.advanced.unwrap_or_default().sanitized();
                     }
                     Err(e) => warn!("error loading session settings from persistence: {e:#}"),
                 }
@@ -517,6 +532,22 @@ impl Session {
                 .as_ref()
                 .and_then(|p| p.peer_opts)
                 .unwrap_or_default();
+            // Timeouts saved from the Advanced tab win over the startup options.
+            let peer_opts = {
+                let saved = |v: Option<u64>| v.map(Duration::from_secs);
+                PeerConnectionOptions {
+                    connect_timeout: saved(saved_advanced.connect_timeout_secs)
+                        .or(peer_opts.connect_timeout),
+                    read_write_timeout: saved(saved_advanced.read_write_timeout_secs)
+                        .or(peer_opts.read_write_timeout),
+                    keep_alive_interval: saved(saved_advanced.keep_alive_secs)
+                        .or(peer_opts.keep_alive_interval),
+                }
+            };
+            let fastresume_validation_denom = saved_advanced
+                .fastresume_validation_denom
+                .and_then(|v| u32::try_from(v).ok())
+                .or(opts.fastresume_validation_denom);
 
 
             // A proxy saved in the session outlives a restart. An explicit
@@ -658,6 +689,21 @@ impl Session {
                     peer_opts.keep_alive_interval.map(|d| d.as_secs()).unwrap_or(0),
                 ),
                 peer_opts,
+                upload_slots: AtomicUsize::new(Self::advanced_usize(
+                    saved_advanced.upload_slots,
+                    crate::session_persistence::DEFAULT_UPLOAD_SLOTS,
+                )),
+                magnet_resolution_timeout_secs: AtomicU64::new(
+                    saved_advanced
+                        .magnet_resolution_timeout_secs
+                        .unwrap_or(crate::session_persistence::DEFAULT_MAGNET_RESOLUTION_TIMEOUT_SECS),
+                ),
+                max_concurrent_handshakes: Self::advanced_usize(
+                    saved_advanced.max_concurrent_handshakes,
+                    crate::session_persistence::DEFAULT_MAX_CONCURRENT_HANDSHAKES,
+                ),
+                saved_advanced: parking_lot::RwLock::new(saved_advanced),
+                startup_advanced: saved_advanced,
                 spawner: spawner.clone(),
                 output_folder: RwLock::new(resolved_output_folder),
                 next_id: AtomicUsize::new(0),
@@ -702,7 +748,7 @@ impl Session {
                 allowlist,
                 banned_peers: Default::default(),
                 lsd,
-                fastresume_validation_denom: opts.fastresume_validation_denom,
+                fastresume_validation_denom,
                 category_manager,
                 tag_manager,
                 completed_folder: RwLock::new(resolved_completed_folder),
@@ -843,6 +889,65 @@ impl Session {
             .store(secs(opts.read_write_timeout), Ordering::Relaxed);
         self.peer_keep_alive_secs
             .store(secs(opts.keep_alive_interval), Ordering::Relaxed);
+    }
+
+    fn advanced_usize(value: Option<u64>, default: usize) -> usize {
+        value
+            .and_then(|v| usize::try_from(v).ok())
+            .unwrap_or(default)
+    }
+
+    /// Upload slots each newly started torrent gets.
+    pub fn upload_slots(&self) -> usize {
+        self.upload_slots.load(Ordering::Relaxed)
+    }
+
+    /// Session default for resolving a magnet link, in seconds.
+    pub fn magnet_resolution_timeout_secs(&self) -> u64 {
+        self.magnet_resolution_timeout_secs.load(Ordering::Relaxed)
+    }
+
+    /// Incoming handshakes allowed at once, as of this start.
+    pub fn max_concurrent_handshakes(&self) -> usize {
+        self.max_concurrent_handshakes
+    }
+
+    /// The Advanced knobs as saved. Absent fields are at their default.
+    pub fn saved_advanced(&self) -> AdvancedSettings {
+        *self.saved_advanced.read()
+    }
+
+    /// The saved Advanced knobs as they were when this process started. The
+    /// restart knobs in here are the ones running.
+    pub fn startup_advanced(&self) -> AdvancedSettings {
+        self.startup_advanced
+    }
+
+    /// Replace the Advanced knobs. The live ones (timeouts, upload slots,
+    /// magnet timeout) apply to what starts next; the restart ones are only
+    /// recorded. Call [`Self::persist_session_settings`] to keep them. The
+    /// caller has already checked every value against its bounds.
+    pub fn set_advanced(&self, settings: AdvancedSettings) {
+        let secs = |v: Option<u64>| v.map(Duration::from_secs);
+        self.set_peer_opts(PeerConnectionOptions {
+            connect_timeout: secs(settings.connect_timeout_secs),
+            read_write_timeout: secs(settings.read_write_timeout_secs),
+            keep_alive_interval: secs(settings.keep_alive_secs),
+        });
+        self.upload_slots.store(
+            Self::advanced_usize(
+                settings.upload_slots,
+                crate::session_persistence::DEFAULT_UPLOAD_SLOTS,
+            ),
+            Ordering::Relaxed,
+        );
+        self.magnet_resolution_timeout_secs.store(
+            settings
+                .magnet_resolution_timeout_secs
+                .unwrap_or(crate::session_persistence::DEFAULT_MAGNET_RESOLUTION_TIMEOUT_SECS),
+            Ordering::Relaxed,
+        );
+        *self.saved_advanced.write() = settings;
     }
 
     pub(super) fn merge_peer_opts(
@@ -1148,10 +1253,9 @@ impl Session {
                         "no known way to resolve peers (no DHT, no trackers, no initial_peers)",
                     )?;
 
-                    const DEFAULT_MAGNET_TIMEOUT_SECS: u64 = 120;
                     let timeout_secs = opts
                         .magnet_resolution_timeout_secs
-                        .unwrap_or(DEFAULT_MAGNET_TIMEOUT_SECS);
+                        .unwrap_or_else(|| self.magnet_resolution_timeout_secs());
 
                     let resolve_fut =
                         self.resolve_magnet(info_hash, peer_rx, &trackers, opts.peer_opts);
@@ -1750,6 +1854,7 @@ impl Session {
         // Copy before the await. The proxy URL sits behind a non-Send lock.
         let proxy_url = self.proxy_url.read().clone();
         let network = *self.pending_network.read();
+        let advanced = Some(*self.saved_advanced.read()).filter(|a| !a.is_empty());
         persistence
             .store_session_settings(&SessionSettings {
                 output_folder: Some(self.output_folder()),
@@ -1760,6 +1865,7 @@ impl Session {
                 seed_limits: Some(self.seed_limits()),
                 proxy_url,
                 network,
+                advanced,
             })
             .await
     }

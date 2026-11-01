@@ -10,10 +10,6 @@ use librqbit_utp::BindDevice;
 use tokio::sync::Semaphore;
 use tracing::{Instrument, debug, debug_span, trace, warn};
 
-/// Maximum number of incoming connection handshakes that can run concurrently.
-/// This prevents FD exhaustion during connection bursts.
-const MAX_CONCURRENT_HANDSHAKES: usize = 64;
-
 use crate::{
     listen::Accept,
     read_buf::ReadBuf,
@@ -126,7 +122,11 @@ impl Session {
     pub(super) async fn task_listener<A: Accept>(self: Arc<Self>, l: A) -> anyhow::Result<()> {
         let mut futs = FuturesUnordered::new();
         let session = Arc::downgrade(&self);
-        let handshake_sem = Arc::new(Semaphore::new(MAX_CONCURRENT_HANDSHAKES));
+        // Maximum number of incoming connection handshakes that can run
+        // concurrently. This prevents FD exhaustion during connection bursts.
+        // Read once here: changing it needs a restart.
+        let max_concurrent_handshakes = self.max_concurrent_handshakes();
+        let handshake_sem = Arc::new(Semaphore::new(max_concurrent_handshakes));
         drop(self);
 
         loop {
@@ -137,7 +137,7 @@ impl Session {
                             let permit = match handshake_sem.clone().try_acquire_owned() {
                                 Ok(p) => p,
                                 Err(_) => {
-                                    debug!("max concurrent handshakes ({MAX_CONCURRENT_HANDSHAKES}) reached, dropping connection from {addr}");
+                                    debug!("max concurrent handshakes ({max_concurrent_handshakes}) reached, dropping connection from {addr}");
                                     continue;
                                 }
                             };
