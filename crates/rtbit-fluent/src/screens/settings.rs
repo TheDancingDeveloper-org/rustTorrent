@@ -328,14 +328,13 @@ impl SettingsDraft {
             out.downloads = Some(downloads);
         }
 
-        // Peer limit and connection limit are edited on this tab but saved through
-        // the limits call below, so they stay out of the advanced body and the diff.
+        // Peer limit and connection limit are edited on this tab but belong to the
+        // limits route (POST /torrents/limits), so this body never sets them: both
+        // sides are built from the fields this screen owns plus the default.
         let advanced = AdvancedConfig {
             connect_timeout_secs: parse_opt(&self.connect_timeout, "Connect timeout")?,
             read_write_timeout_secs: parse_opt(&self.read_write_timeout, "Read/write timeout")?,
             keep_alive_secs: parse_opt(&self.keep_alive, "Keep-alive")?,
-            peer_limit: None,
-            concurrent_init_limit: None,
             upload_slots: parse_opt(&self.upload_slots, "Upload slots")?,
             magnet_resolution_timeout_secs: parse_opt(
                 &self.magnet_timeout,
@@ -346,11 +345,17 @@ impl SettingsDraft {
                 &self.fastresume_denom,
                 "Fastresume validation",
             )?,
+            ..AdvancedConfig::default()
         };
         let shown = AdvancedConfig {
-            peer_limit: None,
-            concurrent_init_limit: None,
-            ..base.advanced.clone()
+            connect_timeout_secs: base.advanced.connect_timeout_secs,
+            read_write_timeout_secs: base.advanced.read_write_timeout_secs,
+            keep_alive_secs: base.advanced.keep_alive_secs,
+            upload_slots: base.advanced.upload_slots,
+            magnet_resolution_timeout_secs: base.advanced.magnet_resolution_timeout_secs,
+            max_concurrent_handshakes: base.advanced.max_concurrent_handshakes,
+            fastresume_validation_denom: base.advanced.fastresume_validation_denom,
+            ..AdvancedConfig::default()
         };
         if advanced != shown {
             out.advanced = Some(advanced);
