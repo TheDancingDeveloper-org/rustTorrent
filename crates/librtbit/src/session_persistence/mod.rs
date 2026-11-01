@@ -52,6 +52,119 @@ pub struct SessionSettings {
     /// applied at the next start and override the command-line values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<NetworkSettings>,
+    /// Advanced-tab knobs saved from the web UI or the native client. The live
+    /// ones apply at start and the restart ones are read only at start. Absent
+    /// means every knob is at its default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advanced: Option<AdvancedSettings>,
+}
+
+// Bounds and defaults for the Advanced knobs. The HTTP handlers re-export the
+// caps (`http_api::handlers::configure::MAX_*`); they live here so loading a
+// hand-edited settings file can apply the same limits without the `http-api`
+// feature.
+pub(crate) const MIN_CONNECT_TIMEOUT_SECS: u64 = 1;
+pub(crate) const MAX_CONNECT_TIMEOUT_SECS: u64 = 300;
+pub(crate) const MIN_READ_WRITE_TIMEOUT_SECS: u64 = 1;
+pub(crate) const MAX_READ_WRITE_TIMEOUT_SECS: u64 = 600;
+pub(crate) const MIN_KEEP_ALIVE_SECS: u64 = 1;
+pub(crate) const MAX_KEEP_ALIVE_SECS: u64 = 600;
+pub(crate) const MIN_UPLOAD_SLOTS: u64 = 1;
+pub(crate) const MAX_UPLOAD_SLOTS: u64 = 64;
+pub(crate) const DEFAULT_UPLOAD_SLOTS: usize = 4;
+pub(crate) const MIN_MAGNET_RESOLUTION_TIMEOUT_SECS: u64 = 10;
+pub(crate) const MAX_MAGNET_RESOLUTION_TIMEOUT_SECS: u64 = 900;
+pub(crate) const DEFAULT_MAGNET_RESOLUTION_TIMEOUT_SECS: u64 = 120;
+pub(crate) const MIN_MAX_CONCURRENT_HANDSHAKES: u64 = 8;
+pub(crate) const MAX_MAX_CONCURRENT_HANDSHAKES: u64 = 512;
+pub(crate) const DEFAULT_MAX_CONCURRENT_HANDSHAKES: usize = 64;
+pub(crate) const MIN_FASTRESUME_VALIDATION_DENOM: u64 = 0;
+pub(crate) const MAX_FASTRESUME_VALIDATION_DENOM: u64 = 1000;
+
+/// Advanced-tab knobs. Each absent field is at its default (the engine
+/// default, or the startup option where there is one).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AdvancedSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect_timeout_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_write_timeout_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_alive_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload_slots: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnet_resolution_timeout_secs: Option<u64>,
+    /// Read only at start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_handshakes: Option<u64>,
+    /// Read only at start. `Some(0)` skips probabilistic fastresume validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fastresume_validation_denom: Option<u64>,
+}
+
+impl AdvancedSettings {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Drop any value outside its bounds, so a hand-edited file can never
+    /// start the session with a stalled semaphore or a zero timeout.
+    pub fn sanitized(mut self) -> Self {
+        fn keep(name: &str, value: &mut Option<u64>, min: u64, max: u64) {
+            if let Some(v) = *value
+                && !(min..=max).contains(&v)
+            {
+                tracing::warn!(
+                    "ignoring saved advanced setting {name}={v}: allowed {min} to {max}"
+                );
+                *value = None;
+            }
+        }
+        keep(
+            "connect_timeout_secs",
+            &mut self.connect_timeout_secs,
+            MIN_CONNECT_TIMEOUT_SECS,
+            MAX_CONNECT_TIMEOUT_SECS,
+        );
+        keep(
+            "read_write_timeout_secs",
+            &mut self.read_write_timeout_secs,
+            MIN_READ_WRITE_TIMEOUT_SECS,
+            MAX_READ_WRITE_TIMEOUT_SECS,
+        );
+        keep(
+            "keep_alive_secs",
+            &mut self.keep_alive_secs,
+            MIN_KEEP_ALIVE_SECS,
+            MAX_KEEP_ALIVE_SECS,
+        );
+        keep(
+            "upload_slots",
+            &mut self.upload_slots,
+            MIN_UPLOAD_SLOTS,
+            MAX_UPLOAD_SLOTS,
+        );
+        keep(
+            "magnet_resolution_timeout_secs",
+            &mut self.magnet_resolution_timeout_secs,
+            MIN_MAGNET_RESOLUTION_TIMEOUT_SECS,
+            MAX_MAGNET_RESOLUTION_TIMEOUT_SECS,
+        );
+        keep(
+            "max_concurrent_handshakes",
+            &mut self.max_concurrent_handshakes,
+            MIN_MAX_CONCURRENT_HANDSHAKES,
+            MAX_MAX_CONCURRENT_HANDSHAKES,
+        );
+        keep(
+            "fastresume_validation_denom",
+            &mut self.fastresume_validation_denom,
+            MIN_FASTRESUME_VALIDATION_DENOM,
+            MAX_FASTRESUME_VALIDATION_DENOM,
+        );
+        self
+    }
 }
 
 /// Startup-only network settings. Each absent field keeps the value the

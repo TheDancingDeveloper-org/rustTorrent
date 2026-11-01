@@ -9,6 +9,7 @@ use crate::{
     ApiError, WithStatusError,
     api::{EmptyJsonResponse, Result},
     limits::LimitsConfig,
+    session_persistence::AdvancedSettings,
 };
 
 #[cfg_attr(feature = "swagger", utoipa::path(
@@ -23,6 +24,24 @@ pub async fn h_update_session_ratelimits(
     State(state): State<ApiState>,
     Json(limits): Json<LimitsConfig>,
 ) -> axum::response::Response {
+    // Validate before applying anything, so a refused body changes nothing.
+    // A zero would stall the session; a huge value would exhaust descriptors.
+    if let Err(err) = bounded(
+        "peer_limit",
+        limits.peer_limit.map(|v| v as u64),
+        MIN_PEER_LIMIT,
+        MAX_PEER_LIMIT,
+    )
+    .and_then(|_| {
+        bounded(
+            "concurrent_init_limit",
+            limits.concurrent_init_limit.map(|v| v as u64),
+            MIN_CONCURRENT_INIT_LIMIT,
+            MAX_CONCURRENT_INIT_LIMIT,
+        )
+    }) {
+        return err.into_response();
+    }
     // Goes through the alt-speed-aware setter: while alternative limits are
     // active this updates the saved normal limits instead of the live limiter.
     state
@@ -111,69 +130,221 @@ pub async fn h_set_downloads(
 
 // --- Advanced library knobs ---
 
-/// Hard caps for the Advanced tab. A value above its cap is refused.
-pub const MAX_CONNECT_TIMEOUT_SECS: u64 = 300;
-pub const MAX_READ_WRITE_TIMEOUT_SECS: u64 = 600;
-pub const MAX_KEEP_ALIVE_SECS: u64 = 600;
+/// Bounds for the Advanced tab. A value outside its bounds is refused with a
+/// 400 that names the field. The caps are defined beside the settings store so
+/// a hand-edited settings file is held to the same limits.
+pub const MIN_CONNECT_TIMEOUT_SECS: u64 = crate::session_persistence::MIN_CONNECT_TIMEOUT_SECS;
+pub const MAX_CONNECT_TIMEOUT_SECS: u64 = crate::session_persistence::MAX_CONNECT_TIMEOUT_SECS;
+pub const MIN_READ_WRITE_TIMEOUT_SECS: u64 =
+    crate::session_persistence::MIN_READ_WRITE_TIMEOUT_SECS;
+pub const MAX_READ_WRITE_TIMEOUT_SECS: u64 =
+    crate::session_persistence::MAX_READ_WRITE_TIMEOUT_SECS;
+pub const MIN_KEEP_ALIVE_SECS: u64 = crate::session_persistence::MIN_KEEP_ALIVE_SECS;
+pub const MAX_KEEP_ALIVE_SECS: u64 = crate::session_persistence::MAX_KEEP_ALIVE_SECS;
+pub const MIN_UPLOAD_SLOTS: u64 = crate::session_persistence::MIN_UPLOAD_SLOTS;
+pub const MAX_UPLOAD_SLOTS: u64 = crate::session_persistence::MAX_UPLOAD_SLOTS;
+pub const MIN_MAGNET_RESOLUTION_TIMEOUT_SECS: u64 =
+    crate::session_persistence::MIN_MAGNET_RESOLUTION_TIMEOUT_SECS;
+pub const MAX_MAGNET_RESOLUTION_TIMEOUT_SECS: u64 =
+    crate::session_persistence::MAX_MAGNET_RESOLUTION_TIMEOUT_SECS;
+pub const MIN_MAX_CONCURRENT_HANDSHAKES: u64 =
+    crate::session_persistence::MIN_MAX_CONCURRENT_HANDSHAKES;
+pub const MAX_MAX_CONCURRENT_HANDSHAKES: u64 =
+    crate::session_persistence::MAX_MAX_CONCURRENT_HANDSHAKES;
+pub const MIN_FASTRESUME_VALIDATION_DENOM: u64 =
+    crate::session_persistence::MIN_FASTRESUME_VALIDATION_DENOM;
+pub const MAX_FASTRESUME_VALIDATION_DENOM: u64 =
+    crate::session_persistence::MAX_FASTRESUME_VALIDATION_DENOM;
+/// `POST /torrents/limits` bounds.
+pub const MIN_PEER_LIMIT: u64 = 1;
+pub const MAX_PEER_LIMIT: u64 = 5000;
+pub const MIN_CONCURRENT_INIT_LIMIT: u64 = 1;
+pub const MAX_CONCURRENT_INIT_LIMIT: u64 = 32;
 
-/// Session-wide peer connection timeouts, in seconds. `None` means the engine default.
-#[derive(Serialize, Deserialize)]
+/// Session-wide Advanced knobs. `None` (or a missing field) means the default,
+/// so a body that only carries the three original timeouts is still accepted.
+///
+/// Live knobs apply at once, to what starts next, and are saved when session
+/// persistence is on: `connect_timeout_secs`, `read_write_timeout_secs`,
+/// `keep_alive_secs` (seconds), `upload_slots` (per torrent started
+/// afterwards) and `magnet_resolution_timeout_secs` (session default; a
+/// per-add value still wins). Restart knobs are saved for the next start and
+/// need persistence: `max_concurrent_handshakes` and
+/// `fastresume_validation_denom` (0 skips probabilistic validation).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AdvancedConfig {
+    #[serde(default)]
     pub connect_timeout_secs: Option<u64>,
+    #[serde(default)]
     pub read_write_timeout_secs: Option<u64>,
+    #[serde(default)]
     pub keep_alive_secs: Option<u64>,
+    #[serde(default)]
+    pub upload_slots: Option<u64>,
+    #[serde(default)]
+    pub magnet_resolution_timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub max_concurrent_handshakes: Option<u64>,
+    #[serde(default)]
+    pub fastresume_validation_denom: Option<u64>,
+}
+
+/// The restart knobs as saved for the next start.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AdvancedRestartKnobs {
+    pub max_concurrent_handshakes: Option<u64>,
+    pub fastresume_validation_denom: Option<u64>,
+}
+
+/// `GET /session/advanced`: the knobs plus whether a restart is pending.
+/// The three timeouts are the values in effect (including startup flags); the
+/// other knobs are the saved values, null when at their default.
+#[derive(Serialize)]
+pub struct AdvancedStatus {
+    #[serde(flatten)]
+    pub config: AdvancedConfig,
+    /// True when a saved restart knob differs from the one this process runs.
+    pub restart_required: bool,
+    /// The saved restart knobs, present only while `restart_required`.
+    pub pending_restart: Option<AdvancedRestartKnobs>,
+    /// False when session persistence is off, so restart knobs cannot be saved.
+    pub can_save: bool,
 }
 
 fn secs_of(d: Option<Duration>) -> Option<u64> {
     d.map(|d| d.as_secs())
 }
 
-fn reject(msg: &'static str) -> crate::ApiError {
-    ApiError::from((StatusCode::BAD_REQUEST, msg))
+/// Check `value` against `min..=max`. `None` is the default and always passes.
+/// The message names the field.
+fn bounded(name: &str, value: Option<u64>, min: u64, max: u64) -> Result<Option<u64>> {
+    match value {
+        Some(v) if !(min..=max).contains(&v) => Err(ApiError::from((
+            StatusCode::BAD_REQUEST,
+            anyhow::anyhow!("{name} must be between {min} and {max}"),
+        ))),
+        other => Ok(other),
+    }
 }
 
-fn capped(value: Option<u64>, cap: u64) -> Result<Option<Duration>> {
-    match value {
-        None => Ok(None),
-        Some(0) => Err(reject("timeout must be at least 1 second")),
-        Some(v) if v > cap => Err(reject("timeout exceeds its cap")),
-        Some(v) => Ok(Some(Duration::from_secs(v))),
+/// Check every Advanced knob. Returns what to apply, or the first refusal.
+fn validate_advanced(config: &AdvancedConfig) -> Result<AdvancedSettings> {
+    Ok(AdvancedSettings {
+        connect_timeout_secs: bounded(
+            "connect_timeout_secs",
+            config.connect_timeout_secs,
+            MIN_CONNECT_TIMEOUT_SECS,
+            MAX_CONNECT_TIMEOUT_SECS,
+        )?,
+        read_write_timeout_secs: bounded(
+            "read_write_timeout_secs",
+            config.read_write_timeout_secs,
+            MIN_READ_WRITE_TIMEOUT_SECS,
+            MAX_READ_WRITE_TIMEOUT_SECS,
+        )?,
+        keep_alive_secs: bounded(
+            "keep_alive_secs",
+            config.keep_alive_secs,
+            MIN_KEEP_ALIVE_SECS,
+            MAX_KEEP_ALIVE_SECS,
+        )?,
+        upload_slots: bounded(
+            "upload_slots",
+            config.upload_slots,
+            MIN_UPLOAD_SLOTS,
+            MAX_UPLOAD_SLOTS,
+        )?,
+        magnet_resolution_timeout_secs: bounded(
+            "magnet_resolution_timeout_secs",
+            config.magnet_resolution_timeout_secs,
+            MIN_MAGNET_RESOLUTION_TIMEOUT_SECS,
+            MAX_MAGNET_RESOLUTION_TIMEOUT_SECS,
+        )?,
+        max_concurrent_handshakes: bounded(
+            "max_concurrent_handshakes",
+            config.max_concurrent_handshakes,
+            MIN_MAX_CONCURRENT_HANDSHAKES,
+            MAX_MAX_CONCURRENT_HANDSHAKES,
+        )?,
+        fastresume_validation_denom: bounded(
+            "fastresume_validation_denom",
+            config.fastresume_validation_denom,
+            MIN_FASTRESUME_VALIDATION_DENOM,
+            MAX_FASTRESUME_VALIDATION_DENOM,
+        )?,
+    })
+}
+
+fn restart_knobs(settings: &AdvancedSettings) -> AdvancedRestartKnobs {
+    AdvancedRestartKnobs {
+        max_concurrent_handshakes: settings.max_concurrent_handshakes,
+        fastresume_validation_denom: settings.fastresume_validation_denom,
     }
 }
 
 pub async fn h_get_advanced(State(state): State<ApiState>) -> Result<impl IntoResponse> {
-    let opts = state.api.session().peer_opts();
-    Ok(Json(AdvancedConfig {
-        connect_timeout_secs: secs_of(opts.connect_timeout),
-        read_write_timeout_secs: secs_of(opts.read_write_timeout),
-        keep_alive_secs: secs_of(opts.keep_alive_interval),
+    let session = state.api.session();
+    let opts = session.peer_opts();
+    let saved = session.saved_advanced();
+    let saved_restart = restart_knobs(&saved);
+    let restart_required = saved_restart != restart_knobs(&session.startup_advanced());
+    Ok(Json(AdvancedStatus {
+        config: AdvancedConfig {
+            connect_timeout_secs: secs_of(opts.connect_timeout),
+            read_write_timeout_secs: secs_of(opts.read_write_timeout),
+            keep_alive_secs: secs_of(opts.keep_alive_interval),
+            upload_slots: saved.upload_slots,
+            magnet_resolution_timeout_secs: saved.magnet_resolution_timeout_secs,
+            max_concurrent_handshakes: saved.max_concurrent_handshakes,
+            fastresume_validation_denom: saved.fastresume_validation_denom,
+        },
+        restart_required,
+        pending_restart: restart_required.then_some(saved_restart),
+        can_save: session.has_persistence(),
     }))
 }
 
+/// Replace the Advanced knobs. Every value is checked first; a refused body
+/// changes nothing. Live knobs apply at once and are saved when persistence is
+/// on. A restart knob needs persistence: without it the live knobs still apply
+/// and the answer is 409.
 pub async fn h_set_advanced(
     State(state): State<ApiState>,
     Json(config): Json<AdvancedConfig>,
 ) -> axum::response::Response {
-    let connect_timeout = match capped(config.connect_timeout_secs, MAX_CONNECT_TIMEOUT_SECS) {
-        Ok(v) => v,
+    let mut settings = match validate_advanced(&config) {
+        Ok(settings) => settings,
         Err(err) => return err.into_response(),
     };
-    let read_write_timeout =
-        match capped(config.read_write_timeout_secs, MAX_READ_WRITE_TIMEOUT_SECS) {
-            Ok(v) => v,
-            Err(err) => return err.into_response(),
+    let session = state.api.session();
+    let persistent = session.has_persistence();
+    let has_restart_knob = restart_knobs(&settings)
+        != AdvancedRestartKnobs {
+            max_concurrent_handshakes: None,
+            fastresume_validation_denom: None,
         };
-    let keep_alive_interval = match capped(config.keep_alive_secs, MAX_KEEP_ALIVE_SECS) {
-        Ok(v) => v,
-        Err(err) => return err.into_response(),
-    };
-    let opts = crate::PeerConnectionOptions {
-        connect_timeout,
-        read_write_timeout,
-        keep_alive_interval,
-    };
-    state.api.session().set_peer_opts(opts);
-    Json(EmptyJsonResponse {}).into_response()
+    if !persistent {
+        // Nothing can be saved, so a restart knob must not linger in memory.
+        settings.max_concurrent_handshakes = None;
+        settings.fastresume_validation_denom = None;
+    }
+    session.set_advanced(settings);
+    if !persistent && has_restart_knob {
+        return ApiError::from((
+            StatusCode::CONFLICT,
+            "session persistence is off, so max_concurrent_handshakes and \
+             fastresume_validation_denom cannot be saved for the next start; \
+             the other settings were applied",
+        ))
+        .into_response();
+    }
+    if let Err(err) = session.persist_session_settings().await {
+        tracing::warn!("could not save advanced settings: {err:#}");
+        return ApiError::from(err).into_response();
+    }
+    let restart_required = persistent
+        && restart_knobs(&session.saved_advanced()) != restart_knobs(&session.startup_advanced());
+    Json(serde_json::json!({ "restart_required": restart_required })).into_response()
 }
 
 // --- Network settings (startup only) ---
@@ -750,34 +921,395 @@ mod tests {
         assert!(resolve_browse_path(Some(downloads.join("escape")), &roots).is_err());
     }
 
+    fn advanced(patch: impl FnOnce(&mut AdvancedConfig)) -> AdvancedConfig {
+        let mut config = AdvancedConfig::default();
+        patch(&mut config);
+        config
+    }
+
+    /// Every knob with its bounds, as a setter and a getter on the body.
+    type Knob = (&'static str, u64, u64, fn(&mut AdvancedConfig, Option<u64>));
+
+    fn knobs() -> [Knob; 7] {
+        [
+            (
+                "connect_timeout_secs",
+                MIN_CONNECT_TIMEOUT_SECS,
+                MAX_CONNECT_TIMEOUT_SECS,
+                |c, v| c.connect_timeout_secs = v,
+            ),
+            (
+                "read_write_timeout_secs",
+                MIN_READ_WRITE_TIMEOUT_SECS,
+                MAX_READ_WRITE_TIMEOUT_SECS,
+                |c, v| c.read_write_timeout_secs = v,
+            ),
+            (
+                "keep_alive_secs",
+                MIN_KEEP_ALIVE_SECS,
+                MAX_KEEP_ALIVE_SECS,
+                |c, v| c.keep_alive_secs = v,
+            ),
+            (
+                "upload_slots",
+                MIN_UPLOAD_SLOTS,
+                MAX_UPLOAD_SLOTS,
+                |c, v| c.upload_slots = v,
+            ),
+            (
+                "magnet_resolution_timeout_secs",
+                MIN_MAGNET_RESOLUTION_TIMEOUT_SECS,
+                MAX_MAGNET_RESOLUTION_TIMEOUT_SECS,
+                |c, v| c.magnet_resolution_timeout_secs = v,
+            ),
+            (
+                "max_concurrent_handshakes",
+                MIN_MAX_CONCURRENT_HANDSHAKES,
+                MAX_MAX_CONCURRENT_HANDSHAKES,
+                |c, v| c.max_concurrent_handshakes = v,
+            ),
+            (
+                "fastresume_validation_denom",
+                MIN_FASTRESUME_VALIDATION_DENOM,
+                MAX_FASTRESUME_VALIDATION_DENOM,
+                |c, v| c.fastresume_validation_denom = v,
+            ),
+        ]
+    }
+
     #[test]
-    fn advanced_caps_reject_zero_and_over_cap_and_keep_empty() {
-        assert!(capped(None, MAX_CONNECT_TIMEOUT_SECS).unwrap().is_none());
+    fn advanced_bounds_are_the_documented_ones() {
+        let got: Vec<_> = knobs().iter().map(|k| (k.0, k.1, k.2)).collect();
         assert_eq!(
-            capped(Some(30), MAX_CONNECT_TIMEOUT_SECS)
-                .unwrap()
-                .unwrap()
-                .as_secs(),
-            30
+            got,
+            vec![
+                ("connect_timeout_secs", 1, 300),
+                ("read_write_timeout_secs", 1, 600),
+                ("keep_alive_secs", 1, 600),
+                ("upload_slots", 1, 64),
+                ("magnet_resolution_timeout_secs", 10, 900),
+                ("max_concurrent_handshakes", 8, 512),
+                ("fastresume_validation_denom", 0, 1000),
+            ]
         );
-        assert!(capped(Some(0), MAX_CONNECT_TIMEOUT_SECS).is_err());
-        assert!(capped(Some(MAX_CONNECT_TIMEOUT_SECS + 1), MAX_CONNECT_TIMEOUT_SECS).is_err());
+        assert_eq!((MIN_PEER_LIMIT, MAX_PEER_LIMIT), (1, 5000));
+        assert_eq!(
+            (MIN_CONCURRENT_INIT_LIMIT, MAX_CONCURRENT_INIT_LIMIT),
+            (1, 32)
+        );
+    }
+
+    #[test]
+    fn advanced_validation_accepts_min_max_null_and_refuses_outside() {
+        for (name, min, max, set) in knobs() {
+            // Null is the default and always passes.
+            assert!(validate_advanced(&advanced(|c| set(c, None))).is_ok());
+            // Both bounds are allowed.
+            for ok in [min, max] {
+                let settings = validate_advanced(&advanced(|c| set(c, Some(ok)))).unwrap();
+                assert_eq!(
+                    serde_json::to_value(settings).unwrap()[name],
+                    serde_json::json!(ok),
+                    "{name}={ok}"
+                );
+            }
+            // One over the cap is refused with a 400 that names the field.
+            let err = validate_advanced(&advanced(|c| set(c, Some(max + 1)))).unwrap_err();
+            assert_eq!(err.status(), StatusCode::BAD_REQUEST, "{name}");
+            assert!(format!("{err}").contains(name), "{name}: {err}");
+            // One under the minimum, where there is room below it.
+            if min > 0 {
+                let err = validate_advanced(&advanced(|c| set(c, Some(min - 1)))).unwrap_err();
+                assert_eq!(err.status(), StatusCode::BAD_REQUEST, "{name}");
+                assert!(format!("{err}").contains(name), "{name}: {err}");
+            }
+        }
+    }
+
+    #[test]
+    fn advanced_body_decodes_old_three_field_and_empty_bodies() {
+        let old: AdvancedConfig = serde_json::from_str(
+            r#"{"connect_timeout_secs":10,"read_write_timeout_secs":null,"keep_alive_secs":120}"#,
+        )
+        .unwrap();
+        assert_eq!(old.connect_timeout_secs, Some(10));
+        assert_eq!(old.read_write_timeout_secs, None);
+        assert_eq!(old.keep_alive_secs, Some(120));
+        assert_eq!(old.upload_slots, None);
+        assert_eq!(old.fastresume_validation_denom, None);
+        assert!(validate_advanced(&old).is_ok());
+        let empty: AdvancedConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty, AdvancedConfig::default());
+        let nulls: AdvancedConfig = serde_json::from_str(
+            r#"{"upload_slots":null,"magnet_resolution_timeout_secs":null,
+                "max_concurrent_handshakes":null,"fastresume_validation_denom":null}"#,
+        )
+        .unwrap();
+        assert_eq!(nulls, AdvancedConfig::default());
+    }
+
+    async fn body_json(resp: axum::response::Response) -> serde_json::Value {
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null)
+    }
+
+    #[tokio::test]
+    async fn set_advanced_applies_live_knobs_and_old_body_still_works() {
+        let (state, session, _output) = network_state(None).await;
+        // Old 3-field body.
+        let resp = h_set_advanced(
+            State(state.clone()),
+            Json(advanced(|c| {
+                c.connect_timeout_secs = Some(15);
+                c.read_write_timeout_secs = Some(20);
+                c.keep_alive_secs = Some(90);
+            })),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_json(resp).await["restart_required"], false);
+        assert_eq!(
+            session.peer_opts().connect_timeout,
+            Some(Duration::from_secs(15))
+        );
+        assert_eq!(session.upload_slots(), 4);
+        assert_eq!(session.magnet_resolution_timeout_secs(), 120);
+
+        // The new live knobs.
+        let resp = h_set_advanced(
+            State(state.clone()),
+            Json(advanced(|c| {
+                c.upload_slots = Some(64);
+                c.magnet_resolution_timeout_secs = Some(10);
+            })),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(session.upload_slots(), 64);
+        assert_eq!(session.magnet_resolution_timeout_secs(), 10);
+        // A body without the timeouts clears them back to the engine default.
+        assert_eq!(session.peer_opts().connect_timeout, None);
+
+        // Null puts a knob back to its default.
+        let resp = h_set_advanced(State(state.clone()), Json(advanced(|_| {}))).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(session.upload_slots(), 4);
+        assert_eq!(session.magnet_resolution_timeout_secs(), 120);
+
+        // GET reports the live values.
+        let resp = h_get_advanced(State(state)).await.unwrap().into_response();
+        let got = body_json(resp).await;
+        assert_eq!(got["restart_required"], false);
+        assert_eq!(got["can_save"], false);
+        assert!(got["pending_restart"].is_null());
+        session.stop().await;
+    }
+
+    #[tokio::test]
+    async fn set_advanced_refusal_changes_nothing_and_names_the_field() {
+        let (state, session, _output) = network_state(None).await;
+        let resp = h_set_advanced(
+            State(state.clone()),
+            Json(advanced(|c| c.upload_slots = Some(8))),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        // A good field next to a bad one is not half-applied.
+        let resp = h_set_advanced(
+            State(state),
+            Json(advanced(|c| {
+                c.upload_slots = Some(2);
+                c.magnet_resolution_timeout_secs = Some(9);
+            })),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(resp).await;
         assert!(
-            capped(
-                Some(MAX_READ_WRITE_TIMEOUT_SECS + 1),
-                MAX_READ_WRITE_TIMEOUT_SECS
+            body["human_readable"]
+                .as_str()
+                .unwrap()
+                .contains("magnet_resolution_timeout_secs")
+        );
+        assert_eq!(session.upload_slots(), 8);
+        session.stop().await;
+    }
+
+    #[tokio::test]
+    async fn set_advanced_restart_knob_without_persistence_is_a_conflict() {
+        let (state, session, _output) = network_state(None).await;
+        for patch in [
+            (|c: &mut AdvancedConfig| c.max_concurrent_handshakes = Some(128))
+                as fn(&mut AdvancedConfig),
+            |c| c.fastresume_validation_denom = Some(0),
+        ] {
+            let resp = h_set_advanced(
+                State(state.clone()),
+                Json(advanced(|c| {
+                    c.upload_slots = Some(16);
+                    patch(c);
+                })),
             )
-            .is_err()
-        );
-        assert!(capped(Some(MAX_KEEP_ALIVE_SECS + 1), MAX_KEEP_ALIVE_SECS).is_err());
-        // The bound is the refusal: the largest allowed value is kept.
+            .await;
+            assert_eq!(resp.status(), StatusCode::CONFLICT);
+            let body = body_json(resp).await;
+            assert!(
+                body["human_readable"]
+                    .as_str()
+                    .unwrap()
+                    .contains("persistence is off")
+            );
+            // The live knob in the same body still applied.
+            assert_eq!(session.upload_slots(), 16);
+            assert_eq!(session.saved_advanced().max_concurrent_handshakes, None);
+            assert_eq!(session.saved_advanced().fastresume_validation_denom, None);
+        }
+        session.stop().await;
+    }
+
+    #[tokio::test]
+    async fn advanced_settings_round_trip_across_a_session_reload() {
+        let persist = tempfile::TempDir::new().unwrap();
+        let (state, session, _output) = network_state(Some(persist.path())).await;
+        let resp = h_set_advanced(
+            State(state.clone()),
+            Json(AdvancedConfig {
+                connect_timeout_secs: Some(31),
+                read_write_timeout_secs: Some(32),
+                keep_alive_secs: Some(33),
+                upload_slots: Some(12),
+                magnet_resolution_timeout_secs: Some(240),
+                max_concurrent_handshakes: Some(200),
+                fastresume_validation_denom: Some(0),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_json(resp).await["restart_required"], true);
+        // Saved restart knobs are pending, not running.
+        assert_eq!(session.max_concurrent_handshakes(), 64);
+        let got = body_json(
+            h_get_advanced(State(state.clone()))
+                .await
+                .unwrap()
+                .into_response(),
+        )
+        .await;
+        assert_eq!(got["restart_required"], true);
+        assert_eq!(got["pending_restart"]["max_concurrent_handshakes"], 200);
+        assert_eq!(got["pending_restart"]["fastresume_validation_denom"], 0);
+        assert_eq!(got["can_save"], true);
+        session.stop().await;
+
+        // A new session over the same persistence folder.
+        let output = tempfile::TempDir::new().unwrap();
+        let session = crate::Session::new_with_opts(
+            output.path().to_owned(),
+            crate::SessionOptions {
+                disable_dht: true,
+                disable_dht_persistence: true,
+                disable_local_service_discovery: true,
+                persistence: Some(crate::SessionPersistenceConfig::Json {
+                    folder: Some(persist.path().to_owned()),
+                }),
+                listen: Some(crate::ListenerOptions {
+                    listen_addr: (std::net::Ipv4Addr::LOCALHOST, 0).into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let opts = session.peer_opts();
+        assert_eq!(opts.connect_timeout, Some(Duration::from_secs(31)));
+        assert_eq!(opts.read_write_timeout, Some(Duration::from_secs(32)));
+        assert_eq!(opts.keep_alive_interval, Some(Duration::from_secs(33)));
+        assert_eq!(session.upload_slots(), 12);
+        assert_eq!(session.magnet_resolution_timeout_secs(), 240);
+        // The restart knobs are now the running ones.
+        assert_eq!(session.max_concurrent_handshakes(), 200);
+        assert_eq!(session.fastresume_validation_denom, Some(0));
         assert_eq!(
-            capped(Some(MAX_CONNECT_TIMEOUT_SECS), MAX_CONNECT_TIMEOUT_SECS)
-                .unwrap()
-                .unwrap()
-                .as_secs(),
-            MAX_CONNECT_TIMEOUT_SECS
+            session.saved_advanced(),
+            session.startup_advanced(),
+            "nothing is pending after the restart"
         );
+        session.stop().await;
+    }
+
+    #[tokio::test]
+    async fn update_limits_enforces_minimum_and_caps() {
+        let (state, session, _output) = network_state(None).await;
+        let limits = |peer: Option<usize>, init: Option<usize>| LimitsConfig {
+            peer_limit: peer,
+            concurrent_init_limit: init,
+            ..Default::default()
+        };
+        // (peer_limit, concurrent_init_limit, status, field named in the refusal)
+        #[allow(clippy::type_complexity)]
+        let cases: [(Option<usize>, Option<usize>, StatusCode, &str); 9] = [
+            (Some(1), Some(1), StatusCode::OK, ""),
+            (Some(5000), Some(32), StatusCode::OK, ""),
+            (None, None, StatusCode::OK, ""),
+            (Some(0), None, StatusCode::BAD_REQUEST, "peer_limit"),
+            (Some(5001), None, StatusCode::BAD_REQUEST, "peer_limit"),
+            (
+                None,
+                Some(0),
+                StatusCode::BAD_REQUEST,
+                "concurrent_init_limit",
+            ),
+            (
+                None,
+                Some(33),
+                StatusCode::BAD_REQUEST,
+                "concurrent_init_limit",
+            ),
+            (
+                Some(10),
+                Some(33),
+                StatusCode::BAD_REQUEST,
+                "concurrent_init_limit",
+            ),
+            (Some(0), Some(5), StatusCode::BAD_REQUEST, "peer_limit"),
+        ];
+        for (peer, init, status, field) in cases {
+            let before = (
+                session.get_peer_limit(),
+                session.get_concurrent_init_limit(),
+            );
+            let resp =
+                h_update_session_ratelimits(State(state.clone()), Json(limits(peer, init))).await;
+            assert_eq!(resp.status(), status, "{peer:?} {init:?}");
+            if status == StatusCode::OK {
+                assert_eq!(
+                    session.get_peer_limit(),
+                    peer.unwrap_or(before.0),
+                    "{peer:?}"
+                );
+                assert_eq!(
+                    session.get_concurrent_init_limit(),
+                    init.unwrap_or(before.1),
+                    "{init:?}"
+                );
+            } else {
+                let body = body_json(resp).await;
+                assert!(
+                    body["human_readable"].as_str().unwrap().contains(field),
+                    "{body}"
+                );
+                // A refusal changes nothing.
+                assert_eq!(
+                    (
+                        session.get_peer_limit(),
+                        session.get_concurrent_init_limit()
+                    ),
+                    before
+                );
+            }
+        }
+        session.stop().await;
     }
 
     #[test]

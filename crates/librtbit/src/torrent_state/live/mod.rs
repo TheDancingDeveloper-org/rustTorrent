@@ -298,7 +298,14 @@ impl TorrentStateLive {
             peer_semaphore: Arc::new(Semaphore::new(
                 paused.shared.options.peer_limit.unwrap_or(200),
             )),
-            upload_slot_semaphore: Arc::new(Semaphore::new(4)),
+            upload_slot_semaphore: Arc::new(Semaphore::new(
+                paused
+                    .shared
+                    .session
+                    .upgrade()
+                    .map(|s| s.upload_slots())
+                    .unwrap_or(crate::session_persistence::DEFAULT_UPLOAD_SLOTS),
+            )),
             new_pieces_notify: Notify::new(),
             peer_queue_tx,
             finished_notify: Notify::new(),
