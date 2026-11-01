@@ -50,14 +50,16 @@ jobs:
       # CARGO_HOME and RUSTUP_HOME come from the runner's .env. The toolchain
       # matches the Linux jobs (1.95); MSVC and the Windows SDK are on the box.
       - name: Install Rust toolchain
-        shell: powershell
+        # cmd, not powershell: the runner writes a temp .ps1, which the box's
+        # execution policy refuses to run.
+        shell: cmd
         run: |
-          $ErrorActionPreference = 'Stop'
           rustup toolchain install 1.95 --profile minimal --target x86_64-pc-windows-msvc
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if errorlevel 1 exit /b 1
           rustc +1.95 --version
       - name: Build rtbit-fluent (native Windows)
-        shell: bash
+        # Git Bash by path: plain `bash` on this runner is the WSL launcher.
+        shell: '"C:\Program Files\Git\bin\bash.exe" --noprofile --norc -eo pipefail {0}'
         env:
           RUSTUP_TOOLCHAIN: "1.95"
         run: |
@@ -78,8 +80,10 @@ jobs:
   dry-run:
     # The build runs on a self-hosted runner and needs no secrets, but a fork
     # pull request still must not execute its code there.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, rust-heavy]
+    # Runs even when the Windows build fails, so both report; the staged-set
+    # check below fails this job if the Windows artifact is missing.
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: [self-hosted, linux, rust-heavy]
     timeout-minutes: 120
     needs: build-windows-fluent
     steps:
@@ -142,6 +146,7 @@ jobs:
           bash packaging/scripts/build-desktop.sh linux "$tag" target/desktop-stage
           bash packaging/scripts/build-desktop.sh sbom "$tag" target/desktop-stage
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
         with:
           name: release-dry-run-windows-fluent-${{ github.sha }}
           path: windows-fluent/
@@ -186,7 +191,7 @@ jobs:
           # Desktop client binary, .deb and SBOM, named rtbit-fluent-<tag>-*.
           cp target/desktop-stage/rtbit-fluent-* release-artifacts/
           # Windows desktop client, built natively by build-windows-fluent.
-          cp windows-fluent/rtbit-fluent-* release-artifacts/
+          cp windows-fluent/rtbit-fluent-* release-artifacts/ || echo '::warning::no Windows fluent artifact'
           (cd release-artifacts && sha256sum rtbit-*) > "release-artifacts/SHA256SUMS-$tag.txt"
       - name: Verify the staged set
         shell: bash
