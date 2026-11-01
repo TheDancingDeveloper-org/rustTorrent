@@ -26,7 +26,7 @@ jobs:
     # Fork pull requests must not reach self-hosted runners. Every other job
     # needs this one, so skipping it here skips the whole fork run.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux]
     outputs:
       rust: ${{ steps.classify.outputs.rust }}
       rust_full: ${{ steps.classify.outputs.rust_full }}
@@ -100,7 +100,7 @@ jobs:
   # seconds and touch no network, so they run on every event.
   scripts:
     needs: changes
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: bash scripts/check-repo-hygiene.sh
@@ -111,7 +111,7 @@ jobs:
   rust:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: [self-hosted, rust-heavy]
+    runs-on: [self-hosted, linux, rust-heavy]
     env:
       CARGO_INCREMENTAL: 0
       # Restore the cache on every run, but only save it from the queue and
@@ -198,7 +198,7 @@ jobs:
   desktop:
     needs: changes
     if: needs.changes.outputs.desktop == 'true'
-    runs-on: [self-hosted, rust-heavy]
+    runs-on: [self-hosted, linux, rust-heavy]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: bash packaging/scripts/check-desktop.sh
@@ -206,7 +206,7 @@ jobs:
   webui:
     needs: changes
     if: needs.changes.outputs.webui == 'true'
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -224,7 +224,7 @@ jobs:
         run: npm run build
 
   gui-e2e:
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux]
     needs: [changes, webui]
     if: needs.changes.outputs.webui == 'true'
     steps:
@@ -244,7 +244,7 @@ jobs:
   website:
     needs: changes
     if: needs.changes.outputs.website == 'true'
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: ci/tasks/website-check

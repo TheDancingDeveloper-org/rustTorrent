@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   policy:
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux]
     steps:
       # Required check: a skipped job would count as passing, so fork pull
       # requests fail here instead, before any fork code is checked out.
