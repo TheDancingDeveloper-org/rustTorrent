@@ -149,10 +149,10 @@ jobs:
       - name: Add cargo to PATH
         shell: cmd
         run: |
-          set "CH=%CARGO_HOME%"
-          if "%CH%"=="" set "CH=C:\Users\Sprooty\.cargo"
-          if not exist "%CH%\bin\rustup.exe" (echo ::error::rustup.exe not found in %CH%\bin & exit /b 1)
-          echo %CH%\bin>> %GITHUB_PATH%
+          if "%CARGO_HOME%"=="" (echo ::error::CARGO_HOME is not set on this runner & exit /b 1)
+          if not exist "%CARGO_HOME%\bin\rustup.exe" (echo ::error::rustup.exe not found in %CARGO_HOME%\bin & exit /b 1)
+          echo %CARGO_HOME%\bin>> %GITHUB_PATH%
+          echo C:\Program Files\Git\bin>> %GITHUB_PATH%
       # CARGO_HOME and RUSTUP_HOME come from the runner's .env. The toolchain
       # matches the Linux jobs (1.95); MSVC and the Windows SDK are on the box.
       - name: Install Rust toolchain
@@ -164,12 +164,15 @@ jobs:
           if errorlevel 1 exit /b 1
           rustc +1.95 --version
       - name: Build rtbit-fluent (native Windows)
-        # Git Bash by path: plain `bash` on this runner is the WSL launcher.
-        shell: '"C:\Program Files\Git\bin\bash.exe" --noprofile --norc -eo pipefail {0}'
+        # Git\bin is first on PATH (Add cargo to PATH), so `bash` is Git Bash,
+        # not the System32 WSL launcher; the first run lines assert that.
+        shell: bash
         env:
           RUSTUP_TOOLCHAIN: "1.95"
         run: |
           set -euo pipefail
+          echo "BASH_VERSION=$BASH_VERSION uname=$(uname -s)"
+          case "$(uname -s)" in MINGW*|MSYS*) ;; *) echo "::error::bash is not Git Bash"; exit 1;; esac
           tag="${{ inputs.tag || github.ref_name }}"
           test -n "$tag"
           cargo build -p rtbit-fluent --release --target x86_64-pc-windows-msvc
