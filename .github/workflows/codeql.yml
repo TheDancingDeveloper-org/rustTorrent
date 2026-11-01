@@ -38,7 +38,7 @@ concurrency:
 jobs:
   analyze:
     name: analyze (${{ matrix.language }})
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux]
     permissions:
       contents: read
       security-events: write

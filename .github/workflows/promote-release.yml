@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   resolve:
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux]
     outputs:
       beta_tag: ${{ steps.v.outputs.beta_tag }}
       stable_tag: ${{ steps.v.outputs.stable_tag }}
@@ -66,7 +66,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    runs-on: [self-hosted, docker, publish]
+    runs-on: [self-hosted, linux, docker, publish]
     env:
       BETA: ${{ needs.resolve.outputs.beta_tag }}
       STABLE: ${{ needs.resolve.outputs.stable_tag }}
@@ -103,7 +103,7 @@ jobs:
     needs: [resolve, promote-image]
     permissions:
       contents: write
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux]
     env:
       STABLE: ${{ needs.resolve.outputs.stable_tag }}
       SHA: ${{ needs.resolve.outputs.sha }}
