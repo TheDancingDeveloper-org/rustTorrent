@@ -1318,4 +1318,28 @@ mod tests {
         assert!(resolve_browse_path(None, &[]).is_err());
         assert!(resolve_browse_path(Some(temp.path().to_path_buf()), &[]).is_err());
     }
+
+    /// The daemon's `AdvancedConfig` and the client's share one field set,
+    /// pinned by the client's `advanced.json` fixture. A field the client sends
+    /// that the daemon lacks would be dropped silently on save.
+    #[test]
+    fn advanced_config_field_set_matches_the_client_fixture() {
+        use std::collections::BTreeSet;
+
+        let keys = |value: serde_json::Value| -> BTreeSet<String> {
+            value.as_object().unwrap().keys().cloned().collect()
+        };
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../rtbit-client/tests/fixtures/advanced.json");
+        let text = std::fs::read_to_string(path).expect("client fixture");
+        let fixture: serde_json::Value = serde_json::from_str(&text).unwrap();
+
+        let daemon = keys(serde_json::to_value(AdvancedConfig::default()).unwrap());
+        assert_eq!(daemon, keys(fixture.clone()), "daemon vs client fixture");
+        assert!(!daemon.contains("peer_limit") && !daemon.contains("concurrent_init_limit"));
+
+        // Every fixture key lands in a daemon field (none are dropped).
+        let parsed: AdvancedConfig = serde_json::from_value(fixture.clone()).unwrap();
+        assert_eq!(keys(serde_json::to_value(parsed).unwrap()), keys(fixture));
+    }
 }

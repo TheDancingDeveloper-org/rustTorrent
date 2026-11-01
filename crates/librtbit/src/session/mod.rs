@@ -151,7 +151,7 @@ pub struct Session {
     /// Upload slots given to each torrent started from now on. Live.
     upload_slots: AtomicUsize,
     /// Session default for resolving a magnet link, in seconds. A per-add
-    /// value still wins. 0 means no timeout. Live.
+    /// value still wins. Never 0: the Advanced tab's minimum is 10 seconds. Live.
     magnet_resolution_timeout_secs: AtomicU64,
     /// Incoming handshakes allowed at once. Read when the listener starts.
     max_concurrent_handshakes: usize,
