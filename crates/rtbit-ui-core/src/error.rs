@@ -56,4 +56,28 @@ mod tests {
         );
         assert!(!text.contains("timeout"));
     }
+
+    #[test]
+    fn each_error_kind_maps_to_its_user_text() {
+        assert_eq!(
+            map_error(&Error::Unreachable("dns failure".into())),
+            "The daemon is unreachable."
+        );
+        assert_eq!(map_error(&Error::Unauthorised), "Sign-in was refused.");
+        assert_eq!(map_error(&Error::NotSetUp), "The daemon is not set up yet.");
+    }
+
+    #[test]
+    fn a_400_without_a_usable_message_stays_generic() {
+        let empty = map_error(&Error::Daemon {
+            status: rtbit_client::StatusCode::BAD_REQUEST,
+            message: Some(String::new()),
+        });
+        assert_eq!(empty, "The daemon returned an error (400 Bad Request).");
+        let none = map_error(&Error::Daemon {
+            status: rtbit_client::StatusCode::BAD_REQUEST,
+            message: None,
+        });
+        assert_eq!(none, "The daemon returned an error (400 Bad Request).");
+    }
 }
