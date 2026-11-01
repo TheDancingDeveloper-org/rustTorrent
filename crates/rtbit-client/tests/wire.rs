@@ -806,13 +806,10 @@ fn advanced_decodes_legacy_and_full_bodies() {
         serde_json::from_str(&fixture("advanced-legacy.json")).unwrap();
     assert_eq!(legacy.connect_timeout_secs, Some(10));
     assert_eq!(legacy.keep_alive_secs, Some(120));
-    assert_eq!(legacy.peer_limit, None);
     assert_eq!(legacy.fastresume_validation_denom, None);
 
     let full: rtbit_client::AdvancedConfig =
         serde_json::from_str(&fixture("advanced.json")).unwrap();
-    assert_eq!(full.peer_limit, Some(200));
-    assert_eq!(full.concurrent_init_limit, Some(3));
     assert_eq!(full.upload_slots, Some(4));
     assert_eq!(full.magnet_resolution_timeout_secs, Some(120));
     assert_eq!(full.max_concurrent_handshakes, Some(64));
@@ -849,8 +846,6 @@ async fn set_advanced_round_trips_body_and_reads_restart_flag() {
         connect_timeout_secs: Some(10),
         read_write_timeout_secs: Some(30),
         keep_alive_secs: Some(120),
-        peer_limit: Some(200),
-        concurrent_init_limit: Some(3),
         upload_slots: Some(4),
         magnet_resolution_timeout_secs: Some(120),
         max_concurrent_handshakes: Some(64),
@@ -902,5 +897,77 @@ async fn set_advanced_treats_empty_reply_as_no_restart() {
         .await
         .unwrap();
     assert!(!saved.restart_required);
+    server.verify().await;
+}
+
+/// The full fixture is the daemon's `GET /session/advanced` field set. The
+/// daemon crate checks the same file, so a field added on one side only fails
+/// a test on the other. `peer_limit` and `concurrent_init_limit` belong to
+/// `/torrents/limits` and must not appear here: the daemon ignores them.
+#[test]
+fn advanced_field_set_matches_the_shared_fixture() {
+    use std::collections::BTreeSet;
+
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct StrictCopy {
+        connect_timeout_secs: Option<u64>,
+        read_write_timeout_secs: Option<u64>,
+        keep_alive_secs: Option<u64>,
+        upload_slots: Option<u64>,
+        magnet_resolution_timeout_secs: Option<u64>,
+        max_concurrent_handshakes: Option<u64>,
+        fastresume_validation_denom: Option<u64>,
+    }
+    let text = fixture("advanced.json");
+    serde_json::from_str::<StrictCopy>(&text).expect("fixture has exactly the daemon fields");
+
+    let config: rtbit_client::AdvancedConfig = serde_json::from_str(&text).unwrap();
+    let sent: BTreeSet<String> = serde_json::to_value(&config)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    let expected: BTreeSet<String> = serde_json::from_str::<serde_json::Value>(&text)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    assert_eq!(sent, expected, "client body keys differ from the daemon's");
+    assert!(!sent.contains("peer_limit") && !sent.contains("concurrent_init_limit"));
+}
+
+#[tokio::test]
+async fn set_limits_posts_peer_and_init_limits_to_the_limits_route() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("login.json"), "application/json"),
+        )
+        .mount(&server)
+        .await;
+    let limits = rtbit_client::RateLimits {
+        upload_bps: None,
+        download_bps: Some(1_000_000),
+        peer_limit: Some(50),
+        concurrent_init_limit: Some(4),
+    };
+    Mock::given(method("POST"))
+        .and(path("/torrents/limits"))
+        .and(header("authorization", "Bearer access-1"))
+        .and(body_json(serde_json::to_value(&limits).unwrap()))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut client = Client::new(server.uri()).unwrap();
+    client.login("ada", "secret").await.unwrap();
+    client.set_limits(&limits).await.unwrap();
     server.verify().await;
 }
