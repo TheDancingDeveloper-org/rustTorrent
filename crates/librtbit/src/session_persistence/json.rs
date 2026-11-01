@@ -516,6 +516,12 @@ mod tests {
                 lsd_enabled: None,
                 upnp_port_forward: Some(true),
             }),
+            advanced: Some(super::super::AdvancedSettings {
+                connect_timeout_secs: Some(15),
+                upload_slots: Some(8),
+                fastresume_validation_denom: Some(0),
+                ..Default::default()
+            }),
         };
 
         store.store_session_settings(&settings).await.unwrap();
