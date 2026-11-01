@@ -923,8 +923,31 @@ fn advanced_field_set_matches_the_shared_fixture() {
     let text = fixture("advanced.json");
     serde_json::from_str::<StrictCopy>(&text).expect("fixture has exactly the daemon fields");
 
-    let config: rtbit_client::AdvancedConfig = serde_json::from_str(&text).unwrap();
-    let sent: BTreeSet<String> = serde_json::to_value(&config)
+    // Build the sent key set from a fully populated literal, not by decoding the
+    // fixture: a field missing from the fixture decodes as `None`, and
+    // `skip_serializing_if` then drops it, so the comparison would never see it.
+    // The literal has no `..Default`, so a new client field fails to compile here.
+    let full = rtbit_client::AdvancedConfig {
+        connect_timeout_secs: Some(10),
+        read_write_timeout_secs: Some(30),
+        keep_alive_secs: Some(120),
+        upload_slots: Some(4),
+        magnet_resolution_timeout_secs: Some(120),
+        max_concurrent_handshakes: Some(64),
+        fastresume_validation_denom: Some(50),
+    };
+    // Exhaustive destructure, no `..`: adding a client field breaks compilation
+    // until this test and the shared fixture list it.
+    let rtbit_client::AdvancedConfig {
+        connect_timeout_secs: _,
+        read_write_timeout_secs: _,
+        keep_alive_secs: _,
+        upload_slots: _,
+        magnet_resolution_timeout_secs: _,
+        max_concurrent_handshakes: _,
+        fastresume_validation_denom: _,
+    } = &full;
+    let sent: BTreeSet<String> = serde_json::to_value(&full)
         .unwrap()
         .as_object()
         .unwrap()
