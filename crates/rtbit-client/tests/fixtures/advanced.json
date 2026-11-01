@@ -1,1 +1,1 @@
-{"connect_timeout_secs": 10, "read_write_timeout_secs": 30, "keep_alive_secs": 120}
+{"connect_timeout_secs": 10, "read_write_timeout_secs": 30, "keep_alive_secs": 120, "peer_limit": 200, "concurrent_init_limit": 3, "upload_slots": 4, "magnet_resolution_timeout_secs": 120, "max_concurrent_handshakes": 64, "fastresume_validation_denom": 50}
