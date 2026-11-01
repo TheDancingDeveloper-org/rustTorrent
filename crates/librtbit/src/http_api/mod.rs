@@ -53,6 +53,7 @@ mod webui;
         handlers::torrents::h_torrent_action_forget,
         handlers::torrents::h_torrent_action_delete,
         handlers::torrents::h_torrent_action_update_only_files,
+        handlers::torrents::h_torrent_file_set_included,
         handlers::torrents::h_session_stats,
         handlers::torrents::h_peer_stats_prometheus,
         handlers::torrents::h_metadata,

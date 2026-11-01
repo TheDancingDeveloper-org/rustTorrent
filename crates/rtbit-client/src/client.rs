@@ -211,6 +211,21 @@ impl Client {
         .await
     }
 
+    /// `POST /torrents/{id}/files/{index}/included`. Include or exclude one
+    /// file; the daemon answers 400 when `index` is out of range.
+    pub async fn set_file_included(
+        &mut self,
+        id: u64,
+        index: usize,
+        included: bool,
+    ) -> Result<(), Error> {
+        self.authed_post_json(
+            &format!("torrents/{id}/files/{index}/included"),
+            &FileIncludedBody { included },
+        )
+        .await
+    }
+
     /// Read every route the settings screen shows.
     pub async fn settings(&mut self) -> Result<crate::types::SettingsSnapshot, Error> {
         use crate::types::SettingsSnapshot;
@@ -655,6 +670,11 @@ async fn error_with_body(status: http::StatusCode, response: reqwest::Response) 
 #[derive(Serialize)]
 struct OnlyFilesBody<'a> {
     only_files: &'a [usize],
+}
+
+#[derive(Serialize)]
+struct FileIncludedBody {
+    included: bool,
 }
 
 #[derive(Serialize)]

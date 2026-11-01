@@ -766,3 +766,35 @@ async fn a_401_on_rule_delete_refreshes_once_and_retries() {
     client.delete_rss_rule("r-1").await.unwrap();
     server.verify().await;
 }
+
+#[tokio::test]
+async fn set_file_included_posts_one_file_and_surfaces_bad_index() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("login.json"), "application/json"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/torrents/7/files/2/included"))
+        .and(body_json(serde_json::json!({"included": true})))
+        .and(header("authorization", "Bearer access-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/torrents/7/files/9/included"))
+        .respond_with(ResponseTemplate::new(400))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut client = Client::new(server.uri()).unwrap();
+    client.login("ada", "secret").await.unwrap();
+    client.set_file_included(7, 2, true).await.unwrap();
+    assert!(client.set_file_included(7, 9, true).await.is_err());
+    server.verify().await;
+}

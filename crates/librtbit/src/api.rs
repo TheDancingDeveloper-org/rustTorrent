@@ -445,6 +445,24 @@ impl Api {
         Ok(Default::default())
     }
 
+    /// Include or exclude one file. Validates the index against the torrent's
+    /// metadata (400 when out of range or metadata is not resolved yet), then
+    /// posts the resulting selection through the existing selection path.
+    pub async fn api_torrent_file_set_included(
+        &self,
+        idx: TorrentIdOrHash,
+        file_index: usize,
+        included: bool,
+    ) -> Result<EmptyJsonResponse> {
+        let handle = self.mgr_handle(idx)?;
+        let file_count = handle
+            .with_metadata(|m| m.file_infos.len())
+            .with_status(StatusCode::BAD_REQUEST)?;
+        let selection = file_selection_with(handle.only_files(), file_count, file_index, included)?;
+        self.api_torrent_action_update_only_files(idx, &selection)
+            .await
+    }
+
     pub fn api_set_rust_log(&self, new_value: String) -> Result<EmptyJsonResponse> {
         let tx = self
             .rust_log_reload_tx
@@ -1026,4 +1044,62 @@ fn torrent_file_mime_type(
             StatusCode::INTERNAL_SERVER_ERROR,
             "cannot determine mime type for file",
         ))?)
+}
+
+/// The selection after including or excluding one file. `current` is `None`
+/// when every file is selected. Returns an error message for an out-of-range
+/// index, so the caller can answer 400 without touching the torrent.
+fn file_selection_with(
+    current: Option<Vec<usize>>,
+    file_count: usize,
+    file_index: usize,
+    included: bool,
+) -> std::result::Result<HashSet<usize>, ApiError> {
+    if file_index >= file_count {
+        return Err(ApiError::from((
+            StatusCode::BAD_REQUEST,
+            "file index is out of range for this torrent",
+        )));
+    }
+    let mut selection: HashSet<usize> = match current {
+        Some(indices) => indices.into_iter().collect(),
+        None => (0..file_count).collect(),
+    };
+    if included {
+        selection.insert(file_index);
+    } else {
+        selection.remove(&file_index);
+    }
+    Ok(selection)
+}
+
+#[cfg(test)]
+mod file_selection_tests {
+    use super::file_selection_with;
+    use http::StatusCode;
+    use std::collections::HashSet;
+
+    #[test]
+    fn including_adds_one_index_to_the_current_selection() {
+        let got = file_selection_with(Some(vec![0]), 3, 2, true).unwrap();
+        assert_eq!(got, HashSet::from([0, 2]));
+    }
+
+    #[test]
+    fn excluding_removes_one_index() {
+        let got = file_selection_with(Some(vec![0, 2]), 3, 0, false).unwrap();
+        assert_eq!(got, HashSet::from([2]));
+    }
+
+    #[test]
+    fn none_means_all_files_so_excluding_one_leaves_the_rest() {
+        let got = file_selection_with(None, 3, 1, false).unwrap();
+        assert_eq!(got, HashSet::from([0, 2]));
+    }
+
+    #[test]
+    fn out_of_range_index_is_rejected() {
+        let err = file_selection_with(None, 2, 2, true).unwrap_err();
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
 }
