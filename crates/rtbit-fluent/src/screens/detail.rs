@@ -13,7 +13,7 @@ use gpui::{
     App, AsyncApp, Context, Entity, IntoElement, Render, Task, WeakEntity, Window, div, prelude::*,
     px,
 };
-use rtbit_client::{Error, TorrentFile};
+use rtbit_client::Error;
 use rtbit_ui_core::{DetailSnapshot, format, map_error};
 
 use crate::bridge::{Bridge, Poller, SharedClient};
@@ -55,22 +55,6 @@ async fn fetch_detail(client: SharedClient, id: u64) -> Result<DetailSnapshot, E
         peers,
         pieces,
     })
-}
-
-/// The selection a file post needs: the current included set with `index`
-/// set to `included`, sorted.
-#[must_use]
-pub fn next_selection(files: &[TorrentFile], index: usize, included: bool) -> Vec<usize> {
-    let mut indices: Vec<usize> = files
-        .iter()
-        .enumerate()
-        .filter_map(|(i, file)| (file.included && i != index).then_some(i))
-        .collect();
-    if included {
-        indices.push(index);
-        indices.sort_unstable();
-    }
-    indices
 }
 
 impl DetailPane {
@@ -345,26 +329,6 @@ mod tests {
         std::fs::read_to_string(format!("{FIXTURES}/{name}")).unwrap()
     }
 
-    fn file(name: &str, included: bool) -> TorrentFile {
-        TorrentFile {
-            name: name.to_owned(),
-            components: vec![name.to_owned()],
-            length: 1,
-            included,
-        }
-    }
-
-    #[test]
-    fn next_selection_adds_and_removes_one_index() {
-        let files = [file("a", true), file("b", false), file("c", true)];
-        // Include b: the current selection plus index 1, sorted.
-        assert_eq!(next_selection(&files, 1, true), vec![0, 1, 2]);
-        // Exclude a: the current selection without index 0.
-        assert_eq!(next_selection(&files, 0, false), vec![2]);
-        // Excluding a file that is not selected leaves the rest alone.
-        assert_eq!(next_selection(&files, 1, false), vec![0, 2]);
-    }
-
     /// A wiremock daemon serving one torrent's detail routes, with the bridge
     /// logged in and installed. Keep the returned runtime alive with the server.
     fn daemon(cx: &mut TestAppContext) -> (Arc<Runtime>, MockServer) {
@@ -472,7 +436,8 @@ mod tests {
     #[gpui::test]
     fn file_toggle_posts_the_new_selection(cx: &mut TestAppContext) {
         let (runtime, server) = daemon(cx);
-        // skip.bin (index 1) is excluded in the fixture, so including it posts [0, 1].
+        // skip.bin (index 1) is excluded in the fixture, so including it posts
+        // {"included":true} to files/1.
         runtime.block_on(
             Mock::given(method("POST"))
                 .and(path("/torrents/7/files/1/included"))
