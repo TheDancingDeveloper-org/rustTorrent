@@ -1,0 +1,33 @@
+{
+  "name": "radarr",
+  "client": "Radarr download-client proxy",
+  "notes": "Request sequence built from the current V2 proxy source: connection test, movie add, post-import category, and delete.",
+  "steps": [
+    { "name": "login", "method": "POST", "path": "/auth/login",
+      "form": { "username": "{{username}}", "password": "{{password}}" },
+      "live_only": true, "expect": { "status": 200 }, "diff": { "body": "ignore" } },
+    { "name": "detect v2 API", "method": "GET", "path": "/app/version",
+      "expect": { "status": 200 }, "diff": { "body": "ignore" } },
+    { "name": "read API version", "method": "GET", "path": "/app/webapiVersion",
+      "expect": { "status": 200 }, "diff": { "body": "ignore" } },
+    { "name": "create imported category", "method": "POST", "path": "/torrents/createCategory",
+      "form": { "category": "radarr-imported", "savePath": "" },
+      "expect": { "status": 200 } },
+    { "name": "add movie", "method": "POST", "path": "/torrents/add",
+      "multipart": { "torrent": true, "fields": {
+        "category": "radarr", "stopped": "true" } },
+      "expect": { "status": 200 } },
+    { "name": "wait for movie", "method": "GET", "path": "/torrents/info",
+      "query": { "hashes": "cffa828a1727e7fdc662fd07329aedc10105a74a" },
+      "expect": { "status": 200, "eventually": true, "json": [
+        { "path": "", "len": 1 },
+        { "path": "0.category", "eq": "radarr" } ] },
+      "diff": { "values": ["0.hash", "0.name", "0.category"] } },
+    { "name": "set imported category", "method": "POST", "path": "/torrents/setCategory",
+      "form": { "hashes": "cffa828a1727e7fdc662fd07329aedc10105a74a", "category": "radarr-imported" },
+      "expect": { "status": 200 } },
+    { "name": "delete movie", "method": "POST", "path": "/torrents/delete",
+      "form": { "hashes": "cffa828a1727e7fdc662fd07329aedc10105a74a", "deleteFiles": "true" },
+      "expect": { "status": 200 } }
+  ]
+}
