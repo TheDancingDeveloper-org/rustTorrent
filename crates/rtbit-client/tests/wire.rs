@@ -873,6 +873,8 @@ async fn set_advanced_round_trips_body_and_reads_restart_flag() {
         magnet_resolution_timeout_secs: Some(120),
         max_concurrent_handshakes: Some(64),
         fastresume_validation_denom: Some(50),
+        concurrent_recheck_limit: Some(2),
+        recheck_read_mibps: Some(100),
     };
     Mock::given(method("POST"))
         .and(path("/session/advanced"))
@@ -942,6 +944,8 @@ fn advanced_field_set_matches_the_shared_fixture() {
         magnet_resolution_timeout_secs: Option<u64>,
         max_concurrent_handshakes: Option<u64>,
         fastresume_validation_denom: Option<u64>,
+        concurrent_recheck_limit: Option<u64>,
+        recheck_read_mibps: Option<u64>,
     }
     let text = fixture("advanced.json");
     serde_json::from_str::<StrictCopy>(&text).expect("fixture has exactly the daemon fields");
@@ -958,6 +962,8 @@ fn advanced_field_set_matches_the_shared_fixture() {
         magnet_resolution_timeout_secs: Some(120),
         max_concurrent_handshakes: Some(64),
         fastresume_validation_denom: Some(50),
+        concurrent_recheck_limit: Some(2),
+        recheck_read_mibps: Some(100),
     };
     // Exhaustive destructure, no `..`: adding a client field breaks compilation
     // until this test and the shared fixture list it.
@@ -969,6 +975,8 @@ fn advanced_field_set_matches_the_shared_fixture() {
         magnet_resolution_timeout_secs: _,
         max_concurrent_handshakes: _,
         fastresume_validation_denom: _,
+        concurrent_recheck_limit: _,
+        recheck_read_mibps: _,
     } = &full;
     let sent: BTreeSet<String> = serde_json::to_value(&full)
         .unwrap()
