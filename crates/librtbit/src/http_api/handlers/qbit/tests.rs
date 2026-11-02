@@ -1,5 +1,6 @@
 use std::{net::Ipv4Addr, path::Path, sync::Arc, time::Duration};
 
+use axum::extract::FromRequest;
 use axum::response::IntoResponse;
 use bytes::Bytes;
 use http::StatusCode;
@@ -19,9 +20,9 @@ use super::{
     QbitTorrentCreator, RequiredTaskIdQuery, SyncSnapshots, creator_params, creator_task_status,
     h_app_build_info, h_app_preferences, h_app_set_preferences, h_app_version,
     h_torrentcreator_add_task, h_torrentcreator_delete_task, h_torrentcreator_torrent_file,
-    h_torrents_add_tags, h_torrents_create_tags, h_torrents_delete_tags, h_torrents_info,
-    h_torrents_recheck, h_torrents_remove_tags, h_torrents_rename_tag, h_torrents_set_tags,
-    matches_category, origin_allowed, qbit_file_name,
+    h_torrents_add_tags, h_torrents_create_tags, h_torrents_delete_tags, h_torrents_fetch_metadata,
+    h_torrents_info, h_torrents_parse_metadata, h_torrents_recheck, h_torrents_remove_tags,
+    h_torrents_rename_tag, h_torrents_set_tags, matches_category, origin_allowed, qbit_file_name,
 };
 
 async fn qbit_state() -> (Arc<QbitState>, Arc<Session>, tempfile::TempDir) {
@@ -81,6 +82,71 @@ async fn preferences_reports_fixed_listener_and_runtime_announce_port() {
     );
     assert_eq!(preferences.announce_port, 4241);
     assert_eq!(preferences.web_ui_port, 3031);
+}
+
+#[tokio::test]
+async fn parse_metadata_returns_details_without_adding_torrent() {
+    let (state, session, output) = qbit_state().await;
+    let payload = output.path().join("payload.bin");
+    std::fs::write(&payload, vec![7u8; 4096]).unwrap();
+    let torrent = create_torrent(
+        &payload,
+        CreateTorrentOptions {
+            piece_length: Some(16_384),
+            ..Default::default()
+        },
+        &BlockingSpawner::new(1),
+    )
+    .await
+    .unwrap()
+    .as_bytes()
+    .unwrap()
+    .to_vec();
+    let boundary = "metadataBoundary";
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"payload.torrent\"\r\nContent-Type: application/x-bittorrent\r\n\r\n"
+    )
+    .into_bytes()
+    .into_iter()
+    .chain(torrent)
+    .chain(format!("\r\n--{boundary}--\r\n").into_bytes())
+    .collect::<Vec<_>>();
+    let request = axum::extract::Request::builder()
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    let response = h_torrents_parse_metadata(
+        axum::extract::State(state),
+        axum::extract::Multipart::from_request(request, &())
+            .await
+            .unwrap(),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let metadata: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(metadata["name"], "payload.bin");
+    assert_eq!(metadata["size"], 4096);
+    assert_eq!(metadata["files"][0]["size"], 4096);
+    assert_eq!(session.with_torrents(|torrents| torrents.count()), 0);
+}
+
+#[tokio::test]
+async fn fetch_metadata_rejects_private_url_before_fetching() {
+    let (state, _session, _output) = qbit_state().await;
+    let response = h_torrents_fetch_metadata(
+        axum::extract::State(state),
+        Bytes::from_static(b"url=http%3A%2F%2F127.0.0.1%2Ftorrent"),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
