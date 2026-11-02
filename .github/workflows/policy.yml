@@ -32,3 +32,22 @@ jobs:
       - name: Verify migration policies
         shell: bash
         run: bash ci/migration-policy.sh
+      - name: Detect dependency policy changes
+        id: dependency-policy
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git diff --quiet "$BASE_SHA" HEAD -- Cargo.lock ':(glob)**/Cargo.toml' deny.toml; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        if: github.event_name != 'pull_request' || steps.dependency-policy.outputs.run == 'true'
+        with:
+          tool: cargo-deny@0.20.2
+      - name: Verify Rust dependency policy
+        if: github.event_name != 'pull_request' || steps.dependency-policy.outputs.run == 'true'
+        run: cargo deny check advisories licenses bans sources
