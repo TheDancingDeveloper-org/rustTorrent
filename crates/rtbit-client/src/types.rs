@@ -201,6 +201,10 @@ pub struct TorrentStats {
     /// The daemon's error flag on the torrent, if any.
     #[serde(default)]
     pub error: Option<String>,
+    /// While initializing: true when waiting for a check slot rather than
+    /// hashing. Absent otherwise.
+    #[serde(default)]
+    pub queued_for_init: Option<bool>,
 }
 
 /// One row of `GET /torrents`. Extra daemon fields are ignored.

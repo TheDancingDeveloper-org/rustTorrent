@@ -28,7 +28,7 @@ pub(super) fn map_state(
     forced: bool,
 ) -> &'static str {
     match (state, finished) {
-        (TorrentStatsState::Initializing, _) => "metaDL",
+        (TorrentStatsState::Initializing, _) => "checkingDL",
         (TorrentStatsState::Live, false) if forced => "forcedDL",
         (TorrentStatsState::Live, true) if forced => "forcedUP",
         (TorrentStatsState::Live, false) => "downloading",
@@ -56,6 +56,10 @@ pub(super) fn qbit_state_for(
     {
         return "missingFiles";
     }
+    if matches!(stats.state, TorrentStatsState::Initializing) && stats.queued_for_init == Some(true)
+    {
+        return "queuedForChecking";
+    }
     map_state(stats.state, stats.finished, queued, forced)
 }
 
@@ -81,7 +85,7 @@ pub(super) fn matches_filter(
         "all" => true,
         "downloading" => matches!(
             qbit_state,
-            "downloading" | "metaDL" | "forcedDL" | "queuedDL"
+            "downloading" | "checkingDL" | "queuedForChecking" | "forcedDL" | "queuedDL"
         ),
         "seeding" => matches!(qbit_state, "uploading" | "forcedUP" | "queuedUP"),
         "completed" => stats.finished,

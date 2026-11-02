@@ -1675,6 +1675,12 @@ fn incomplete_read_only_payload_reports_missing_files() {
         live: None,
         queued_for_init: None,
     };
+    let mut checking = stats(None);
+    checking.state = TorrentStatsState::Initializing;
+    checking.queued_for_init = Some(false);
+    assert_eq!(qbit_state_for(&checking, false, false), "checkingDL");
+    checking.queued_for_init = Some(true);
+    assert_eq!(qbit_state_for(&checking, false, false), "queuedForChecking");
     assert_eq!(
         qbit_state_for(&stats(Some(READ_ONLY_INCOMPLETE_PAYLOAD)), false, false),
         "missingFiles"
