@@ -47,6 +47,11 @@ of H4, and tag persistence):
 - **Preferences**: `app/preferences` reports the seeding-limit fields
   (`max_ratio_enabled`, `max_ratio`, `max_ratio_act`, `max_seeding_time_enabled`,
   `max_seeding_time`) as disabled, using qBittorrent's default values.
+- **Global share limits and discovery (WI-2884)**: `app/preferences` now reports
+  the session-wide seed limits and `dht`/`lsd`/`pex`, and `app/setPreferences`
+  applies `max_ratio*`, `max_seeding_time*`, `max_inactive_seeding_time*`
+  (global limits, used by torrents without their own) and `dht`/`lsd` (saved
+  for the next start; `pex` is always on).
 - **`app/setPreferences`**: unknown and unsupported fields are ignored, and
   `announce_port` is optional. Read-modify-write clients that post the whole
   preferences object now succeed. A present but invalid `announce_port` still

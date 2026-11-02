@@ -458,6 +458,22 @@ struct SetPreferences {
     alt_dl_limit: Option<i64>,
     #[serde(default)]
     alt_up_limit: Option<i64>,
+    #[serde(default)]
+    max_ratio_enabled: Option<bool>,
+    #[serde(default)]
+    max_ratio: Option<f64>,
+    #[serde(default)]
+    max_seeding_time_enabled: Option<bool>,
+    #[serde(default)]
+    max_seeding_time: Option<i64>,
+    #[serde(default)]
+    max_inactive_seeding_time_enabled: Option<bool>,
+    #[serde(default)]
+    max_inactive_seeding_time: Option<i64>,
+    #[serde(default)]
+    dht: Option<bool>,
+    #[serde(default)]
+    lsd: Option<bool>,
 }
 
 /// A preferences byte-rate limit as rtbit stores it: 0 or negative means
