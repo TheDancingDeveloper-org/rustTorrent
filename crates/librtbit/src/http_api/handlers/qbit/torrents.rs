@@ -630,6 +630,7 @@ pub(super) async fn h_torrents_files(
         })
         .unwrap_or_default();
     let use_piece_ranges = piece_ranges.len() == details_files.len();
+    let priorities = handle.file_priority_levels();
     let files: Vec<QbitFileInfo> = details_files
         .iter()
         .enumerate()
@@ -651,7 +652,10 @@ pub(super) async fn h_torrents_files(
                 name,
                 size: f.length,
                 progress,
-                priority: if f.included { 1 } else { 0 },
+                priority: priorities
+                    .get(i)
+                    .copied()
+                    .unwrap_or(if f.included { 1 } else { 0 }),
                 is_seed,
                 piece_range: if use_piece_ranges {
                     piece_ranges[i]

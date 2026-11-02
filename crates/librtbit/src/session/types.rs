@@ -115,6 +115,8 @@ pub struct AddTorrentOptions {
     /// An explicit list of file IDs to download.
     /// To see the file indices, run with "list_only".
     pub only_files: Option<Vec<usize>>,
+    #[serde(skip)]
+    pub file_priority_levels: Option<Vec<u8>>,
     /// Allow writing on top of existing files, including when resuming a torrent.
     /// You probably want to set it, however for safety it's not default.
     ///

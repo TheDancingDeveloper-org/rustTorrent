@@ -944,13 +944,9 @@ pub(super) async fn h_torrents_file_prio(
         Err(_) => return (StatusCode::NOT_FOUND, "Not found"),
     };
 
-    // qBittorrent priority 0 means "do not download"; anything else downloads.
-    // We only model an include/exclude selection, so map onto only_files.
-    let mut included: HashSet<usize> = match handle.only_files() {
-        Some(files) => files.into_iter().collect(),
-        None => (0..num_files).collect(),
-    };
-    let download = form.priority != 0;
+    if !matches!(form.priority, 0 | 1 | 6 | 7) {
+        return (StatusCode::CONFLICT, "Invalid priority");
+    }
     for id in form
         .id
         .split('|')
@@ -959,20 +955,19 @@ pub(super) async fn h_torrents_file_prio(
         if id >= num_files {
             return (StatusCode::CONFLICT, "Invalid file id");
         }
-        if download {
-            included.insert(id);
-        } else {
-            included.remove(&id);
+        match api
+            .api_torrent_file_set_priority(idx, id, form.priority)
+            .await
+        {
+            Ok(_) => {}
+            Err(error) => {
+                warn!(%error, "qbit compat: error setting file priority");
+                return (StatusCode::CONFLICT, "Failed");
+            }
         }
     }
-    match api
-        .api_torrent_action_update_only_files(idx, &included)
-        .await
-    {
-        Ok(_) => (StatusCode::OK, "Ok."),
-        Err(error) => {
-            warn!(%error, "qbit compat: error setting file priority");
-            (StatusCode::CONFLICT, "Failed")
-        }
+    if form.id.trim().is_empty() {
+        return (StatusCode::CONFLICT, "Invalid file id");
     }
+    (StatusCode::OK, "Ok.")
 }
