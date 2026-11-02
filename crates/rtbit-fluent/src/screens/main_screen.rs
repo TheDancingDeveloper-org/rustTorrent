@@ -8,6 +8,7 @@
 use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -28,6 +29,7 @@ use rtbit_ui_core::{AddRequest, AddSource, RowAction, Snapshot, StatusFilter, fo
 use crate::bridge::{Bridge, LOST_AFTER_FAILURES, PollHealth, Poller, fetch_snapshot};
 use crate::screens::add_dialog::{AddDialog, AddDialogEvent};
 use crate::screens::detail::DetailPane;
+use crate::table_prefs::TablePrefs;
 use crate::widgets::status_bar::StatusBar;
 
 actions!(
@@ -183,6 +185,9 @@ pub struct MainScreen {
     /// Set while the delete confirmation is on screen.
     delete_prompt: bool,
     sort: Option<(String, DataSortDirection)>,
+    /// Column widths overriding the defaults, persisted with the sort.
+    prefs: TablePrefs,
+    prefs_path: Option<PathBuf>,
     menu: Option<Entity<ContextMenu>>,
     /// Where the table was last painted, so a pointer position maps to a row.
     table_geometry: Rc<Cell<TableGeometry>>,
@@ -210,6 +215,24 @@ impl MainScreen {
                     let _ = me.update(app, |screen, cx| screen.set_query(text.to_string(), cx));
                 })
         });
+        // Tests must not read or write the real config directory.
+        let prefs_path = if cfg!(test) {
+            None
+        } else {
+            TablePrefs::default_path()
+        };
+        let prefs = prefs_path
+            .as_deref()
+            .map(TablePrefs::load)
+            .unwrap_or_default();
+        let sort = prefs.sort.clone().map(|(column, ascending)| {
+            let direction = if ascending {
+                DataSortDirection::Ascending
+            } else {
+                DataSortDirection::Descending
+            };
+            (column, direction)
+        });
         Self {
             snapshot: AsyncResource::new(),
             filter: StatusFilter::All,
@@ -224,7 +247,9 @@ impl MainScreen {
             focus: cx.focus_handle(),
             autofocused: false,
             delete_prompt: false,
-            sort: None,
+            sort,
+            prefs,
+            prefs_path,
             menu: None,
             table_geometry: Rc::default(),
             action_error: None,
@@ -828,7 +853,31 @@ impl MainScreen {
 
     fn sort_by(&mut self, column: &str, direction: DataSortDirection, cx: &mut Context<Self>) {
         self.sort = Some((column.to_owned(), direction));
+        self.prefs.sort = Some((
+            column.to_owned(),
+            matches!(direction, DataSortDirection::Ascending),
+        ));
+        self.save_prefs();
         cx.notify();
+    }
+
+    /// Remember a column width (clamped to the minimum) and persist it.
+    #[allow(dead_code)] // No resize handle in `DataTable` yet; widths come from the file.
+    pub(crate) fn set_column_width(&mut self, column: &str, width: f32, cx: &mut Context<Self>) {
+        let width = width.max(crate::table_prefs::MIN_COLUMN_WIDTH);
+        self.prefs.widths.insert(column.to_owned(), width);
+        self.save_prefs();
+        cx.notify();
+    }
+
+    fn column_width(&self, column: &str, default: f32) -> f32 {
+        self.prefs.widths.get(column).copied().unwrap_or(default)
+    }
+
+    fn save_prefs(&self) {
+        if let Some(path) = &self.prefs_path {
+            let _ = self.prefs.save(path);
+        }
     }
 
     /// Rows for the table: filtered by the sidebar status, then sorted by the column.
@@ -859,17 +908,19 @@ impl MainScreen {
 
     fn table(&self, me: &Entity<Self>) -> DataTable {
         let columns = [
-            DataColumn::new("name", "Name").width(320.0).sortable(true),
-            DataColumn::new("size", "Size").width(90.0).sortable(true),
-            DataColumn::new("progress", "Progress")
-                .width(90.0)
-                .sortable(true),
-            DataColumn::new("speed", "Down").width(110.0).sortable(true),
-            DataColumn::new("eta", "ETA").width(90.0).sortable(true),
-            DataColumn::new("state", "State")
-                .width(110.0)
-                .sortable(true),
-        ];
+            ("name", "Name", 320.0),
+            ("size", "Size", 90.0),
+            ("progress", "Progress", 90.0),
+            ("speed", "Down", 110.0),
+            ("upload", "Up", 110.0),
+            ("eta", "ETA", 90.0),
+            ("state", "State", 110.0),
+        ]
+        .map(|(id, title, width)| {
+            DataColumn::new(id, title)
+                .width(self.column_width(id, width))
+                .sortable(true)
+        });
         let rows = self.visible_rows().into_iter().map(|torrent| {
             DataRow::new(
                 row_id(torrent),
@@ -878,6 +929,7 @@ impl MainScreen {
                     DataCell::new(size_text(torrent)),
                     DataCell::new(progress_text(torrent)),
                     DataCell::new(speed_text(torrent)),
+                    DataCell::new(upload_text(torrent)),
                     DataCell::new(eta_text(torrent)),
                     DataCell::new(state_of(torrent)),
                 ],
@@ -903,6 +955,9 @@ impl MainScreen {
                 let column = column.to_string();
                 sort_me.update(app, |screen, cx| screen.sort_by(&column, direction, cx));
             });
+        if let Some((column, direction)) = &self.sort {
+            table = table.sort(column.clone(), *direction);
+        }
         if let Some(selected) = &self.selected {
             table = table.selected(selected.clone());
         }
@@ -1338,6 +1393,19 @@ fn download_bytes_per_sec(torrent: &Torrent) -> f64 {
         .map_or(0.0, |live| live.download_speed.mbps * 1024.0 * 1024.0)
 }
 
+fn upload_speed(torrent: &Torrent) -> rtbit_client::Speed {
+    torrent
+        .stats
+        .as_ref()
+        .and_then(|stats| stats.live.as_ref())
+        .map(|live| live.upload_speed.clone())
+        .unwrap_or_default()
+}
+
+fn upload_text(torrent: &Torrent) -> String {
+    format::speed(&upload_speed(torrent))
+}
+
 fn size_text(torrent: &Torrent) -> String {
     format::bytes(total_bytes(torrent))
 }
@@ -1392,6 +1460,7 @@ fn column_order(column: &str, a: &Torrent, b: &Torrent) -> Ordering {
         "size" => total_bytes(a).cmp(&total_bytes(b)),
         "progress" => done_fraction(a).total_cmp(&done_fraction(b)),
         "speed" => download_bytes_per_sec(a).total_cmp(&download_bytes_per_sec(b)),
+        "upload" => upload_speed(a).mbps.total_cmp(&upload_speed(b).mbps),
         "eta" => eta_seconds(a)
             .unwrap_or(f64::INFINITY)
             .total_cmp(&eta_seconds(b).unwrap_or(f64::INFINITY)),
@@ -1508,6 +1577,34 @@ mod tests {
         let big = row("big", 10);
         // Text order would put "10" before "9"; the column must sort by value.
         assert_eq!(column_order("size", &small, &big), Ordering::Less);
+    }
+
+    #[test]
+    fn numeric_columns_sort_by_value() {
+        let (mut slow, mut fast) = (row("a", 1), row("b", 1));
+        let live = |mbps| rtbit_client::LiveSpeeds {
+            download_speed: rtbit_client::Speed {
+                mbps,
+                human_readable: String::new(),
+            },
+            upload_speed: rtbit_client::Speed {
+                mbps,
+                human_readable: String::new(),
+            },
+        };
+        slow.stats.as_mut().unwrap().live = Some(live(9.0));
+        fast.stats.as_mut().unwrap().live = Some(live(10.0));
+        for column in ["speed", "upload"] {
+            assert_eq!(
+                column_order(column, &slow, &fast),
+                Ordering::Less,
+                "{column}"
+            );
+        }
+        let (mut half, mut most) = (row("a", 100), row("b", 100));
+        half.stats.as_mut().unwrap().progress_bytes = 9;
+        most.stats.as_mut().unwrap().progress_bytes = 10;
+        assert_eq!(column_order("progress", &half, &most), Ordering::Less);
     }
 
     #[test]
