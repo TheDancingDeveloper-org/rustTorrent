@@ -16,6 +16,10 @@ pub struct TablePrefs {
     /// Sort column id and whether the order is ascending.
     pub sort: Option<(String, bool)>,
     pub widths: BTreeMap<String, f32>,
+    pub status: Option<String>,
+    pub category: Option<String>,
+    pub tag: Option<String>,
+    pub tracker: Option<String>,
 }
 
 impl TablePrefs {
@@ -57,7 +61,8 @@ impl TablePrefs {
             .sort
             .as_ref()
             .map(|(column, ascending)| json!({ "column": column, "ascending": ascending }));
-        json!({ "sort": sort, "widths": self.widths })
+        json!({ "sort": sort, "widths": self.widths, "status": self.status,
+            "category": self.category, "tag": self.tag, "tracker": self.tracker })
     }
 
     fn from_json(value: &Value) -> Self {
@@ -79,7 +84,15 @@ impl TablePrefs {
                     .collect()
             })
             .unwrap_or_default();
-        Self { sort, widths }
+        let string = |key| value.get(key).and_then(Value::as_str).map(str::to_owned);
+        Self {
+            sort,
+            widths,
+            status: string("status"),
+            category: string("category"),
+            tag: string("tag"),
+            tracker: string("tracker"),
+        }
     }
 }
 
