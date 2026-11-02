@@ -81,6 +81,7 @@ impl TorrentsTableRecord {
                 only_files: self
                     .only_files
                     .map(|v| v.into_iter().map(|v| v as usize).collect()),
+                file_priority_levels: None,
                 is_paused: self.is_paused,
                 category: None,
                 tags: Default::default(),
