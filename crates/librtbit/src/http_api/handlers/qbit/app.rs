@@ -39,6 +39,8 @@ pub(super) async fn h_app_preferences(
     let session = state.api_state.api.session();
     let (download, upload) = session.normal_rate_limits();
     let alt = session.alt_speed_status().config;
+    let seed = session.seed_limits();
+    let net = session.pending_network().unwrap_or_default();
 
     axum::Json(QbitPreferences {
         save_path,
@@ -50,9 +52,14 @@ pub(super) async fn h_app_preferences(
         max_uploads_per_torrent: -1,
         dl_limit: pref_limit_to_qbit(download.map(|v| u64::from(v.get()))),
         up_limit: pref_limit_to_qbit(upload.map(|v| u64::from(v.get()))),
-        dht: true,
+        // A saved value applies at the next start; report it so a client that
+        // just set it reads it back.
+        dht: net
+            .dht_enabled
+            .unwrap_or_else(|| session.get_dht().is_some()),
+        // Peer exchange is part of the peer protocol and has no switch.
         pex: true,
-        lsd: true,
+        lsd: net.lsd_enabled.unwrap_or_else(|| session.lsd.is_some()),
         encryption: 0,
         queueing_enabled: session.queueing_enabled(),
         max_active_downloads: limit_to_qbit(session.max_active_downloads()),
@@ -66,17 +73,65 @@ pub(super) async fn h_app_preferences(
         alt_dl_limit: pref_limit_to_qbit(alt.download_rate),
         alt_up_limit: pref_limit_to_qbit(alt.upload_rate),
         scheduler_enabled: false,
-        max_ratio_enabled: false,
-        max_ratio: 2.0,
+        max_ratio_enabled: seed.max_ratio.is_some(),
+        max_ratio: seed.max_ratio.unwrap_or(2.0),
+        // Reaching a limit always pauses the torrent.
         max_ratio_act: 0,
-        max_seeding_time_enabled: false,
-        max_seeding_time: 1440,
-        max_inactive_seeding_time_enabled: false,
-        max_inactive_seeding_time: 1440,
+        max_seeding_time_enabled: seed.max_seeding_time.is_some(),
+        max_seeding_time: minutes_or(seed.max_seeding_time, 1440),
+        max_inactive_seeding_time_enabled: seed.max_inactive_seeding_time.is_some(),
+        max_inactive_seeding_time: minutes_or(seed.max_inactive_seeding_time, 1440),
     })
 }
 
-/// `app/setPreferences`. `announce_port`, the queue settings
+/// Minutes on the wire for a global limit, or `default` when it is off.
+fn minutes_or(limit: Option<std::time::Duration>, default: i64) -> i64 {
+    limit.map_or(default, |d| i64::from(minutes_to_qbit(Some(d))))
+}
+
+/// Apply an enabled flag and value pair to one global share limit. A flag
+/// alone keeps the current value, or `default` when there is none.
+fn merge_limit<T: Copy>(
+    current: Option<T>,
+    enabled: Option<bool>,
+    value: Option<T>,
+    default: T,
+) -> Option<T> {
+    match enabled {
+        Some(false) => None,
+        Some(true) => value.or(current).or(Some(default)),
+        None => current.map(|c| value.unwrap_or(c)),
+    }
+}
+
+/// The global share limits after a preferences update.
+fn share_limits_update(preferences: &SetPreferences, current: ShareLimits) -> ShareLimits {
+    let minutes = |m: Option<i64>| m.and_then(minutes_from_qbit);
+    ShareLimits {
+        max_ratio: merge_limit(
+            current.max_ratio,
+            preferences.max_ratio_enabled,
+            preferences.max_ratio.filter(|r| *r >= 0.0),
+            2.0,
+        ),
+        max_seeding_time: merge_limit(
+            current.max_seeding_time,
+            preferences.max_seeding_time_enabled,
+            minutes(preferences.max_seeding_time),
+            std::time::Duration::from_secs(1440 * 60),
+        ),
+        max_inactive_seeding_time: merge_limit(
+            current.max_inactive_seeding_time,
+            preferences.max_inactive_seeding_time_enabled,
+            minutes(preferences.max_inactive_seeding_time),
+            std::time::Duration::from_secs(1440 * 60),
+        ),
+    }
+}
+
+/// `app/setPreferences`. `announce_port`, the global share limits
+/// (`max_ratio*`, `max_seeding_time*`, `max_inactive_seeding_time*`), `dht` and
+/// `lsd` (saved for the next start; `pex` is always on), the queue settings
 /// (`queueing_enabled`, `max_active_downloads`, `max_active_uploads`) and the
 /// normal and alternative speed limits (`dl_limit`, `up_limit`,
 /// `alt_dl_limit`, `alt_up_limit`, bytes/s, 0 or -1 unlimited) are applied;
@@ -114,6 +169,26 @@ pub(super) async fn h_app_set_preferences(
         && let Err(error) = session.set_queue_limits(downloads, seeds).await
     {
         warn!(%error, "qbit compat: error saving queue limits");
+    }
+    let current = session.seed_limits();
+    let limits = share_limits_update(&preferences, current);
+    if limits != current
+        && let Err(error) = session.set_seed_limits(limits).await
+    {
+        warn!(%error, "qbit compat: error saving global share limits");
+    }
+    if preferences.dht.is_some() || preferences.lsd.is_some() {
+        // Discovery is chosen at startup, so these are saved for the next start.
+        if session.has_persistence() {
+            session.set_pending_network(crate::session_persistence::NetworkSettings {
+                dht_enabled: preferences.dht,
+                lsd_enabled: preferences.lsd,
+                ..Default::default()
+            });
+            if let Err(error) = session.persist_session_settings().await {
+                warn!(%error, "qbit compat: error saving network settings");
+            }
+        }
     }
     if preferences.dl_limit.is_some() || preferences.up_limit.is_some() {
         let (download, upload) = session.normal_rate_limits();
