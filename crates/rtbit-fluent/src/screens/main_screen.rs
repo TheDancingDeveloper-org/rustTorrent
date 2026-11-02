@@ -30,6 +30,9 @@ use crate::bridge::{Bridge, LOST_AFTER_FAILURES, PollHealth, Poller, fetch_snaps
 use crate::screens::add_dialog::{AddDialog, AddDialogEvent};
 use crate::screens::bulk_edit_dialog::{BulkEditDialog, BulkEditDialogEvent, BulkEditRequest};
 use crate::screens::detail::DetailPane;
+use crate::screens::torrent_edit_dialog::{
+    TorrentEditDialog, TorrentEditDialogEvent, TorrentEditKind,
+};
 use crate::table_prefs::TablePrefs;
 use crate::widgets::status_bar::StatusBar;
 
@@ -203,6 +206,8 @@ pub struct MainScreen {
     _add_send: Option<Task<()>>,
     bulk_edit: Option<Entity<BulkEditDialog>>,
     _bulk_edit_events: Option<Subscription>,
+    torrent_edit: Option<Entity<TorrentEditDialog>>,
+    _torrent_edit_events: Option<Subscription>,
     toasts: Entity<ToastHost>,
     daemon_lost: bool,
     pub(crate) _poller: Option<Poller>,
@@ -272,6 +277,8 @@ impl MainScreen {
             _add_send: None,
             bulk_edit: None,
             _bulk_edit_events: None,
+            torrent_edit: None,
+            _torrent_edit_events: None,
             toasts: cx.new(ToastHost::new),
             daemon_lost: false,
             _poller: None,
@@ -815,6 +822,12 @@ impl MainScreen {
                 !targets.is_empty(),
                 MenuCommand::BulkEdit,
             ))
+            .item(item(
+                "Set location…",
+                available.edit,
+                MenuCommand::SetLocation,
+            ))
+            .item(item("Rename…", available.edit, MenuCommand::Rename))
             .separator()
             .item(item(
                 "Copy magnet link",
@@ -833,6 +846,8 @@ impl MainScreen {
         self.menu = None;
         match command {
             MenuCommand::BulkEdit => self.open_bulk_edit(cx),
+            MenuCommand::SetLocation => self.open_torrent_edit(TorrentEditKind::Location, cx),
+            MenuCommand::Rename => self.open_torrent_edit(TorrentEditKind::Name, cx),
             MenuCommand::Delete => self.request(RowAction::Delete, cx),
             MenuCommand::CopyMagnet | MenuCommand::CopyName => {
                 let text = copy_text(&self.targets(), &command);
@@ -858,6 +873,75 @@ impl MainScreen {
                 self.run_jobs(jobs, cx);
             }
         }
+    }
+
+    fn open_torrent_edit(&mut self, kind: TorrentEditKind, cx: &mut Context<Self>) {
+        let Some(target) = self.targets().first().copied() else {
+            self.action_error = Some("Select a torrent first.".to_owned());
+            cx.notify();
+            return;
+        };
+        let initial = match kind {
+            TorrentEditKind::Location => target.output_folder.clone(),
+            TorrentEditKind::Name => torrent_name(target),
+        };
+        let dialog = cx.new(|cx| TorrentEditDialog::new(kind, initial, cx));
+        let events = cx.subscribe(&dialog, move |screen, dialog, event, cx| match event {
+            TorrentEditDialogEvent::Cancel => {
+                screen.torrent_edit = None;
+                screen._torrent_edit_events = None;
+                cx.notify();
+            }
+            TorrentEditDialogEvent::Submit(value) => {
+                screen.send_torrent_edit(dialog.clone(), kind, value.clone(), cx);
+            }
+        });
+        self.torrent_edit = Some(dialog);
+        self._torrent_edit_events = Some(events);
+        cx.notify();
+    }
+
+    fn send_torrent_edit(
+        &mut self,
+        dialog: Entity<TorrentEditDialog>,
+        kind: TorrentEditKind,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(id) = self.targets().first().and_then(|torrent| torrent.id) else {
+            dialog.update(cx, |dialog, cx| {
+                dialog.set_error("This torrent has no daemon id.".to_owned(), cx)
+            });
+            return;
+        };
+        let Some(bridge) = cx.try_global::<Bridge>() else {
+            dialog.update(cx, |dialog, cx| {
+                dialog.set_error("Not connected to a daemon.".to_owned(), cx)
+            });
+            return;
+        };
+        let rx = bridge.call(move |client| async move {
+            let mut client = client.lock().await;
+            match kind {
+                TorrentEditKind::Location => client.set_torrent_location(id, &value).await,
+                TorrentEditKind::Name => client.rename_torrent(id, &value).await,
+            }
+        });
+        self._action = Some(cx.spawn(async move |view, cx| {
+            let reply = match rx.await {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(error)) => Err(map_error(&error)),
+                Err(_) => Err("request cancelled".to_owned()),
+            };
+            let _ = view.update(cx, |screen, cx| match reply {
+                Ok(()) => {
+                    screen.torrent_edit = None;
+                    screen._torrent_edit_events = None;
+                    screen.refresh(cx);
+                }
+                Err(error) => dialog.update(cx, |dialog, cx| dialog.set_error(error, cx)),
+            });
+        }));
     }
 
     fn open_bulk_edit(&mut self, cx: &mut Context<Self>) {
@@ -1522,6 +1606,9 @@ impl Render for MainScreen {
         if let Some(dialog) = &self.bulk_edit {
             root = root.child(dialog.clone());
         }
+        if let Some(dialog) = &self.torrent_edit {
+            root = root.child(dialog.clone());
+        }
         root = root.child(self.toasts.clone());
         root
     }
@@ -1583,6 +1670,8 @@ enum MenuCommand {
     Recheck,
     SetCategory(Option<String>),
     BulkEdit,
+    SetLocation,
+    Rename,
     CopyMagnet,
     CopyName,
     Delete,
@@ -1603,6 +1692,7 @@ struct MenuAvailability {
     stop: bool,
     recheck: bool,
     category: bool,
+    edit: bool,
     copy: bool,
     delete: bool,
 }
@@ -1617,6 +1707,7 @@ impl MenuAvailability {
             stop: any(&|t| has_id(t) && is_stoppable(state(t))),
             recheck: any(&|t| has_id(t) && state(t) != Some(TorrentState::Initializing)),
             category: any(&has_id),
+            edit: targets.len() == 1 && any(&has_id),
             copy: !targets.is_empty(),
             delete: any(&has_id),
         }
@@ -2597,9 +2688,84 @@ mod tests {
 
         assert!(!MenuAvailability::of(&[&starting]).recheck);
 
+        let mut missing = with_state(4, TorrentState::Error);
+        missing.name = Some("missingFiles".to_owned());
+        assert!(MenuAvailability::of(&[&missing]).edit);
+
         let none = MenuAvailability::of(&[]);
         assert!(!(none.start || none.stop || none.recheck || none.category || none.copy));
         assert!(!none.delete);
+    }
+
+    #[gpui::test]
+    fn set_location_success_closes_the_dialog(cx: &mut TestAppContext) {
+        let (runtime, server) = daemon(cx);
+        runtime.block_on(
+            Mock::given(method("POST"))
+                .and(path("/torrents/3/set_location"))
+                .and(wiremock::matchers::body_json(serde_json::json!({
+                    "location": "/new/place"
+                })))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(1)
+                .mount(&server),
+        );
+        let status = cx.new(|_| StatusBar::new());
+        let screen = cx.new(|cx| MainScreen::new(status, cx));
+        screen.update(cx, |screen, cx| {
+            screen._load = Some(Bridge::load(screen, cx, snapshot_of, fetch_snapshot));
+        });
+        drive(cx, |cx| screen.read_with(cx, |s, _| s.torrent_count() > 0));
+        screen.update(cx, |screen, cx| {
+            screen.select_row("3", cx);
+            screen.open_torrent_edit(TorrentEditKind::Location, cx);
+            let dialog = screen.torrent_edit.clone().unwrap();
+            screen.send_torrent_edit(
+                dialog,
+                TorrentEditKind::Location,
+                "/new/place".to_owned(),
+                cx,
+            );
+        });
+        drive(cx, |cx| {
+            screen.read_with(cx, |s, _| s.torrent_edit.is_none())
+        });
+        runtime.block_on(server.verify());
+    }
+
+    #[gpui::test]
+    fn set_location_409_stays_in_the_dialog(cx: &mut TestAppContext) {
+        let (runtime, server) = daemon(cx);
+        runtime.block_on(
+            Mock::given(method("POST"))
+                .and(path("/torrents/3/set_location"))
+                .respond_with(
+                    ResponseTemplate::new(409)
+                        .set_body_string("cross-device move is not supported"),
+                )
+                .expect(1)
+                .mount(&server),
+        );
+        let status = cx.new(|_| StatusBar::new());
+        let screen = cx.new(|cx| MainScreen::new(status, cx));
+        screen.update(cx, |screen, cx| {
+            screen._load = Some(Bridge::load(screen, cx, snapshot_of, fetch_snapshot));
+        });
+        drive(cx, |cx| screen.read_with(cx, |s, _| s.torrent_count() > 0));
+        screen.update(cx, |screen, cx| {
+            screen.select_row("3", cx);
+            screen.open_torrent_edit(TorrentEditKind::Location, cx);
+            let dialog = screen.torrent_edit.clone().unwrap();
+            screen.send_torrent_edit(dialog, TorrentEditKind::Location, "/other".to_owned(), cx);
+        });
+        drive(cx, |cx| {
+            screen.read_with(cx, |screen, cx| {
+                screen.torrent_edit.as_ref().is_some_and(|dialog| {
+                    dialog.read(cx).error.as_deref() == Some("cross-device move is not supported")
+                })
+            })
+        });
+        runtime.block_on(server.verify());
     }
 
     #[test]

@@ -7,5 +7,6 @@ pub mod detail;
 pub mod main_screen;
 pub mod rss;
 pub mod settings;
+pub mod torrent_edit_dialog;
 
 pub use main_screen::MainScreen;

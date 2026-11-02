@@ -13,7 +13,7 @@ pub enum Error {
     #[error("daemon is not set up")]
     NotSetUp,
     /// The daemon answered with an error status.
-    /// `message` is set only for a 400 whose body is a short, plain validation
+    /// `message` is set only for a 400 or 409 whose body is a short, plain validation
     /// sentence. It never carries a token or a raw response body.
     #[error("daemon error {status}")]
     Daemon {
@@ -34,7 +34,7 @@ impl Error {
         } else if status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND {
             Self::NotSetUp
         } else {
-            let message = if status == StatusCode::BAD_REQUEST {
+            let message = if matches!(status, StatusCode::BAD_REQUEST | StatusCode::CONFLICT) {
                 safe_validation_message(body)
             } else {
                 None
