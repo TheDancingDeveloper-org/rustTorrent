@@ -332,6 +332,115 @@ mod tests {
         assert_eq!(secs, [1, 1, 2, 4, 8, 16, 30, 30, 30]);
     }
 
+    #[test]
+    fn backoff_is_normal_interval_with_no_failures() {
+        assert_eq!(backoff_delay(0), SNAPSHOT_INTERVAL);
+        assert_eq!(backoff_delay(u32::MAX >> 1), MAX_BACKOFF);
+    }
+
+    #[test]
+    fn await_reply_passes_value_and_stringifies_errors() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (tx, rx) = oneshot::channel();
+        tx.send(Ok(5u8)).unwrap();
+        assert_eq!(rt.block_on(await_reply(rx)), Ok(5));
+        let (tx, rx) = oneshot::channel::<Result<u8, Error>>();
+        tx.send(Err(Error::Unauthorised)).unwrap();
+        assert_eq!(rt.block_on(await_reply(rx)), Err("unauthorised".to_owned()));
+        let (tx, rx) = oneshot::channel::<Result<u8, Error>>();
+        tx.send(Err(Error::Unreachable("refused".into()))).unwrap();
+        assert_eq!(
+            rt.block_on(await_reply(rx)),
+            Err("daemon unreachable: refused".to_owned())
+        );
+    }
+
+    #[test]
+    fn await_reply_reports_dropped_sender_as_cancelled() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (tx, rx) = oneshot::channel::<Result<u8, Error>>();
+        drop(tx);
+        assert_eq!(
+            rt.block_on(await_reply(rx)),
+            Err("request cancelled".to_owned())
+        );
+    }
+
+    /// A logged-in client against a daemon whose `/torrents` answers `status`.
+    fn client_with_torrents_status(rt: &Runtime, status: u16) -> (SharedClient, MockServer) {
+        rt.block_on(async {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/auth/login"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_raw(fixture("login.json"), "application/json"),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/auth/refresh"))
+                .respond_with(ResponseTemplate::new(401))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/torrents"))
+                .respond_with(ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+            let mut client = Client::new(server.uri()).unwrap();
+            client.login("admin", "secret").await.unwrap();
+            (Arc::new(Mutex::new(client)), server)
+        })
+    }
+
+    #[test]
+    fn fetch_snapshot_maps_401_to_unauthorised() {
+        let rt = Runtime::new().unwrap();
+        let (client, _server) = client_with_torrents_status(&rt, 401);
+        let err = rt.block_on(fetch_snapshot(client)).unwrap_err();
+        assert!(matches!(err, Error::Unauthorised), "{err:?}");
+    }
+
+    #[test]
+    fn fetch_snapshot_maps_4xx_to_daemon_error_with_status() {
+        let rt = Runtime::new().unwrap();
+        let (client, _server) = client_with_torrents_status(&rt, 418);
+        match rt.block_on(fetch_snapshot(client)).unwrap_err() {
+            Error::Daemon { status, message } => {
+                assert_eq!(status.as_u16(), 418);
+                assert_eq!(message, None);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fetch_snapshot_maps_5xx_to_daemon_error_message() {
+        let rt = Runtime::new().unwrap();
+        let (client, _server) = client_with_torrents_status(&rt, 503);
+        let err = rt.block_on(fetch_snapshot(client)).unwrap_err();
+        assert!(matches!(&err, Error::Daemon { status, .. } if status.as_u16() == 503));
+        assert_eq!(err.to_string(), "daemon error 503 Service Unavailable");
+    }
+
+    #[test]
+    fn fetch_snapshot_maps_transport_failure_to_unreachable() {
+        let rt = Runtime::new().unwrap();
+        let (client, server) = client_with_torrents_status(&rt, 200);
+        drop(server);
+        let err = rt.block_on(fetch_snapshot(client)).unwrap_err();
+        assert!(matches!(err, Error::Unreachable(_)), "{err:?}");
+    }
+
+    #[test]
+    fn call_delivers_the_closure_result() {
+        let bridge = Bridge::new("http://127.0.0.1:1").unwrap();
+        let rx = bridge.call(|_| async { Err::<(), _>(Error::NotSetUp) });
+        let reply = bridge.runtime().block_on(rx).unwrap();
+        assert!(matches!(reply, Err(Error::NotSetUp)));
+    }
+
     #[gpui::test]
     fn load_resolves_snapshot_from_daemon(cx: &mut TestAppContext) {
         let (_runtime, _server) = daemon(cx);
