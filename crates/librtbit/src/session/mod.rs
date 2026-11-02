@@ -612,6 +612,7 @@ impl Session {
                 .context("error creating stream connector")?,
             );
 
+            crate::safe_fetch::set_allowlist(opts.fetch_allowlist.clone());
             let blocklist = if let Some(blocklist_url) = opts.blocklist_url {
                 info!(url = blocklist_url, "loading p2p blocklist");
                 let bl = IpRanges::load_from_url(&blocklist_url)
