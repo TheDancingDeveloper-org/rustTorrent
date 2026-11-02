@@ -168,6 +168,45 @@ impl Client {
         .await
     }
 
+    /// Set or clear a category for several torrents in one request.
+    pub async fn set_torrents_category(
+        &mut self,
+        ids: &[u64],
+        category: Option<&str>,
+    ) -> Result<crate::types::BulkEditResponse, Error> {
+        self.authed_post_json_as(
+            "torrents/bulk/category",
+            &serde_json::json!({ "ids": ids, "category": category }),
+        )
+        .await
+    }
+
+    /// Add tags to several torrents in one request.
+    pub async fn add_torrents_tags(
+        &mut self,
+        ids: &[u64],
+        tags: &[String],
+    ) -> Result<crate::types::BulkEditResponse, Error> {
+        self.authed_post_json_as(
+            "torrents/bulk/tags/add",
+            &serde_json::json!({ "ids": ids, "tags": tags }),
+        )
+        .await
+    }
+
+    /// Remove tags from several torrents in one request.
+    pub async fn remove_torrents_tags(
+        &mut self,
+        ids: &[u64],
+        tags: &[String],
+    ) -> Result<crate::types::BulkEditResponse, Error> {
+        self.authed_post_json_as(
+            "torrents/bulk/tags/remove",
+            &serde_json::json!({ "ids": ids, "tags": tags }),
+        )
+        .await
+    }
+
     /// `POST /torrents/{id}/delete`. Removes the torrent and its files.
     pub async fn delete_torrent(&mut self, id: u64) -> Result<(), Error> {
         self.authed_post_empty(&format!("torrents/{id}/delete"))

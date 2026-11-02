@@ -827,6 +827,89 @@ pub struct SetTorrentCategoryRequest {
     pub category: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct BulkCategoryRequest {
+    pub ids: Vec<u64>,
+    pub category: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct BulkTagsRequest {
+    pub ids: Vec<u64>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct BulkEditFailure {
+    pub id: u64,
+    pub error: String,
+}
+
+#[derive(Serialize)]
+pub struct BulkEditResponse {
+    pub failures: Vec<BulkEditFailure>,
+}
+
+pub async fn h_bulk_set_torrent_category(
+    State(state): State<ApiState>,
+    axum::Json(req): axum::Json<BulkCategoryRequest>,
+) -> impl IntoResponse {
+    let mut failures = Vec::new();
+    for id in req.ids {
+        if let Err(error) = state
+            .api
+            .api_set_torrent_category(TorrentIdOrHash::Id(id), req.category.clone())
+            .await
+        {
+            failures.push(BulkEditFailure {
+                id,
+                error: format!("{error:#}"),
+            });
+        }
+    }
+    axum::Json(BulkEditResponse { failures })
+}
+
+pub async fn h_bulk_add_torrent_tags(
+    State(state): State<ApiState>,
+    axum::Json(req): axum::Json<BulkTagsRequest>,
+) -> impl IntoResponse {
+    let mut failures = Vec::new();
+    for id in req.ids {
+        if let Err(error) = state
+            .api
+            .api_add_torrent_tags(TorrentIdOrHash::Id(id), &req.tags)
+            .await
+        {
+            failures.push(BulkEditFailure {
+                id,
+                error: format!("{error:#}"),
+            });
+        }
+    }
+    axum::Json(BulkEditResponse { failures })
+}
+
+pub async fn h_bulk_remove_torrent_tags(
+    State(state): State<ApiState>,
+    axum::Json(req): axum::Json<BulkTagsRequest>,
+) -> impl IntoResponse {
+    let mut failures = Vec::new();
+    for id in req.ids {
+        if let Err(error) = state
+            .api
+            .api_remove_torrent_tags(TorrentIdOrHash::Id(id), &req.tags)
+            .await
+        {
+            failures.push(BulkEditFailure {
+                id,
+                error: format!("{error:#}"),
+            });
+        }
+    }
+    axum::Json(BulkEditResponse { failures })
+}
+
 pub async fn h_list_categories(State(state): State<ApiState>) -> impl IntoResponse {
     axum::Json(state.api.api_list_categories())
 }
