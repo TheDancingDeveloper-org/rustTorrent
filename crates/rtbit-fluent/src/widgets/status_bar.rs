@@ -1,6 +1,8 @@
 //! Bottom status bar: connection badge, torrent total and live speeds.
 
-use fluent_primitives::{Button, ButtonAppearance, ConnectionBadge, ConnectionBadgeState, Label, LabelSize, TextInput};
+use fluent_primitives::{
+    Button, ButtonAppearance, ConnectionBadge, ConnectionBadgeState, Label, LabelSize, TextInput,
+};
 use gpui::{Context, IntoElement, Render, Task, Window, div, prelude::*};
 use rtbit_client::{RateLimits, SettingsSnapshot};
 use rtbit_ui_core::{Connection, Snapshot, format};
@@ -71,9 +73,10 @@ impl StatusBar {
         }
         let entity = cx.entity();
         self._limit_request = Some(cx.spawn(async move |_, cx| {
-            let reply = cx.update(|cx| cx.global::<Bridge>().call(|client| async move {
-                client.lock().await.settings().await
-            }));
+            let reply = cx.update(|cx| {
+                cx.global::<Bridge>()
+                    .call(|client| async move { client.lock().await.settings().await })
+            });
             if let Ok(Ok(settings)) = reply.await {
                 entity.update(cx, |bar, cx| bar.apply_settings(&settings, cx));
             }
@@ -87,9 +90,11 @@ impl StatusBar {
         cx.notify();
         let entity = cx.entity();
         self._limit_request = Some(cx.spawn(async move |_, cx| {
-            let result = cx.update(|cx| cx.global::<Bridge>().call(move |client| async move {
-                client.lock().await.set_alt_enabled(next).await
-            }));
+            let result = cx.update(|cx| {
+                cx.global::<Bridge>().call(move |client| async move {
+                    client.lock().await.set_alt_enabled(next).await
+                })
+            });
             let ok = result.await.is_ok_and(|reply| reply.is_ok());
             if !ok {
                 entity.update(cx, |bar, cx| {
@@ -101,18 +106,29 @@ impl StatusBar {
     }
 
     fn apply_limits(&mut self, cx: &mut Context<Self>) {
-        let download_bps = self.download_input.as_ref().and_then(|input| input.read(cx).text().trim().parse::<u32>().ok());
-        let upload_bps = self.upload_input.as_ref().and_then(|input| input.read(cx).text().trim().parse::<u32>().ok());
-        let next = RateLimits { download_bps, upload_bps, ..self.limits.clone() };
+        let download_bps = self
+            .download_input
+            .as_ref()
+            .and_then(|input| input.read(cx).text().trim().parse::<u32>().ok());
+        let upload_bps = self
+            .upload_input
+            .as_ref()
+            .and_then(|input| input.read(cx).text().trim().parse::<u32>().ok());
+        let next = RateLimits {
+            download_bps,
+            upload_bps,
+            ..self.limits.clone()
+        };
         let previous = self.limits.clone();
         self.limits = next.clone();
         self.popover = false;
         cx.notify();
         let entity = cx.entity();
         self._limit_request = Some(cx.spawn(async move |_, cx| {
-            let result = cx.update(|cx| cx.global::<Bridge>().call(move |client| async move {
-                client.lock().await.set_limits(&next).await
-            }));
+            let result = cx.update(|cx| {
+                cx.global::<Bridge>()
+                    .call(move |client| async move { client.lock().await.set_limits(&next).await })
+            });
             if !result.await.is_ok_and(|reply| reply.is_ok()) {
                 entity.update(cx, |bar, cx| {
                     bar.limits = previous;
@@ -141,8 +157,10 @@ fn badge_state(connection: Connection) -> ConnectionBadgeState {
 impl Render for StatusBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.download_input.is_none() {
-            self.download_input = Some(cx.new(|_| TextInput::new().placeholder("Download B/s (blank = unlimited)")));
-            self.upload_input = Some(cx.new(|_| TextInput::new().placeholder("Upload B/s (blank = unlimited)")));
+            self.download_input =
+                Some(cx.new(|_| TextInput::new().placeholder("Download B/s (blank = unlimited)")));
+            self.upload_input =
+                Some(cx.new(|_| TextInput::new().placeholder("Upload B/s (blank = unlimited)")));
         }
         let me = cx.entity();
         let toggle = me.clone();
@@ -150,9 +168,21 @@ impl Render for StatusBar {
         let upload = me.clone();
         let apply = me.clone();
         let limits = if self.alt_enabled {
-            format!("{} / {}", format::bytes(self.limits.download_bps.unwrap_or(0) as u64), format::bytes(self.limits.upload_bps.unwrap_or(0) as u64))
+            format!(
+                "{} / {}",
+                format::bytes(self.limits.download_bps.unwrap_or(0) as u64),
+                format::bytes(self.limits.upload_bps.unwrap_or(0) as u64)
+            )
         } else {
-            format!("{} / {}", self.limits.download_bps.map_or_else(|| "∞".to_owned(), |v| format::bytes(v as u64)), self.limits.upload_bps.map_or_else(|| "∞".to_owned(), |v| format::bytes(v as u64)))
+            format!(
+                "{} / {}",
+                self.limits
+                    .download_bps
+                    .map_or_else(|| "∞".to_owned(), |v| format::bytes(v as u64)),
+                self.limits
+                    .upload_bps
+                    .map_or_else(|| "∞".to_owned(), |v| format::bytes(v as u64))
+            )
         };
         let popover = self.popover;
         div()
@@ -168,23 +198,64 @@ impl Render for StatusBar {
             .child(Label::new(format!("{} torrents", self.torrents)).size(LabelSize::Caption))
             .child(Label::new(format!("↓ {}", self.download)).size(LabelSize::Caption))
             .child(Label::new(format!("↑ {}", self.upload)).size(LabelSize::Caption))
-            .child(Button::new("status-download-limit").label(format!("DL {}", limits.split_once(" / ").map_or("∞", |v| v.0))).appearance(ButtonAppearance::Subtle).on_click(move |_, _, cx| {
-                download.update(cx, |bar, cx| { bar.popover = true; cx.notify(); });
-            }))
-            .child(Button::new("status-upload-limit").label(format!("UL {}", limits.split_once(" / ").map_or("∞", |v| v.1))).appearance(ButtonAppearance::Subtle).on_click(move |_, _, cx| {
-                upload.update(cx, |bar, cx| { bar.popover = true; cx.notify(); });
-            }))
-            .child(Button::new("status-alt-speed").label(if self.alt_enabled { "Alt speed: on" } else { "Alt speed: off" }).appearance(if self.alt_enabled { ButtonAppearance::Accent } else { ButtonAppearance::Subtle }).on_click(move |_, _, cx| {
-                toggle.update(cx, |bar, cx| bar.toggle_alt(cx));
-            }))
-            .when(popover, |element| element.child(
-                div().flex().gap_1()
-                    .child(self.download_input.clone().expect("created above"))
-                    .child(self.upload_input.clone().expect("created above"))
-                    .child(Button::new("status-limit-apply").label("Apply").on_click(move |_, _, cx| {
-                        apply.update(cx, |bar, cx| bar.apply_limits(cx));
-                    })),
-            ))
+            .child(
+                Button::new("status-download-limit")
+                    .label(format!(
+                        "DL {}",
+                        limits.split_once(" / ").map_or("∞", |v| v.0)
+                    ))
+                    .appearance(ButtonAppearance::Subtle)
+                    .on_click(move |_, _, cx| {
+                        download.update(cx, |bar, cx| {
+                            bar.popover = true;
+                            cx.notify();
+                        });
+                    }),
+            )
+            .child(
+                Button::new("status-upload-limit")
+                    .label(format!(
+                        "UL {}",
+                        limits.split_once(" / ").map_or("∞", |v| v.1)
+                    ))
+                    .appearance(ButtonAppearance::Subtle)
+                    .on_click(move |_, _, cx| {
+                        upload.update(cx, |bar, cx| {
+                            bar.popover = true;
+                            cx.notify();
+                        });
+                    }),
+            )
+            .child(
+                Button::new("status-alt-speed")
+                    .label(if self.alt_enabled {
+                        "Alt speed: on"
+                    } else {
+                        "Alt speed: off"
+                    })
+                    .appearance(if self.alt_enabled {
+                        ButtonAppearance::Accent
+                    } else {
+                        ButtonAppearance::Subtle
+                    })
+                    .on_click(move |_, _, cx| {
+                        toggle.update(cx, |bar, cx| bar.toggle_alt(cx));
+                    }),
+            )
+            .when(popover, |element| {
+                element.child(
+                    div()
+                        .flex()
+                        .gap_1()
+                        .child(self.download_input.clone().expect("created above"))
+                        .child(self.upload_input.clone().expect("created above"))
+                        .child(Button::new("status-limit-apply").label("Apply").on_click(
+                            move |_, _, cx| {
+                                apply.update(cx, |bar, cx| bar.apply_limits(cx));
+                            },
+                        )),
+                )
+            })
     }
 }
 

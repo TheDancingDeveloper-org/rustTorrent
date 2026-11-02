@@ -580,7 +580,10 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
         .route("/defaultSavePath", get(h_app_default_save_path))
         .route("/getFreeSpaceAtPath", get(h_app_get_free_space_at_path))
         .route("/networkInterfaceList", get(h_app_network_interface_list))
-        .route("/networkInterfaceAddressList", get(h_app_network_interface_address_list))
+        .route(
+            "/networkInterfaceAddressList",
+            get(h_app_network_interface_address_list),
+        )
         .route("/preferences", get(h_app_preferences))
         .route("/setPreferences", post(h_app_set_preferences))
         .route("/shutdown", post(h_app_shutdown));
