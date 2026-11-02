@@ -92,7 +92,12 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ torrent }) => {
   const stateDisplay = (() => {
     if (error) return { text: "Error", color: "text-error" };
     if (state === STATE_INITIALIZING)
-      return { text: "Initializing", color: "text-warning" };
+      return {
+        text: statsResponse.queued_for_init
+          ? "Queued for check"
+          : `Checking ${Math.floor(progressPct)}%`,
+        color: "text-warning",
+      };
     if (state === STATE_PAUSED)
       return { text: "Paused", color: "text-secondary" };
     if (state === STATE_LIVE && finished)
