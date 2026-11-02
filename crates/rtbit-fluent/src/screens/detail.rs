@@ -16,7 +16,7 @@ use fluent_core::AsyncResource;
 use fluent_layout::{
     DataColumn, DataRow, DataTable, MessageBar, MessageIntent, TabItem, TabStrip, Tree, TreeItem,
 };
-use fluent_primitives::{Button, Checkbox, CheckboxState, Label};
+use fluent_primitives::{Button, ButtonAppearance, Checkbox, CheckboxState, Label, TextInput};
 use gpui::{
     App, AsyncApp, ClickEvent, Context, Entity, IntoElement, Render, SharedString, Task,
     WeakEntity, Window, div, prelude::*, px,
@@ -55,7 +55,9 @@ pub struct DetailPane {
     torrent_id: Option<u64>,
     detail: AsyncResource<DetailSnapshot, String>,
     tabs: Entity<TabStrip>,
+    tracker_input: Entity<TextInput>,
     error: Option<String>,
+    notice: Option<String>,
     /// The Files tree node the checkbox and priority buttons act on.
     selected_node: Option<SharedString>,
     /// Folder nodes the user collapsed; folders start expanded.
@@ -94,13 +96,16 @@ impl DetailPane {
             }
             strip
         });
+        let tracker_input = cx.new(|_| TextInput::new().placeholder("Tracker URL"));
         // A tab click notifies the strip; re-render the pane so the body follows.
         cx.observe(&tabs, |_, _, cx| cx.notify()).detach();
         Self {
             torrent_id: None,
             detail: AsyncResource::default(),
             tabs,
+            tracker_input,
             error: None,
+            notice: None,
             selected_node: None,
             collapsed: HashSet::new(),
             _load: None,
@@ -139,9 +144,12 @@ impl DetailPane {
         if self.torrent_id != Some(id) {
             self.selected_node = None;
             self.collapsed.clear();
+            self.tracker_input
+                .update(cx, |input, cx| input.set_value("", cx));
         }
         self.torrent_id = Some(id);
         self.error = None;
+        self.notice = None;
         self._load = Some(Bridge::load(self, cx, detail_of, move |client| {
             fetch_detail(client, id)
         }));
@@ -152,6 +160,7 @@ impl DetailPane {
         self.torrent_id = None;
         self.detail = AsyncResource::default();
         self.error = None;
+        self.notice = None;
         self.selected_node = None;
         self.collapsed.clear();
         self._load = None;
@@ -252,6 +261,34 @@ impl DetailPane {
         }
     }
 
+    /// Add the tracker URL entered in the Trackers tab and reload the detail.
+    pub fn add_tracker(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.torrent_id else {
+            return;
+        };
+        let tracker = self.tracker_input.read(cx).text().trim().to_owned();
+        self.notice = None;
+        if tracker.is_empty() {
+            self.error = Some("Tracker URL cannot be empty.".to_owned());
+            cx.notify();
+            return;
+        }
+        let rx = cx.global::<Bridge>().call(move |client| async move {
+            let mut client = client.lock().await;
+            client.add_trackers(id, &[tracker]).await
+        });
+        self._action = Some(
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let reply = match rx.await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(err)) => Err(map_error(&err)),
+                    Err(_) => Err("request cancelled".to_owned()),
+                };
+                let _ = this.update(cx, |this, cx| this.finish_add_tracker(id, reply, cx));
+            }),
+        );
+    }
+
     fn files(&self) -> Option<Vec<TorrentFile>> {
         self.detail
             .ready_value()
@@ -286,6 +323,23 @@ impl DetailPane {
         cx.notify();
     }
 
+    fn finish_add_tracker(&mut self, id: u64, reply: Result<(), String>, cx: &mut Context<Self>) {
+        match reply {
+            Ok(()) if self.torrent_id == Some(id) => {
+                self.tracker_input
+                    .update(cx, |input, cx| input.set_value("", cx));
+                self.select_torrent(id, cx);
+                self.notice = Some("Tracker added.".to_owned());
+            }
+            Ok(()) => {}
+            Err(message) => {
+                self.notice = None;
+                self.error = Some(message);
+            }
+        }
+        cx.notify();
+    }
+
     fn body(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let Some(snapshot) = self.detail.ready_value() else {
             let text = if self.torrent_id.is_some() {
@@ -301,7 +355,7 @@ impl DetailPane {
             }
             "files" => files(snapshot, self, cx).into_any_element(),
             "peers" => peers_table(snapshot).into_any_element(),
-            "trackers" => trackers_table(snapshot).into_any_element(),
+            "trackers" => trackers_table(snapshot, self, cx).into_any_element(),
             "pieces" if snapshot.pieces.have.is_empty() => {
                 Label::new(empty_state_message("pieces")).into_any_element()
             }
@@ -603,20 +657,43 @@ fn tracker_rows(snapshot: &DetailSnapshot) -> Vec<[String; 4]> {
         .collect()
 }
 
-fn trackers_table(snapshot: &DetailSnapshot) -> impl IntoElement {
+fn trackers_table(
+    snapshot: &DetailSnapshot,
+    pane: &DetailPane,
+    cx: &mut Context<DetailPane>,
+) -> impl IntoElement {
     let rows = tracker_rows(snapshot)
         .into_iter()
         .map(|cells| DataRow::new(cells[0].clone(), cells));
-    DataTable::new()
-        .columns([
-            DataColumn::new("url", "Tracker").width(260.0),
-            DataColumn::new("state", "State").width(90.0),
-            DataColumn::new("seeders", "Seeders").width(80.0),
-            DataColumn::new("leechers", "Leechers").width(80.0),
-        ])
-        .rows(rows)
-        .empty_message(empty_state_message("trackers"))
-        .max_body_height(240.0)
+    let add = cx.listener(|this, _: &ClickEvent, _window, cx| this.add_tracker(cx));
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .flex()
+                .gap_2()
+                .child(pane.tracker_input.clone())
+                .child(
+                    Button::new("add-tracker")
+                        .label("Add")
+                        .appearance(ButtonAppearance::Accent)
+                        .on_click(add),
+                ),
+        )
+        .child(
+            DataTable::new()
+                .columns([
+                    DataColumn::new("url", "Tracker").width(260.0),
+                    DataColumn::new("state", "State").width(90.0),
+                    DataColumn::new("seeders", "Seeders").width(80.0),
+                    DataColumn::new("leechers", "Leechers").width(80.0),
+                ])
+                .rows(rows)
+                .empty_message(empty_state_message("trackers"))
+                .max_body_height(240.0),
+        )
 }
 
 impl Render for DetailPane {
@@ -630,6 +707,9 @@ impl Render for DetailPane {
             .child(self.tabs.clone());
         if let Some(message) = &self.error {
             pane = pane.child(MessageBar::new(message.clone()).intent(MessageIntent::Error));
+        }
+        if let Some(message) = &self.notice {
+            pane = pane.child(Label::new(message.clone()));
         }
         pane.child(self.body(cx))
     }
@@ -974,6 +1054,72 @@ mod tests {
                 rows,
                 [["http://tracker.example/announce", "Working", "4", "1"]]
             );
+        });
+    }
+
+    #[gpui::test]
+    fn empty_tracker_is_refused_without_dropping_selection(cx: &mut TestAppContext) {
+        let (_runtime, _server, pane) = loaded(cx);
+        pane.update(cx, |pane, cx| pane.add_tracker(cx));
+        pane.read_with(cx, |pane, _| {
+            assert_eq!(pane.torrent_id(), Some(7));
+            assert_eq!(pane.error(), Some("Tracker URL cannot be empty."));
+        });
+    }
+
+    #[gpui::test]
+    fn adding_tracker_posts_refreshes_and_reports_success(cx: &mut TestAppContext) {
+        let (runtime, server, pane) = loaded(cx);
+        runtime.block_on(async {
+            Mock::given(method("POST"))
+                .and(path("/torrents/7/trackers"))
+                .and(body_string(
+                    r#"{"trackers":["https://new.example/announce"]}"#,
+                ))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+        });
+        pane.update(cx, |pane, cx| {
+            pane.tracker_input.update(cx, |input, cx| {
+                input.set_value("https://new.example/announce", cx)
+            });
+            pane.add_tracker(cx);
+        });
+        drive(cx, |_| {
+            count_posts(&runtime, &server, "/torrents/7/trackers") == 1
+        });
+        drive(cx, |cx| pane.read_with(cx, |pane, _| pane.notice.is_some()));
+        pane.read_with(cx, |pane, cx| {
+            assert_eq!(pane.torrent_id(), Some(7));
+            assert_eq!(pane.notice.as_deref(), Some("Tracker added."));
+            assert!(pane.error().is_none());
+            assert!(pane.tracker_input.read(cx).text().is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn refused_tracker_keeps_input_and_selection(cx: &mut TestAppContext) {
+        let (runtime, server, pane) = loaded(cx);
+        runtime.block_on(async {
+            Mock::given(method("POST"))
+                .and(path("/torrents/7/trackers"))
+                .respond_with(ResponseTemplate::new(400).set_body_string("invalid tracker URL"))
+                .mount(&server)
+                .await;
+        });
+        pane.update(cx, |pane, cx| {
+            pane.tracker_input
+                .update(cx, |input, cx| input.set_value("not-a-url", cx));
+            pane.add_tracker(cx);
+        });
+        drive(cx, |cx| {
+            pane.read_with(cx, |pane, _| pane.error().is_some())
+        });
+        pane.read_with(cx, |pane, cx| {
+            assert_eq!(pane.torrent_id(), Some(7));
+            assert!(pane.error().is_some());
+            assert_eq!(pane.tracker_input.read(cx).text(), "not-a-url");
         });
     }
 
