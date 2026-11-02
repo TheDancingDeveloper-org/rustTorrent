@@ -12,6 +12,7 @@ use rtbit_ui_core::Connection;
 pub mod bridge;
 pub mod screens;
 pub mod shell;
+pub mod table_prefs;
 pub mod widgets;
 
 /// Window title shown in the title bar.
