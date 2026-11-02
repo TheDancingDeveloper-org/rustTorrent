@@ -66,7 +66,7 @@
       "endpoint": "app/preferences",
       "method": "GET",
       "status": "partial",
-      "notes": "Subset of preference fields. dl_limit/up_limit and alt_dl_limit/alt_up_limit report the live normal and alternative session limits (bytes/s, 0 unlimited); scheduler_enabled is false. queueing_enabled, max_active_downloads and max_active_uploads reflect the session queue limits; max_active_torrents is -1 (no combined limit). Global seeding-limit fields (max_ratio_enabled, max_seeding_time_enabled, max_inactive_seeding_time_enabled and their values) are reported disabled with upstream default values; rtbit enforces seeding limits per torrent only (torrents/setShareLimits). dht/pex/lsd are reported true.",
+      "notes": "Subset of preference fields. dl_limit/up_limit and alt_dl_limit/alt_up_limit report the live normal and alternative session limits (bytes/s, 0 unlimited); scheduler_enabled is false. queueing_enabled, max_active_downloads and max_active_uploads reflect the session queue limits; max_active_torrents is -1 (no combined limit). Global seeding-limit fields (max_ratio*, max_seeding_time*, max_inactive_seeding_time*) report the session-wide seed limits (disabled with upstream default values when unset); max_ratio_act is always 0 (pause). dht and lsd report the running state, or the value saved for the next start; pex is always true.",
       "response": {
         "content": "json",
         "schema": {

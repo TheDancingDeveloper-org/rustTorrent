@@ -1870,6 +1870,28 @@ async fn post_add(router: &axum::Router, torrent: &[u8], fields: &[(&str, &str)]
     send(router, request).await
 }
 
+/// Global share limits set through `app/setPreferences` are read back, and a
+/// disabled flag turns the limit off again.
+#[tokio::test]
+async fn set_preferences_applies_global_share_limits() {
+    let (router, session, _output) = make_router().await;
+    let json = r#"{"max_ratio_enabled":true,"max_ratio":1.5,"max_seeding_time_enabled":true,"max_seeding_time":90}"#;
+    let set = post_form(&router, "/app/setPreferences", &[("json", json)]).await;
+    assert_eq!(set.status, StatusCode::OK);
+    let prefs = get(&router, "/app/preferences").await.json();
+    assert_eq!(prefs["max_ratio_enabled"], true);
+    assert_eq!(prefs["max_ratio"], 1.5);
+    assert_eq!(prefs["max_seeding_time_enabled"], true);
+    assert_eq!(prefs["max_seeding_time"], 90);
+    assert_eq!(session.seed_limits().max_ratio, Some(1.5));
+
+    let json = r#"{"max_ratio_enabled":false}"#;
+    post_form(&router, "/app/setPreferences", &[("json", json)]).await;
+    let prefs = get(&router, "/app/preferences").await.json();
+    assert_eq!(prefs["max_ratio_enabled"], false);
+    assert_eq!(prefs["max_seeding_time_enabled"], true);
+}
+
 /// The calls Sonarr and Radarr make: "Test Connection" (version, preferences,
 /// categories, creating their category) and then a grab (add stopped into the
 /// category with a content layout, read it back by category, properties and
@@ -1902,7 +1924,8 @@ async fn arr_test_connection_and_grab_flow() {
         assert!(prefs.get(key).is_some(), "preferences lacks {key}: {prefs}");
     }
     assert_eq!(prefs["max_ratio_enabled"], false);
-    assert_eq!(prefs["dht"], true);
+    assert!(prefs["dht"].is_boolean());
+    assert_eq!(prefs["pex"], true);
     assert_eq!(
         get(&router, "/torrents/categories").await.json(),
         serde_json::json!({})
