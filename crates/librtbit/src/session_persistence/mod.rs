@@ -1,4 +1,5 @@
 pub mod json;
+pub mod missing_report;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 
