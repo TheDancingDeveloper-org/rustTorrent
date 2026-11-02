@@ -24,7 +24,7 @@ hex = "0.4"
 anyhow = "1"
 url = { version = "2", default-features = false }
 rand = "0.10"
-parking_lot = "0.12"
+parking_lot = "0.13"
 serde = "1"
 serde_derive = "1"
 buffers.workspace = true
