@@ -160,6 +160,8 @@ done: `torrents/stop`/`start`, `sync/maindata` (rid deltas) + `sync/torrentPeers
 `torrents/export`, `torrents/webseeds`, `torrents/count`, the `transfer/*Limit*`
 + get/setSpeedLimits + speed-limits-mode family, and `transfer/pauseSession`/`resumeSession`.
 
+`torrents/pieceStates` reports the in-flight state (`1`) in addition to missing (`0`) and complete (`2`) pieces. Tracker tier and scrape `num_downloaded` remain pending because the current tracker registry does not retain that metadata.
+
 Remaining work, roughly by cost:
 
 1. **Needs a new engine method** (the `will be built` items):
