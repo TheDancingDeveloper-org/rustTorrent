@@ -86,6 +86,14 @@ jobs:
           rm -rf target/desktop-stage
           bash packaging/scripts/build-desktop.sh linux "$tag" target/desktop-stage
           bash packaging/scripts/build-desktop.sh sbom "$tag" target/desktop-stage
+      - name: Smoke-test Linux fluent artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          expected="rtbit-fluent ${tag#v}"
+          actual="$(target/desktop-stage/rtbit-fluent-"$tag"-linux-x86_64 --version)"
+          test "$actual" = "$expected"
       - name: Stage and checksum artifacts
         shell: bash
         run: |
@@ -178,6 +186,14 @@ jobs:
           cargo build -p rtbit-fluent --release --target x86_64-pc-windows-msvc
           rm -rf target/desktop-stage
           bash packaging/scripts/build-desktop.sh windows "$tag" target/desktop-stage
+      - name: Smoke-test Windows fluent artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          expected="rtbit-fluent ${tag#v}"
+          actual="$(target/desktop-stage/rtbit-fluent-"$tag"-windows-x86_64.exe --version)"
+          test "$actual" = "$expected"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-artifacts-windows-fluent

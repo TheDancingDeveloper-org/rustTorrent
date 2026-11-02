@@ -22,6 +22,11 @@ pub const WINDOW_SIZE: (f32, f32) = (1100.0, 720.0);
 
 /// Open the rustTorrent window: frameless `FluentApp` with the fluent title bar.
 pub fn run() {
+    if std::env::args().any(|arg| arg == "--version") {
+        println!("rtbit-fluent {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     let (w, h) = WINDOW_SIZE;
     FluentApp::new(WINDOW_TITLE).window_size(w, h).run(|cx| {
         screens::main_screen::bind_keys(cx);
