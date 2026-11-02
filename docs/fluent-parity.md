@@ -51,7 +51,7 @@ in [`rtbit-ui-core`](../crates/rtbit-ui-core).
 | Pieces tab and piece progress summary | done | Pieces tab and empty/loading states are present. |
 | Peers tab with address, state, download, and upload columns | done | `peers_table`. |
 | Trackers tab with tracker URL, status, seeders, and leechers | done | `trackers_table`. |
-| Add tracker URL and Add action | missing | Raise and implement [#286](https://github.com/TheDancingDeveloper-org/rustTorrent/issues/286) on graft line `fluent-1`. |
+| Add tracker URL and Add action | done | `screens/detail.rs` validates and submits the URL, reloads trackers, and preserves the selection and input on refusal. |
 | No-selection, loading, and empty detail states | done | `empty_state_message` and async snapshot handling. |
 
 ## RSS
