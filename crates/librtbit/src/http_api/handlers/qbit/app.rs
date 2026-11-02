@@ -22,6 +22,65 @@ pub(super) async fn h_app_default_save_path(State(state): State<Arc<QbitState>>)
     state.api_state.api.api_output_folder()
 }
 
+/// Configured download roots: the session output folder plus every category
+/// save path.
+fn save_roots(api: &crate::Api) -> Vec<std::path::PathBuf> {
+    let mut roots = vec![std::path::PathBuf::from(api.api_output_folder())];
+    roots.extend(
+        api.api_list_categories()
+            .into_values()
+            .filter_map(|category| category.save_path),
+    );
+    roots
+}
+
+/// Whether `path` is a root or lies beneath one. Compared by path component,
+/// and a `..` component never qualifies, so it cannot climb out of a root.
+fn path_under_roots(path: &std::path::Path, roots: &[std::path::PathBuf]) -> bool {
+    !path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+        && roots.iter().any(|root| path.starts_with(root))
+}
+
+/// Free bytes on the volume holding the default save path; 0 when the
+/// platform cannot report it.
+pub(super) fn free_space_on_save_volume(api: &crate::Api) -> u64 {
+    crate::session::scheduler::free_disk_space(std::path::Path::new(&api.api_output_folder()))
+        .unwrap_or(0)
+}
+
+#[derive(Deserialize, Default)]
+pub(super) struct FreeSpaceQuery {
+    #[serde(default)]
+    pub(super) path: String,
+}
+
+/// `app/getFreeSpaceAtPath?path=` — bytes free on the volume holding `path`,
+/// as plain text. Only paths at or under a configured download root (the
+/// default save path or a category save path) are answered; anything else is
+/// 400, so the endpoint cannot probe the rest of the filesystem.
+pub(super) async fn h_app_get_free_space_at_path(
+    State(state): State<Arc<QbitState>>,
+    Query(query): Query<FreeSpaceQuery>,
+) -> axum::response::Response {
+    let api = &state.api_state.api;
+    let path = std::path::Path::new(&query.path);
+    if query.path.is_empty() || !path_under_roots(path, &save_roots(api)) {
+        return qbit_error(
+            StatusCode::BAD_REQUEST,
+            "path must be under a configured download folder",
+        );
+    }
+    match crate::session::scheduler::free_disk_space(path) {
+        Some(free) => (StatusCode::OK, free.to_string()).into_response(),
+        None => qbit_error(
+            StatusCode::BAD_REQUEST,
+            "free space is not available for this path",
+        ),
+    }
+}
+
 pub(super) async fn h_app_build_info() -> impl IntoResponse {
     axum::Json(QbitBuildInfo {
         qt: "N/A",

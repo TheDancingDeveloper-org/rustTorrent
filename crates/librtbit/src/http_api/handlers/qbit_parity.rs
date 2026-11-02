@@ -654,7 +654,7 @@ async fn routed_responses_match_declared_shapes() {
             continue;
         };
         let uri = format!(
-            "/{}?hash={hash}&hashes={hash}&taskID={task_id}",
+            "/{}?hash={hash}&hashes={hash}&taskID={task_id}&path={source}",
             ep.endpoint
         );
         let response = get(&router, &uri).await;
