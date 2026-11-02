@@ -324,6 +324,9 @@ fn os_free_disk_space(path: &Path) -> Option<u64> {
     Some(stat.blocks_available() as u64 * stat.fragment_size() as u64)
 }
 
+/// Default free-space floor for the low-disk guard: 1 GiB.
+pub(crate) const DEFAULT_MIN_FREE_DISK_SPACE: u64 = 1 << 30;
+
 /// Stand-in free-space reading for tests. `None` means "use the OS".
 pub(crate) type FreeSpaceFn = fn(&Path) -> Option<u64>;
 
