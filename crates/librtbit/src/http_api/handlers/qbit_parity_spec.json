@@ -1287,7 +1287,7 @@
       "endpoint": "torrents/trackers",
       "method": "GET",
       "status": "partial",
-      "notes": "Real per-tracker announce state and peer counts. Tracker tier and num_downloaded remain unavailable because configured trackers are currently stored without tier or scrape-download metadata.",
+      "notes": "Real per-tracker announce state, announce-list tier, peer counts, and completed/downloaded count reported by HTTP announce responses or UDP scrape responses.",
       "response": {
         "content": "json",
         "schema": [
