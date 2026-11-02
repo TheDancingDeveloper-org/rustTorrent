@@ -463,6 +463,101 @@ mod tests {
         );
     }
 
+    /// Screens that load on selection need a bridge; this one points nowhere.
+    fn install_idle_bridge(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            crate::bridge::Bridge::new("http://127.0.0.1:1")
+                .unwrap()
+                .install(cx)
+        });
+    }
+
+    #[gpui::test]
+    fn no_banner_while_reachable(cx: &mut TestAppContext) {
+        let (shell, _status) = shell(cx);
+        assert_eq!(shell.read_with(cx, |s, _| s.lost_banner()), None);
+    }
+
+    #[gpui::test]
+    fn daemon_lost_event_sets_banner_and_error_badge_then_recovers(cx: &mut TestAppContext) {
+        let (shell, status) = shell(cx);
+        shell.update(cx, |s, cx| {
+            s.on_main_event(MainEvent::DaemonLost { retry_in_secs: 8 }, cx)
+        });
+        assert_eq!(
+            shell.read_with(cx, |s, _| s.lost_banner()).as_deref(),
+            Some("Lost connection to daemon — retrying in 8s")
+        );
+        assert_eq!(
+            status.read_with(cx, |s, _| s.connection()),
+            Connection::Error
+        );
+        shell.update(cx, |s, cx| s.on_main_event(MainEvent::DaemonRecovered, cx));
+        assert_eq!(shell.read_with(cx, |s, _| s.lost_banner()), None);
+        assert_eq!(
+            status.read_with(cx, |s, _| s.connection()),
+            Connection::Connected
+        );
+    }
+
+    #[gpui::test]
+    fn unauthorised_event_returns_to_connect(cx: &mut TestAppContext) {
+        install_idle_bridge(cx);
+        let (shell, status) = shell(cx);
+        shell.update(cx, |s, cx| {
+            s.select_screen("settings", cx);
+            s.on_main_event(MainEvent::Unauthorised, cx);
+        });
+        assert_eq!(shell.read_with(cx, |s, _| s.screen()), Screen::Connect);
+        assert_eq!(
+            status.read_with(cx, |s, _| s.connection()),
+            Connection::Disconnected
+        );
+    }
+
+    #[gpui::test]
+    fn connect_events_route_screens_and_badge(cx: &mut TestAppContext) {
+        let (shell, status) = shell(cx);
+        let badge = |cx: &mut TestAppContext| status.read_with(cx, |s, _| s.connection());
+        shell.update(cx, |s, cx| s.on_connect_event(ConnectEvent::Connecting, cx));
+        assert_eq!(badge(cx), Connection::Connecting);
+        shell.update(cx, |s, cx| {
+            s.on_connect_event(ConnectEvent::SetupRequired, cx)
+        });
+        assert_eq!(shell.read_with(cx, |s, _| s.screen()), Screen::Setup);
+        assert_eq!(badge(cx), Connection::Disconnected);
+        shell.update(cx, |s, cx| s.on_connect_event(ConnectEvent::Connected, cx));
+        assert_eq!(shell.read_with(cx, |s, _| s.screen()), Screen::Main);
+        shell.update(cx, |s, cx| s.on_connect_event(ConnectEvent::SignedOut, cx));
+        assert_eq!(shell.read_with(cx, |s, _| s.screen()), Screen::Connect);
+    }
+
+    #[gpui::test]
+    fn select_filter_keeps_screen_and_ignores_unknown_labels(cx: &mut TestAppContext) {
+        install_idle_bridge(cx);
+        let (shell, _status) = shell(cx);
+        shell.update(cx, |s, cx| s.select_screen("rss", cx));
+        let target = StatusFilter::ALL[1];
+        shell.update(cx, |s, cx| s.select_filter(target.label(), cx));
+        assert_eq!(shell.read_with(cx, |s, _| s.filter), target);
+        shell.update(cx, |s, cx| s.select_filter("no such filter", cx));
+        assert_eq!(shell.read_with(cx, |s, _| s.filter), target);
+        assert_eq!(shell.read_with(cx, |s, _| s.screen()), Screen::Rss);
+    }
+
+    #[gpui::test]
+    fn nav_ids_are_unique_and_unknown_id_keeps_screen(cx: &mut TestAppContext) {
+        let ids: Vec<_> = NAV.iter().map(|(id, _, _)| *id).collect();
+        let mut dedup = ids.clone();
+        dedup.sort_unstable();
+        dedup.dedup();
+        assert_eq!(ids.len(), dedup.len());
+        let (shell, _status) = shell(cx);
+        shell.update(cx, |s, cx| s.select_screen("nope", cx));
+        assert_eq!(shell.read_with(cx, |s, _| s.screen()), Screen::Connect);
+    }
+
     #[gpui::test]
     fn starts_on_connect_disconnected(cx: &mut TestAppContext) {
         let (shell, status) = shell(cx);
