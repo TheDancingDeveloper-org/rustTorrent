@@ -206,7 +206,10 @@ pub(super) fn build_torrent_info(
     QbitTorrentInfo {
         added_on,
         amount_left: stats.total_bytes.saturating_sub(stats.progress_bytes),
-        auto_tmm: false,
+        auto_tmm: handle
+            .shared()
+            .auto_management
+            .load(std::sync::atomic::Ordering::Relaxed),
         availability: -1,
         category,
         completed: stats.progress_bytes,
@@ -257,7 +260,10 @@ pub(super) fn build_torrent_info(
         seq_dl: handle.is_sequential_download(),
         size: stats.total_bytes,
         state: qbit_state.to_string(),
-        super_seeding: false,
+        super_seeding: handle
+            .shared()
+            .super_seeding
+            .load(std::sync::atomic::Ordering::Relaxed),
         tags: handle
             .shared()
             .tags
@@ -504,7 +510,12 @@ pub(super) async fn h_torrents_properties(
         save_path: output_folder,
         creation_date: meta.creation_date,
         piece_size,
-        comment: meta.comment,
+        comment: handle
+            .shared()
+            .comment_override
+            .read()
+            .clone()
+            .unwrap_or(meta.comment),
         total_wasted: 0,
         total_uploaded: stats.uploaded_bytes,
         total_uploaded_session: stats.uploaded_bytes,

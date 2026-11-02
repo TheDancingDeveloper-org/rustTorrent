@@ -288,6 +288,9 @@ pub struct ManagedTorrentShared {
     /// precedence over the metadata/magnet name. `None` = use the torrent's
     /// own name. Not persisted across restarts.
     pub(crate) name_override: RwLock<Option<String>>,
+    pub(crate) comment_override: RwLock<Option<String>>,
+    pub(crate) auto_management: AtomicBool,
+    pub(crate) super_seeding: AtomicBool,
 
     /// Current storage root, mutable at runtime so a whole-torrent relocation
     /// (`set_location`) can re-anchor storage. Seeded from

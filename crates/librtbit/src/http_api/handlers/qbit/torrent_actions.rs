@@ -740,6 +740,79 @@ pub(super) async fn h_torrents_set_category(
 }
 
 #[derive(Deserialize, Default)]
+pub(super) struct SetCommentForm {
+    #[serde(default)]
+    pub(super) hashes: String,
+    #[serde(default)]
+    pub(super) comment: String,
+}
+
+pub(super) async fn h_torrents_set_comment(
+    State(state): State<Arc<QbitState>>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let form: SetCommentForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
+    let api = &state.api_state.api;
+    for idx in resolve_hashes(api, &form.hashes) {
+        if let Ok(handle) = api.mgr_handle(idx) {
+            *handle.shared().comment_override.write() = Some(form.comment.clone());
+            api.session().try_update_persistence_metadata(&handle).await;
+        }
+    }
+    (StatusCode::OK, "Ok.")
+}
+
+#[derive(Deserialize, Default)]
+pub(super) struct SetBooleanForm {
+    #[serde(default)]
+    pub(super) hashes: String,
+    #[serde(default)]
+    pub(super) value: String,
+}
+
+async fn set_torrent_boolean(
+    state: &QbitState,
+    body: &[u8],
+    set: impl Fn(&crate::torrent_state::ManagedTorrentShared, bool),
+) {
+    let form: SetBooleanForm = serde_urlencoded::from_bytes(body).unwrap_or_default();
+    let enabled = form.value.eq_ignore_ascii_case("true");
+    let api = &state.api_state.api;
+    for idx in resolve_hashes(api, &form.hashes) {
+        if let Ok(handle) = api.mgr_handle(idx) {
+            set(handle.shared(), enabled);
+            api.session().try_update_persistence_metadata(&handle).await;
+        }
+    }
+}
+
+pub(super) async fn h_torrents_set_auto_management(
+    State(state): State<Arc<QbitState>>,
+    body: Bytes,
+) -> impl IntoResponse {
+    set_torrent_boolean(&state, &body, |shared, enabled| {
+        shared
+            .auto_management
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    })
+    .await;
+    (StatusCode::OK, "Ok.")
+}
+
+pub(super) async fn h_torrents_set_super_seeding(
+    State(state): State<Arc<QbitState>>,
+    body: Bytes,
+) -> impl IntoResponse {
+    set_torrent_boolean(&state, &body, |shared, enabled| {
+        shared
+            .super_seeding
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    })
+    .await;
+    (StatusCode::OK, "Ok.")
+}
+
+#[derive(Deserialize, Default)]
 pub(super) struct AddTrackersForm {
     #[serde(default)]
     pub(super) hash: String,
@@ -935,8 +1008,9 @@ pub(super) async fn h_torrents_file_prio(
         Ok(idx) => idx,
         Err(_) => return (StatusCode::NOT_FOUND, "Not found"),
     };
-    if api.mgr_handle(idx).is_err() {
-        return (StatusCode::NOT_FOUND, "Not found");
+    match api.mgr_handle(idx) {
+        Ok(_) => {}
+        Err(_) => return (StatusCode::NOT_FOUND, "Not found"),
     }
     let num_files = match api.api_torrent_details(idx) {
         Ok(details) => details.files.map(|f| f.len()).unwrap_or(0),
