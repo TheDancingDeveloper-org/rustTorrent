@@ -769,7 +769,20 @@
     {
       "endpoint": "torrents/fetchMetadata",
       "method": "POST",
-      "status": "missing"
+      "status": "full",
+      "notes": "Resolves a magnet or validated public HTTP(S) URL without adding it; returns 202 while metadata resolution exceeds the bounded timeout.",
+      "response": {
+        "content": "json",
+        "schema": {
+          "name": "string",
+          "size": "integer",
+          "files": [{
+            "name": "string",
+            "size": "integer"
+          }],
+          "hash": "string"
+        }
+      }
     },
     {
       "endpoint": "torrents/filePrio",
@@ -892,7 +905,19 @@
     {
       "endpoint": "torrents/parseMetadata",
       "method": "POST",
-      "status": "missing"
+      "status": "full",
+      "response": {
+        "content": "json",
+        "schema": {
+          "name": "string",
+          "size": "integer",
+          "files": [{
+            "name": "string",
+            "size": "integer"
+          }],
+          "hash": "string"
+        }
+      }
     },
     {
       "endpoint": "torrents/pause",
