@@ -7,17 +7,18 @@
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::sync::Arc;
 
-use fluent_core::AsyncResource;
+use fluent_core::{AsyncResource, ThemeProvider as _};
 use fluent_layout::{
     ConfirmModal, ContextMenu, DataCell, DataColumn, DataRow, DataSortDirection, DataTable,
-    MessageIntent, Toast, ToastHost, ToastStack, Toolbar, ToolbarItem,
+    MessageIntent, Toast, ToastHost, ToastStack,
 };
-use fluent_primitives::{Label, LabelSize, TextInput};
+use fluent_primitives::{Label, LabelSize, TextInput, Tooltip};
 use gpui::{
-    App, AsyncApp, ClickEvent, Context, Entity, FocusHandle, Focusable as _, IntoElement,
+    App, AsyncApp, ClickEvent, Context, Entity, FocusHandle, Focusable as _, Hsla, IntoElement,
     KeyBinding, KeyDownEvent, MouseButton, Pixels, Point, Render, SharedString, Subscription, Task,
-    WeakEntity, Window, actions, div, prelude::*,
+    WeakEntity, Window, actions, div, prelude::*, px,
 };
 use rtbit_client::{Torrent, TorrentState};
 use rtbit_ui_core::{AddRequest, AddSource, RowAction, Snapshot, StatusFilter, format, map_error};
@@ -42,6 +43,87 @@ actions!(
 
 /// Key context of the main screen. Its shortcuts are bound to this context only.
 pub const KEY_CONTEXT: &str = "MainScreen";
+
+#[derive(Clone, Copy)]
+struct ToolbarButtonSpec {
+    id: &'static str,
+    icon: &'static str,
+    label: &'static str,
+}
+
+const TOOLBAR_BUTTONS: [ToolbarButtonSpec; 4] = [
+    ToolbarButtonSpec {
+        id: "add",
+        icon: "+",
+        label: "Add torrent",
+    },
+    ToolbarButtonSpec {
+        id: "resume",
+        icon: "▶",
+        label: "Resume torrent",
+    },
+    ToolbarButtonSpec {
+        id: "pause",
+        icon: "Ⅱ",
+        label: "Pause torrent",
+    },
+    ToolbarButtonSpec {
+        id: "delete",
+        icon: "×",
+        label: "Delete torrent",
+    },
+];
+
+/// Keep the command names in one place so an icon-only toolbar can never lose
+/// the text used for its tooltip and accessible name.
+fn toolbar_buttons() -> &'static [ToolbarButtonSpec; 4] {
+    &TOOLBAR_BUTTONS
+}
+
+fn icon_toolbar_button(
+    spec: ToolbarButtonSpec,
+    background: Hsla,
+    focus_ring: Hsla,
+    on_activate: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    debug_assert!(
+        !spec.label.trim().is_empty(),
+        "toolbar button needs a label"
+    );
+    let on_activate = Arc::new(on_activate);
+    let click = on_activate.clone();
+    let key = on_activate;
+    let button = div()
+        .id(spec.id)
+        .focusable()
+        .tab_stop(true)
+        .focus(move |style| style.border_color(focus_ring))
+        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                key(window, cx);
+                cx.stop_propagation();
+            }
+        })
+        .on_click(move |_, window, cx| click(window, cx))
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(32.0))
+        .border_2()
+        .border_color(background)
+        .rounded(px(4.0))
+        .cursor_pointer()
+        .child(spec.icon);
+    Tooltip::new(spec.label).trigger(button)
+}
+
+fn toolbar_activate(
+    me: &Entity<MainScreen>,
+    action: RowAction,
+) -> impl Fn(&mut Window, &mut App) + 'static {
+    let me = me.clone();
+    move |_, app| dispatch(&me, app, action)
+}
 
 /// Contexts for the shortcuts that would clash with typing: Space, Delete, Ctrl+A and Ctrl+V
 /// stay with a focused text field.
@@ -658,16 +740,38 @@ impl Render for MainScreen {
 
         let me = cx.entity();
         let add_me = me.clone();
-        let toolbar = Toolbar::new().items([
-            ToolbarItem::action("add", "Add", move |_, _, app| {
-                add_me.update(app, |screen, cx| screen.open_add(cx));
-            }),
-            ToolbarItem::separator(),
-            ToolbarItem::action("resume", "Resume", toolbar_click(&me, RowAction::Start)),
-            ToolbarItem::action("pause", "Pause", toolbar_click(&me, RowAction::Pause)),
-            ToolbarItem::separator(),
-            ToolbarItem::action("delete", "Delete", toolbar_click(&me, RowAction::Delete)),
-        ]);
+        let colors = cx.theme().colors.clone();
+        let toolbar = div()
+            .id("torrent-toolbar")
+            .flex()
+            .items_center()
+            .gap_1()
+            .p_1()
+            .bg(colors.surface_dim)
+            .child(icon_toolbar_button(
+                toolbar_buttons()[0],
+                colors.surface_dim,
+                colors.stroke_accent,
+                move |_, app| add_me.update(app, |screen, cx| screen.open_add(cx)),
+            ))
+            .child(icon_toolbar_button(
+                toolbar_buttons()[1],
+                colors.surface_dim,
+                colors.stroke_accent,
+                toolbar_activate(&me, RowAction::Start),
+            ))
+            .child(icon_toolbar_button(
+                toolbar_buttons()[2],
+                colors.surface_dim,
+                colors.stroke_accent,
+                toolbar_activate(&me, RowAction::Pause),
+            ))
+            .child(icon_toolbar_button(
+                toolbar_buttons()[3],
+                colors.surface_dim,
+                colors.stroke_accent,
+                toolbar_activate(&me, RowAction::Delete),
+            ));
 
         let message = self
             .action_error
@@ -758,14 +862,6 @@ enum SelectionMovement {
     Next,
     First,
     Last,
-}
-
-fn toolbar_click(
-    me: &Entity<MainScreen>,
-    action: RowAction,
-) -> impl Fn(&ClickEvent, &mut gpui::Window, &mut App) + 'static {
-    let me = me.clone();
-    move |_, _, app| dispatch(&me, app, action)
 }
 
 /// Shown in the table when the daemon has no torrents.
@@ -906,6 +1002,17 @@ mod tests {
         env!("CARGO_MANIFEST_DIR"),
         "/../rtbit-client/tests/fixtures"
     );
+
+    #[test]
+    fn every_toolbar_button_has_a_non_empty_label() {
+        assert!(
+            toolbar_buttons()
+                .iter()
+                .all(|button| !button.label.trim().is_empty()),
+            "toolbar buttons need text for their tooltip and accessible name"
+        );
+        assert_eq!(toolbar_buttons().len(), 4);
+    }
 
     fn fixture(name: &str) -> String {
         std::fs::read_to_string(format!("{FIXTURES}/{name}")).unwrap()
