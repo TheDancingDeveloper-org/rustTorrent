@@ -160,7 +160,7 @@ struct Opts {
     #[arg(
         long = "shutdown-timeout",
         value_parser = humantime::parse_duration,
-        default_value = "30s",
+        default_value = "20s",
         env = "RTBIT_SHUTDOWN_TIMEOUT"
     )]
     shutdown_timeout: Duration,
@@ -1136,8 +1136,18 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
 
                 let result = http_api_fut.await;
                 // The signal handler cancels the HTTP API, so this also runs on
-                // SIGINT and SIGTERM. Save torrent state before the process exits.
-                session.stop().await;
+                // SIGINT and SIGTERM. Save torrent state before the process exits,
+                // but never let a slow persistence backend outlive the shutdown
+                // deadline (the signal handler enforces the same hard bound).
+                if tokio::time::timeout(opts.shutdown_timeout, session.stop())
+                    .await
+                    .is_err()
+                {
+                    warn!(
+                        timeout = ?opts.shutdown_timeout,
+                        "graceful shutdown timed out before all torrent state was saved"
+                    );
+                }
                 result
             }
         },
@@ -1769,7 +1779,7 @@ mod tests {
     #[test]
     fn shutdown_timeout_defaults_to_30s_and_is_configurable() {
         let opts = parse_server_opts(&[]);
-        assert_eq!(opts.shutdown_timeout, std::time::Duration::from_secs(30));
+        assert_eq!(opts.shutdown_timeout, std::time::Duration::from_secs(20));
 
         let opts = parse_server_opts(&["--shutdown-timeout", "2m"]);
         assert_eq!(opts.shutdown_timeout, std::time::Duration::from_secs(120));

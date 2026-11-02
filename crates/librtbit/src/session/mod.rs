@@ -1624,7 +1624,13 @@ impl Session {
         if let Some(p) = self.persistence.as_ref()
             && let Err(e) = p.update_metadata(handle.id(), handle).await
         {
-            warn!(storage=?p, error=?e, "error updating metadata")
+            warn!(
+                torrent_id = handle.id(),
+                info_hash = ?handle.info_hash(),
+                storage=?p,
+                error=?e,
+                "error saving torrent state"
+            )
         }
     }
 
