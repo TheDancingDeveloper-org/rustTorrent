@@ -16,8 +16,8 @@ use fluent_layout::{
 use fluent_primitives::{Label, LabelSize, TextInput};
 use gpui::{
     App, AsyncApp, ClickEvent, Context, Entity, FocusHandle, Focusable as _, IntoElement,
-    KeyBinding, MouseButton, Pixels, Point, Render, SharedString, Subscription, Task, WeakEntity,
-    Window, actions, div, prelude::*,
+    KeyBinding, KeyDownEvent, MouseButton, Pixels, Point, Render, SharedString, Subscription, Task,
+    WeakEntity, Window, actions, div, prelude::*,
 };
 use rtbit_client::{Torrent, TorrentState};
 use rtbit_ui_core::{AddRequest, AddSource, RowAction, Snapshot, StatusFilter, format, map_error};
@@ -72,8 +72,11 @@ pub struct MainScreen {
     detail: Entity<DetailPane>,
     /// Selected row id (the daemon id, or the info hash when the daemon omits one).
     selected: Option<String>,
-    /// Rows marked by Select all. When not empty, row commands act on all of them.
+    /// Rows marked by Select all or a Shift+arrow range.
     marked: HashSet<String>,
+    /// Fixed end of a Shift+arrow range selection.
+    selection_anchor: Option<String>,
+    detail_open: bool,
     /// Case-insensitive name filter typed in the filter box.
     query: String,
     filter_input: Entity<TextInput>,
@@ -113,6 +116,8 @@ impl MainScreen {
             detail: cx.new(DetailPane::new),
             selected: None,
             marked: HashSet::new(),
+            selection_anchor: None,
+            detail_open: false,
             query: String::new(),
             filter_input,
             focus: cx.focus_handle(),
@@ -310,12 +315,102 @@ impl MainScreen {
     fn select_row(&mut self, row: &str, cx: &mut Context<Self>) {
         self.selected = Some(row.to_owned());
         self.marked.clear();
+        self.selection_anchor = Some(row.to_owned());
+        self.detail_open = true;
         let id = self.selected_torrent().and_then(|torrent| torrent.id);
         self.detail.update(cx, |pane, cx| match id {
             Some(id) => pane.select_torrent(id, cx),
             None => pane.clear(cx),
         });
         cx.notify();
+    }
+
+    /// Move the keyboard cursor through the visible, sorted rows.
+    fn move_selection(
+        &mut self,
+        movement: SelectionMovement,
+        extend: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let rows = self
+            .visible_rows()
+            .into_iter()
+            .map(row_id)
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
+            return;
+        }
+        let current = self
+            .selected
+            .as_ref()
+            .and_then(|id| rows.iter().position(|row| row == id))
+            .unwrap_or(0);
+        let next = match movement {
+            SelectionMovement::Previous => current.saturating_sub(1),
+            SelectionMovement::Next => (current + 1).min(rows.len() - 1),
+            SelectionMovement::First => 0,
+            SelectionMovement::Last => rows.len() - 1,
+        };
+        let next_row = rows[next].clone();
+        let anchor = if extend {
+            self.selection_anchor
+                .clone()
+                .unwrap_or_else(|| rows[current].clone())
+        } else {
+            next_row.clone()
+        };
+        self.selected = Some(next_row.clone());
+        self.selection_anchor = Some(anchor.clone());
+        self.marked.clear();
+        if extend {
+            let anchor_index = rows.iter().position(|row| row == &anchor).unwrap_or(next);
+            let (start, end) = if anchor_index <= next {
+                (anchor_index, next)
+            } else {
+                (next, anchor_index)
+            };
+            self.marked.extend(rows[start..=end].iter().cloned());
+        } else {
+            self.marked.insert(next_row);
+        }
+        cx.notify();
+    }
+
+    fn open_detail(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected_torrent().and_then(|torrent| torrent.id) else {
+            return;
+        };
+        self.detail_open = true;
+        self.detail
+            .update(cx, |pane, cx| pane.select_torrent(id, cx));
+        cx.notify();
+    }
+
+    fn close_detail(&mut self, cx: &mut Context<Self>) {
+        if self.detail_open {
+            self.detail_open = false;
+            cx.notify();
+        }
+    }
+
+    fn handle_table_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let movement = match event.keystroke.key.as_str() {
+            "up" => Some(SelectionMovement::Previous),
+            "down" => Some(SelectionMovement::Next),
+            "home" => Some(SelectionMovement::First),
+            "end" => Some(SelectionMovement::Last),
+            "return" => {
+                self.open_detail(cx);
+                return true;
+            }
+            "escape" => {
+                self.close_detail(cx);
+                return true;
+            }
+            _ => return false,
+        };
+        self.move_selection(movement.unwrap(), event.keystroke.modifiers.shift, cx);
+        true
     }
 
     /// Ask for a fresh snapshot now, in addition to the poll.
@@ -631,9 +726,21 @@ impl Render for MainScreen {
         if let Some(message) = message {
             root = root.child(Label::new(message).size(LabelSize::Caption));
         }
-        root = root.child(self.table(&me));
+        root = root.child(
+            div()
+                .tab_index(0)
+                .key_context("TorrentTable")
+                .capture_key_down(cx.listener(|screen, event: &KeyDownEvent, _, cx| {
+                    if screen.handle_table_key(event, cx) {
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(self.table(&me)),
+        );
         root = root.child(Label::new(SHORTCUT_HELP).size(LabelSize::Caption));
-        root = root.child(self.detail.clone());
+        if self.detail_open {
+            root = root.child(self.detail.clone());
+        }
         if let Some(menu) = &self.menu {
             root = root.child(menu.clone());
         }
@@ -643,6 +750,14 @@ impl Render for MainScreen {
         root = root.child(self.toasts.clone());
         root
     }
+}
+
+#[derive(Clone, Copy)]
+enum SelectionMovement {
+    Previous,
+    Next,
+    First,
+    Last,
 }
 
 fn toolbar_click(
@@ -963,6 +1078,58 @@ mod tests {
         detail.read_with(cx, |pane, _| {
             assert_eq!(pane.torrent_id(), Some(3));
             assert!(pane.error().is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn keyboard_navigation_moves_extends_and_jumps_selection(cx: &mut TestAppContext) {
+        let (_runtime, _server) = daemon(cx);
+        let status = cx.new(|_| StatusBar::new());
+        let screen = cx.new(|cx| MainScreen::new(status, cx));
+        screen.update(cx, |screen, cx| {
+            screen._load = Some(Bridge::load(screen, cx, snapshot_of, fetch_snapshot));
+        });
+        drive(cx, |cx| screen.read_with(cx, |s, _| s.torrent_count() > 0));
+        screen.update(cx, |screen, cx| {
+            let mut snapshot = screen.snapshot.ready_value().unwrap().clone();
+            for id in [4, 5] {
+                let mut torrent = snapshot.torrents.torrents[0].clone();
+                torrent.id = Some(id);
+                torrent.name = Some(format!("torrent-{id}"));
+                snapshot.torrents.torrents.push(torrent);
+            }
+            snapshot.torrents.total = 3;
+            screen.snapshot = AsyncResource::ready(snapshot);
+
+            screen.move_selection(SelectionMovement::Next, false, cx);
+            assert_eq!(screen.selected.as_deref(), Some("4"));
+            screen.move_selection(SelectionMovement::Next, true, cx);
+            assert_eq!(screen.selected.as_deref(), Some("5"));
+            assert_eq!(screen.marked.len(), 2);
+            assert!(screen.marked.contains("4"));
+            assert!(screen.marked.contains("5"));
+            screen.move_selection(SelectionMovement::First, false, cx);
+            assert_eq!(screen.selected.as_deref(), Some("3"));
+            screen.move_selection(SelectionMovement::Last, false, cx);
+            assert_eq!(screen.selected.as_deref(), Some("5"));
+        });
+    }
+
+    #[gpui::test]
+    fn enter_opens_and_escape_closes_detail(cx: &mut TestAppContext) {
+        let (_runtime, _server) = daemon(cx);
+        let status = cx.new(|_| StatusBar::new());
+        let screen = cx.new(|cx| MainScreen::new(status, cx));
+        screen.update(cx, |screen, cx| {
+            screen._load = Some(Bridge::load(screen, cx, snapshot_of, fetch_snapshot));
+        });
+        drive(cx, |cx| screen.read_with(cx, |s, _| s.torrent_count() > 0));
+        screen.update(cx, |screen, cx| {
+            screen.selected = Some("3".to_owned());
+            screen.open_detail(cx);
+            assert!(screen.detail_open, "Enter must open the detail pane");
+            screen.close_detail(cx);
+            assert!(!screen.detail_open, "Escape must close the detail pane");
         });
     }
 
