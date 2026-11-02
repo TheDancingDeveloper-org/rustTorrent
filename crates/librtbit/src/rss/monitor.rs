@@ -94,7 +94,7 @@ impl RssMonitor {
             let bytes = tokio::fs::read(&path).await.map_err(|e| {
                 anyhow::anyhow!("error reading RSS feed file {}: {e}", path.display())
             })?;
-            return Ok(fetch::cap_feed_body(&bytes));
+            return fetch::cap_feed_body(&bytes);
         }
 
         let _ = client;

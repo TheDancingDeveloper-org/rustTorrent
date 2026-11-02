@@ -128,6 +128,7 @@ pub const READ_ONLY_INCOMPLETE_PAYLOAD: &str =
 
 /// True for [`READ_ONLY_INCOMPLETE_PAYLOAD`] with or without the
 /// `: <first missing path>` suffix the stats add.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn is_read_only_incomplete_payload(error: &str) -> bool {
     error.starts_with(READ_ONLY_INCOMPLETE_PAYLOAD)
 }

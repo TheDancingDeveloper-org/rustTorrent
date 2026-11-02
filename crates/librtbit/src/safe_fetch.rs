@@ -86,8 +86,12 @@ pub fn is_forbidden_address(ip: IpAddr) -> bool {
                 // Unique local fc00::/7 and link local fe80::/10.
                 || (seg0 & 0xfe00) == 0xfc00
                 || (seg0 & 0xffc0) == 0xfe80
-                // NAT64 well-known prefix 64:ff9b::/96.
+                // NAT64 well-known prefixes (including the RFC 6052 /96
+                // form and the RFC 6052 /48 form used by local translators).
                 || is_nat64(v6)
+                || (seg0 == 0x64 && v6.segments()[1] == 0xff9b && v6.segments()[2] == 1)
+                // Teredo tunnels can expose a client behind a private NAT.
+                || seg0 == 0x2001 && v6.segments()[1] == 0
                 // IPv4-compatible ::a.b.c.d and 6to4 2002::/16.
                 || is_ipv4_compatible(v6)
                 || seg0 == 0x2002
@@ -148,6 +152,9 @@ pub async fn get(url: &str, limits: &FetchLimits) -> anyhow::Result<Response> {
         let (host, port, addrs) = vet_host(&current).await?;
         let mut builder = Client::builder()
             .timeout(limits.timeout)
+            // Resolve-pinning only protects direct connections. Never let an
+            // environment proxy route around the vetted destination.
+            .no_proxy()
             .redirect(reqwest::redirect::Policy::none());
         for ip in addrs {
             builder = builder.resolve(&host, SocketAddr::new(ip, port));
