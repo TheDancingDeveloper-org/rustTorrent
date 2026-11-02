@@ -244,6 +244,13 @@ pub struct TorrentFile {
     pub length: u64,
     /// Whether the file is in the download selection.
     pub included: bool,
+    /// qbit-compatible file priority: 0 skip, 1 normal, 6 high, 7 max.
+    #[serde(default = "default_file_priority")]
+    pub priority: u8,
+}
+
+const fn default_file_priority() -> u8 {
+    1
 }
 
 /// Announce state of one tracker. The strings are what the daemon sends.

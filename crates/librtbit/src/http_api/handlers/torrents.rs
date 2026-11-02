@@ -587,6 +587,37 @@ pub async fn h_torrent_file_set_included(
         .map(axum::Json)
 }
 
+#[derive(Deserialize)]
+#[cfg_attr(feature = "swagger", derive(utoipa::ToSchema))]
+pub struct SetFilePriorityRequest {
+    priority: u8,
+}
+
+#[cfg_attr(feature = "swagger", utoipa::path(
+    post,
+    path = "/torrents/{id}/files/{index}/priority",
+    params(
+        ("id" = String, Path, description = "Torrent ID or info hash"),
+        ("index" = usize, Path, description = "File index"),
+    ),
+    request_body(content = SetFilePriorityRequest, description = "File priority: 0, 1, 6, or 7"),
+    responses(
+        (status = 200, description = "File priority updated", body = EmptyJsonResponse),
+        (status = 400, description = "File index or priority is invalid")
+    )
+))]
+pub async fn h_torrent_file_set_priority(
+    State(state): State<ApiState>,
+    Path((idx, file_index)): Path<(TorrentIdOrHash, usize)>,
+    axum::Json(req): axum::Json<SetFilePriorityRequest>,
+) -> Result<impl IntoResponse> {
+    state
+        .api
+        .api_torrent_file_set_priority(idx, file_index, req.priority)
+        .await
+        .map(axum::Json)
+}
+
 #[cfg_attr(feature = "swagger", utoipa::path(
     get,
     path = "/stats",

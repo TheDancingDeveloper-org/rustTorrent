@@ -7,8 +7,8 @@
 //! `Tree` of folders and files. Double-clicking a node, or the checkbox and
 //! priority buttons under the tree, posts the new selection and reloads.
 //!
-//! The daemon has two file priorities only: download ("Normal") and skip
-//! ("Do not download"). A folder that holds both reads as "Mixed".
+//! File priorities are skip, normal, high, and maximum. Folders summarize
+//! their children and can apply a priority to every file below them.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -261,6 +261,25 @@ impl DetailPane {
         }
     }
 
+    /// Set the qbit-compatible priority for every file under a tree node.
+    pub fn set_priority(&mut self, indices: &[usize], priority: u8, cx: &mut Context<Self>) {
+        let Some(id) = self.torrent_id else { return };
+        let Some(files) = self.files() else { return };
+        let indices: Vec<usize> = indices
+            .iter()
+            .copied()
+            .filter(|&index| files.get(index).is_some())
+            .collect();
+        let rx = cx.global::<Bridge>().call(move |client| async move {
+            let mut client = client.lock().await;
+            for index in indices {
+                client.set_file_priority(id, index, priority).await?;
+            }
+            Ok(())
+        });
+        self.await_action(id, rx, cx);
+    }
+
     /// Add the tracker URL entered in the Trackers tab and reload the detail.
     pub fn add_tracker(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.torrent_id else {
@@ -420,12 +439,34 @@ fn inclusion(files: &[TorrentFile], indices: &[usize]) -> CheckboxState {
 }
 
 /// The priority a checkbox state stands for.
-fn priority_label(state: CheckboxState) -> &'static str {
-    match state {
-        CheckboxState::Checked => "Normal",
-        CheckboxState::Unchecked => "Do not download",
-        CheckboxState::Indeterminate => "Mixed",
+fn priority_label(priority: u8) -> &'static str {
+    match priority {
+        0 => "Do not download",
+        1 => "Normal",
+        6 => "High",
+        7 => "Maximum",
+        _ => "Mixed",
     }
+}
+
+fn effective_priority(file: &TorrentFile) -> u8 {
+    if !file.included && file.priority == 1 {
+        0
+    } else {
+        file.priority
+    }
+}
+
+fn node_priority(files: &[TorrentFile], indices: &[usize]) -> Option<u8> {
+    let first = effective_priority(files.get(*indices.first()?)?);
+    indices
+        .iter()
+        .all(|&index| {
+            files
+                .get(index)
+                .is_some_and(|file| effective_priority(file) == first)
+        })
+        .then_some(first)
 }
 
 /// The whole selection after setting `changed` to `included`.
@@ -474,7 +515,7 @@ fn level(
         let badge = format!(
             "{}  {}",
             format::bytes(size),
-            priority_label(inclusion(files, &under))
+            priority_label(node_priority(files, &under).unwrap_or(255))
         );
         let mut item = TreeItem::new(id.clone(), name.to_owned())
             .badge(badge)
@@ -491,7 +532,7 @@ fn level(
         let badge = format!(
             "{}  {}",
             format::bytes(file.length),
-            priority_label(inclusion(files, &[i]))
+            priority_label(effective_priority(file))
         );
         items.push(TreeItem::new(file_id(i), name).badge(badge));
     }
@@ -534,12 +575,12 @@ fn files(
         .filter(|(_, indices)| !indices.is_empty());
     if let Some((node, indices)) = selected {
         let state = inclusion(list, &indices);
-        let priority_button = |id: &'static str, label: &'static str, include: bool| {
+        let priority_button = |id: &'static str, label: &'static str, priority: u8| {
             let me = me.clone();
             let indices = indices.clone();
             Button::new(id).label(label).on_click(
                 move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-                    me.update(cx, |pane, cx| pane.set_included(&indices, include, cx));
+                    me.update(cx, |pane, cx| pane.set_priority(&indices, priority, cx));
                 },
             )
         };
@@ -555,13 +596,16 @@ fn files(
                 .items_center()
                 .gap_2()
                 .child(toggle)
-                .child(Label::new(format!("Priority: {}", priority_label(state))))
-                .child(priority_button("torrent-file-normal", "Normal", true))
-                .child(priority_button(
-                    "torrent-file-skip",
-                    "Do not download",
-                    false,
-                )),
+                .child(Label::new(format!(
+                    "Priority: {}",
+                    node_priority(list, &indices)
+                        .map(priority_label)
+                        .unwrap_or("Mixed")
+                )))
+                .child(priority_button("torrent-file-normal", "Normal", 1))
+                .child(priority_button("torrent-file-high", "High", 6))
+                .child(priority_button("torrent-file-maximum", "Maximum", 7))
+                .child(priority_button("torrent-file-skip", "Do not download", 0)),
         );
     }
     column
@@ -900,6 +944,7 @@ mod tests {
             components: path.split('/').map(str::to_owned).collect(),
             length: 10,
             included,
+            priority: if included { 1 } else { 0 },
         }
     }
 
@@ -1033,6 +1078,16 @@ mod tests {
             assert_eq!(tree[0].badge.as_deref(), Some("100 B  Normal"));
             assert_eq!(tree[1].badge.as_deref(), Some("50 B  Do not download"));
         });
+    }
+
+    #[test]
+    fn priority_label_maps_daemon_levels() {
+        assert_eq!(priority_label(0), "Do not download");
+        assert_eq!(priority_label(1), "Normal");
+        assert_eq!(priority_label(6), "High");
+        assert_eq!(priority_label(7), "Maximum");
+        assert_eq!(node_priority(&sample(), &[0]), Some(1));
+        assert_eq!(node_priority(&sample(), &[0, 1]), None);
     }
 
     #[gpui::test]

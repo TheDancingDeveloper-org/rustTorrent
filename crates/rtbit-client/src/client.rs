@@ -284,6 +284,20 @@ impl Client {
         .await
     }
 
+    /// `POST /torrents/{id}/files/{index}/priority`.
+    pub async fn set_file_priority(
+        &mut self,
+        id: u64,
+        index: usize,
+        priority: u8,
+    ) -> Result<(), Error> {
+        self.authed_post_json(
+            &format!("torrents/{id}/files/{index}/priority"),
+            &FilePriorityBody { priority },
+        )
+        .await
+    }
+
     /// Read every route the settings screen shows.
     pub async fn settings(&mut self) -> Result<crate::types::SettingsSnapshot, Error> {
         use crate::types::SettingsSnapshot;
@@ -770,6 +784,11 @@ struct OnlyFilesBody<'a> {
 #[derive(Serialize)]
 struct FileIncludedBody {
     included: bool,
+}
+
+#[derive(Serialize)]
+struct FilePriorityBody {
+    priority: u8,
 }
 
 #[derive(Serialize)]
