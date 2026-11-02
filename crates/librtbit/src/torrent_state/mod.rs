@@ -74,6 +74,9 @@ pub enum ManagedTorrentState {
     None,
 }
 
+/// Status error shown while the low-disk guard holds a download.
+pub const LOW_DISK_SPACE: &str = "low disk space";
+
 impl ManagedTorrentState {
     pub fn name(&self) -> &'static str {
         match self {
@@ -1076,6 +1079,8 @@ impl ManagedTorrent {
                     resp.file_progress = p.chunk_tracker.per_file_have_bytes().to_owned();
                     if p.files.is_read_only() && !resp.finished {
                         resp.error = Some(READ_ONLY_INCOMPLETE_PAYLOAD.to_owned());
+                    } else if self.shared.held_for_disk.load(Ordering::Relaxed) {
+                        resp.error = Some(LOW_DISK_SPACE.to_owned());
                     }
                 }
                 ManagedTorrentState::Live(l) => {

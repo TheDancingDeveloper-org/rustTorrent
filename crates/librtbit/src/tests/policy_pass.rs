@@ -215,6 +215,11 @@ async fn disk_hold_survives_restart_and_releases() -> anyhow::Result<()> {
     session.policy_pass().await;
     assert!(download.is_paused());
     assert!(download.shared().held_for_disk.load(Ordering::Relaxed));
+    assert_eq!(
+        download.stats().error.as_deref(),
+        Some("low disk space"),
+        "native status must name the hold"
+    );
     session.stop().await;
     drop(session);
 
