@@ -140,6 +140,12 @@ pub(super) struct QbitCategory {
     pub(super) name: String,
     #[serde(rename = "savePath")]
     pub(super) save_path: String,
+    #[serde(rename = "ratioLimit")]
+    pub(super) ratio_limit: f64,
+    #[serde(rename = "seedingTimeLimit")]
+    pub(super) seeding_time_limit: i64,
+    #[serde(rename = "inactiveSeedingTimeLimit")]
+    pub(super) inactive_seeding_time_limit: i64,
 }
 
 /// Combined qBit compat state.

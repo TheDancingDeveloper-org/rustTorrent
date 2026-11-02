@@ -17,7 +17,20 @@ pub(super) async fn h_categories(State(state): State<Arc<QbitState>>) -> impl In
                 .save_path
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            (name.clone(), QbitCategory { name, save_path })
+            (
+                name.clone(),
+                QbitCategory {
+                    name,
+                    save_path,
+                    ratio_limit: category.ratio_limit.unwrap_or(-1.0),
+                    seeding_time_limit: category
+                        .seeding_time_limit
+                        .map_or(-1, |d| (d.as_secs() / 60) as i64),
+                    inactive_seeding_time_limit: category
+                        .inactive_seeding_time_limit
+                        .map_or(-1, |d| (d.as_secs() / 60) as i64),
+                },
+            )
         })
         .collect();
     axum::Json(serde_json::to_value(&map).unwrap_or_default())
@@ -29,6 +42,12 @@ pub(super) struct CreateCategoryForm {
     pub(super) category: String,
     #[serde(default, alias = "savePath")]
     pub(super) save_path: String,
+    #[serde(default, alias = "ratioLimit")]
+    pub(super) ratio_limit: Option<f64>,
+    #[serde(default, alias = "seedingTimeLimit")]
+    pub(super) seeding_time_limit: Option<i64>,
+    #[serde(default, alias = "inactiveSeedingTimeLimit")]
+    pub(super) inactive_seeding_time_limit: Option<i64>,
 }
 
 /// Upstream rejects names with a leading or trailing `/`, or an empty path
@@ -89,7 +108,19 @@ async fn save_category(state: &QbitState, form: CreateCategoryForm) -> axum::res
     match state
         .api_state
         .api
-        .api_create_or_edit_category(form.category, save_path)
+        .api_create_or_edit_category(
+            form.category,
+            save_path,
+            crate::session::ShareLimits {
+                max_ratio: form.ratio_limit.filter(|v| *v >= 0.0),
+                max_seeding_time: form
+                    .seeding_time_limit
+                    .and_then(crate::http_api::handlers::qbit::torrentcreator::minutes_from_qbit),
+                max_inactive_seeding_time: form
+                    .inactive_seeding_time_limit
+                    .and_then(crate::http_api::handlers::qbit::torrentcreator::minutes_from_qbit),
+            },
+        )
         .await
     {
         Ok(_) => (StatusCode::OK, "Ok.").into_response(),

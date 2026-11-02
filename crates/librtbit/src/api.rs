@@ -710,19 +710,21 @@ impl Api {
         &self,
         name: String,
         save_path: Option<PathBuf>,
+        limits: crate::session::ShareLimits,
     ) -> Result<EmptyJsonResponse> {
         let mgr = self.session.categories();
         if mgr.exists(&name) {
-            mgr.edit(&name, save_path)
+            mgr.edit(&name, save_path, limits)
                 .context("error editing category")?;
         } else {
-            mgr.create(name, save_path)
+            mgr.create(name, save_path, limits)
                 .context("error creating category")?;
         }
         self.session
             .persist_categories()
             .await
             .context("error persisting categories")?;
+        self.session.policy_pass().await;
         Ok(Default::default())
     }
 
