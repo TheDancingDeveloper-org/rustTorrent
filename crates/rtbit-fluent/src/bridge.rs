@@ -21,6 +21,34 @@ use tokio::sync::{Mutex, oneshot};
 /// How often [`Bridge::poll_snapshot`] refreshes the main screen.
 pub const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Longest wait between polls while the daemon is unreachable.
+pub const MAX_BACKOFF: Duration = Duration::from_secs(30);
+
+/// Consecutive failed polls before the shell shows the lost-connection banner.
+pub const LOST_AFTER_FAILURES: u32 = 3;
+
+/// What the snapshot poll learned from its latest attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PollHealth {
+    /// A poll succeeded.
+    Ok,
+    /// `failures` polls in a row failed; the next attempt is in `retry_in`.
+    Failing { failures: u32, retry_in: Duration },
+    /// The daemon refused the session (401); the user must sign in again.
+    Unauthorised,
+}
+
+/// Delay before the next poll after `failures` consecutive failures:
+/// 1s, 2s, 4s, ... capped at [`MAX_BACKOFF`]. Zero failures is the normal interval.
+#[must_use]
+pub fn backoff_delay(failures: u32) -> Duration {
+    if failures == 0 {
+        return SNAPSHOT_INTERVAL;
+    }
+    let factor = 1u32 << (failures - 1).min(5);
+    (SNAPSHOT_INTERVAL * factor).min(MAX_BACKOFF)
+}
+
 /// Worker threads for the bridge runtime. Calls are I/O bound.
 const WORKER_THREADS: usize = 2;
 
@@ -138,8 +166,10 @@ impl Bridge {
     pub fn poll_snapshot<V: 'static>(
         cx: &mut Context<V>,
         select: fn(&mut V) -> &mut AsyncResource<Snapshot, String>,
+        on_health: fn(&mut V, PollHealth, &mut Context<V>),
     ) -> Poller {
         let task = cx.spawn(async move |view: WeakEntity<V>, cx: &mut AsyncApp| {
+            let mut failures = 0u32;
             loop {
                 let Ok(pending) = view.update(cx, |view, cx| {
                     let request = select(view).begin_load();
@@ -149,21 +179,38 @@ impl Bridge {
                     return;
                 };
                 let (request, rx) = pending;
-                let reply = await_reply(rx).await;
+                let reply = match rx.await {
+                    Ok(reply) => reply,
+                    Err(_) => Err(Error::Unreachable("request cancelled".to_string())),
+                };
+                let unauthorised = matches!(reply, Err(Error::Unauthorised));
+                failures = if reply.is_ok() { 0 } else { failures + 1 };
+                let delay = backoff_delay(failures);
+                let health = if reply.is_ok() {
+                    PollHealth::Ok
+                } else if unauthorised {
+                    PollHealth::Unauthorised
+                } else {
+                    PollHealth::Failing {
+                        failures,
+                        retry_in: delay,
+                    }
+                };
                 let updated = view.update(cx, |view, cx| {
                     let resource = select(view);
                     let accepted = match reply {
                         Ok(value) => resource.resolve(request, value),
-                        Err(err) => resource.reject(request, err),
+                        Err(err) => resource.reject(request, err.to_string()),
                     };
                     if accepted {
                         cx.notify();
                     }
+                    on_health(view, health, cx);
                 });
-                if updated.is_err() {
+                if updated.is_err() || unauthorised {
                     return;
                 }
-                cx.background_executor().timer(SNAPSHOT_INTERVAL).await;
+                cx.background_executor().timer(delay).await;
             }
         });
         Poller { _task: task }
@@ -279,6 +326,12 @@ mod tests {
         panic!("bridge reply never arrived");
     }
 
+    #[test]
+    fn backoff_doubles_from_one_second_to_the_cap() {
+        let secs: Vec<u64> = (0..9).map(|n| backoff_delay(n).as_secs()).collect();
+        assert_eq!(secs, [1, 1, 2, 4, 8, 16, 30, 30, 30]);
+    }
+
     #[gpui::test]
     fn load_resolves_snapshot_from_daemon(cx: &mut TestAppContext) {
         let (_runtime, _server) = daemon(cx);
@@ -330,7 +383,7 @@ mod tests {
         let (runtime, server) = daemon(cx);
         let screen = cx.new(|_| Screen::default());
         screen.update(cx, |screen, cx| {
-            screen._poller = Some(Bridge::poll_snapshot(cx, snapshot_of));
+            screen._poller = Some(Bridge::poll_snapshot(cx, snapshot_of, |_, _, _| {}));
         });
         // Step the fake clock past each 1s timer until three polls have started.
         drive(cx, |cx| {
