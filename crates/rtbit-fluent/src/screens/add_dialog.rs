@@ -10,8 +10,8 @@ use fluent_core::ThemeProvider as _;
 use fluent_layout::{MessageBar, MessageIntent};
 use fluent_primitives::{Button, ButtonAppearance, Label, Switch, TextInput};
 use gpui::{
-    AsyncApp, Context, Entity, EventEmitter, IntoElement, PathPromptOptions, Render, Task,
-    WeakEntity, Window, div, prelude::*, px,
+    AsyncApp, Context, Entity, EventEmitter, Focusable as _, IntoElement, KeyDownEvent,
+    PathPromptOptions, Render, Task, WeakEntity, Window, div, prelude::*, px,
 };
 use rtbit_ui_core::{AddRequest, AddSource};
 
@@ -35,6 +35,7 @@ pub struct AddDialog {
     error: Option<String>,
     /// Set once a request has been emitted, so a second submit sends nothing.
     submitted: bool,
+    autofocused: bool,
     _pick: Option<Task<()>>,
 }
 
@@ -51,6 +52,7 @@ impl AddDialog {
             file: None,
             error: None,
             submitted: false,
+            autofocused: false,
             _pick: None,
         }
     }
@@ -149,6 +151,11 @@ impl AddDialog {
         self.magnet.read(cx).text().to_owned()
     }
 
+    #[cfg(test)]
+    pub(crate) fn magnet_focus(&self, cx: &gpui::App) -> gpui::FocusHandle {
+        self.magnet.focus_handle(cx)
+    }
+
     /// Stand in for the native picker: set the chosen `.torrent` file, for tests.
     #[cfg(test)]
     pub(crate) fn set_file_for_test(&mut self, name: &str, bytes: &[u8]) {
@@ -175,7 +182,16 @@ fn field(label: &'static str, input: Entity<TextInput>) -> impl IntoElement {
 }
 
 impl Render for AddDialog {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.autofocused {
+            self.autofocused = true;
+            // The input only owns its focus handle once it has rendered, so focus it after
+            // this frame has drawn.
+            cx.defer_in(window, |dialog, window, cx| {
+                let focus = dialog.magnet.focus_handle(cx);
+                window.focus(&focus, cx);
+            });
+        }
         let colors = cx.theme().colors.clone();
         let file_label = self
             .file
@@ -265,6 +281,19 @@ impl Render for AddDialog {
             .items_center()
             .justify_center()
             .occlude()
+            .capture_key_down(cx.listener(|dialog, event: &KeyDownEvent, _, cx| {
+                match event.keystroke.key.as_str() {
+                    "escape" => {
+                        dialog.cancel(cx);
+                        cx.stop_propagation();
+                    }
+                    "enter" => {
+                        dialog.submit(cx);
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            }))
             .bg(gpui::black().opacity(0.4))
             .child(card)
     }
