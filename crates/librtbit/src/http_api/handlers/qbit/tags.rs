@@ -157,6 +157,9 @@ pub(super) async fn h_torrents_set_location(
         return qbit_error(StatusCode::BAD_REQUEST, "location is required");
     }
     let new_root = PathBuf::from(location);
+    if let Err(error) = api.validate_download_location(&new_root) {
+        return qbit_error(StatusCode::BAD_REQUEST, &error.to_string());
+    }
     let mut last_error = None;
     for idx in resolve_hashes(api, &form.hashes) {
         let Ok(handle) = api.mgr_handle(idx) else {

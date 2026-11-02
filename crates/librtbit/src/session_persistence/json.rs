@@ -65,7 +65,7 @@ impl JsonSessionPersistenceStore {
                 match serde_json::from_slice(&buf) {
                     Ok(db) => db,
                     Err(e) => {
-                        quarantine_corrupt(&db_filename, &e);
+                        quarantine_corrupt(&db_filename, &e)?;
                         Default::default()
                     }
                 }
@@ -412,7 +412,7 @@ impl SessionPersistenceStore for JsonSessionPersistenceStore {
                 match serde_json::from_slice(&buf) {
                     Ok(categories) => Ok(categories),
                     Err(e) => {
-                        quarantine_corrupt(&filename, &e);
+                        quarantine_corrupt(&filename, &e)?;
                         Ok(HashMap::new())
                     }
                 }
@@ -442,7 +442,7 @@ impl SessionPersistenceStore for JsonSessionPersistenceStore {
             Ok(buf) => match serde_json::from_slice(&buf) {
                 Ok(tags) => Ok(tags),
                 Err(e) => {
-                    quarantine_corrupt(&filename, &e);
+                    quarantine_corrupt(&filename, &e)?;
                     Ok(BTreeSet::new())
                 }
             },
@@ -509,23 +509,31 @@ async fn atomic_write(
     .context("atomic write task failed")?
 }
 
-/// Move an unparseable state file aside as `<name>.corrupt` and warn, so the
-/// daemon starts with empty state instead of refusing to start.
-fn quarantine_corrupt(path: &std::path::Path, err: &dyn std::fmt::Display) {
+/// Move an unparseable state file aside under a unique name. Refusing to
+/// continue when that fails prevents the next save from destroying the only
+/// copy of the previous state.
+fn quarantine_corrupt(
+    path: &std::path::Path,
+    err: &dyn std::fmt::Display,
+) -> anyhow::Result<PathBuf> {
+    static QUARANTINE_IDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let mut name = path.as_os_str().to_owned();
-    name.push(".corrupt");
+    let id = QUARANTINE_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    name.push(format!(".corrupt.{timestamp}.{id}"));
     let corrupt = PathBuf::from(name);
-    match std::fs::rename(path, &corrupt) {
-        Ok(()) => warn!(
-            ?path,
-            ?corrupt,
-            "corrupt state file ({err}); quarantined, starting with empty state"
-        ),
-        Err(re) => warn!(
-            ?path,
-            "corrupt state file ({err}); could not quarantine: {re}; starting with empty state"
-        ),
-    }
+    std::fs::rename(path, &corrupt).with_context(|| {
+        format!("corrupt state file ({err}); could not quarantine {path:?} as {corrupt:?}")
+    })?;
+    warn!(
+        ?path,
+        ?corrupt,
+        "corrupt state file ({err}); quarantined, starting with empty state"
+    );
+    Ok(corrupt)
 }
 
 #[cfg(test)]
@@ -628,11 +636,38 @@ mod tests {
         assert!(store.load_session_settings().await.is_ok());
         for name in ["tags.json", "categories.json", "session.json"] {
             assert!(!dir.path().join(name).exists(), "{name} should be moved");
-            assert!(dir.path().join(format!("{name}.corrupt")).exists());
+            assert!(std::fs::read_dir(dir.path()).unwrap().any(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&format!("{name}.corrupt."))
+            }));
         }
         let tags: BTreeSet<String> = ["a".to_owned()].into();
         store.store_tags(&tags).await.unwrap();
         assert_eq!(store.load_tags().await.unwrap(), tags);
+    }
+
+    #[test]
+    fn corrupt_quarantine_failure_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.json");
+        let error = quarantine_corrupt(&missing, &"invalid JSON").unwrap_err();
+        assert!(error.to_string().contains("could not quarantine"));
+    }
+
+    #[test]
+    fn corrupt_quarantines_do_not_replace_earlier_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        std::fs::write(&path, "first").unwrap();
+        let first = quarantine_corrupt(&path, &"invalid JSON").unwrap();
+        std::fs::write(&path, "second").unwrap();
+        let second = quarantine_corrupt(&path, &"invalid JSON").unwrap();
+        assert_ne!(first, second);
+        assert_eq!(std::fs::read_to_string(first).unwrap(), "first");
+        assert_eq!(std::fs::read_to_string(second).unwrap(), "second");
     }
 
     #[tokio::test]

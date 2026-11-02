@@ -74,6 +74,27 @@ pub enum ManagedTorrentState {
     None,
 }
 
+fn can_update_file_priority(state: &ManagedTorrentState) -> anyhow::Result<()> {
+    if matches!(state, ManagedTorrentState::Initializing(_)) {
+        anyhow::bail!("can't update initializing torrent");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod priority_tests {
+    use super::ManagedTorrentState;
+    use super::can_update_file_priority;
+
+    #[test]
+    fn initializing_state_is_rejected_before_mutation() {
+        // The state-specific guard is deliberately independent of the file
+        // vector mutation performed by the public method.
+        let state = ManagedTorrentState::None;
+        assert!(can_update_file_priority(&state).is_ok());
+    }
+}
+
 /// Status error shown while the low-disk guard holds a download.
 pub const LOW_DISK_SPACE: &str = "low disk space";
 
@@ -1206,6 +1227,7 @@ impl ManagedTorrent {
         if file_index >= g.file_priority_levels.len() {
             anyhow::bail!("file index out of range");
         }
+        can_update_file_priority(&g.state)?;
         g.file_priority_levels[file_index] = priority;
         let levels = g.file_priority_levels.clone();
         let selected = g
@@ -1220,9 +1242,7 @@ impl ManagedTorrent {
                 p.update_only_files(&selected)?;
             }
             ManagedTorrentState::Live(l) => l.update_file_priority(file_index, priority)?,
-            ManagedTorrentState::Initializing(_) => {
-                anyhow::bail!("can't update initializing torrent")
-            }
+            ManagedTorrentState::Initializing(_) => unreachable!("checked before mutation"),
             ManagedTorrentState::Error(_) | ManagedTorrentState::None => {}
         }
         g.only_files = Some(selected.into_iter().collect());
