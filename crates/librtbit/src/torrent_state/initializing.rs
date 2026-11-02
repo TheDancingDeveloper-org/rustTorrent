@@ -239,12 +239,23 @@ impl TorrentStateInitializing {
             None => {
                 info!("Doing initial checksum validation, this might take a while...");
                 let token = cancellation_token.clone();
+                let recheck_throttle = self
+                    .shared
+                    .session
+                    .upgrade()
+                    .context("session is dead")?
+                    .recheck_throttle
+                    .clone();
                 let have_pieces = self
                     .shared
                     .spawner
                     .block_in_place_with_semaphore(|| {
                         FileOps::new(&self.metadata.info, &self.files, &self.metadata.file_infos)
-                            .initial_check(&self.checked_bytes, Some(&token))
+                            .initial_check(
+                                &self.checked_bytes,
+                                Some(&token),
+                                Some(&recheck_throttle),
+                            )
                     })
                     .await?;
                 bitv_factory

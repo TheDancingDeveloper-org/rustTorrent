@@ -566,6 +566,8 @@ mod tests {
                 connect_timeout_secs: Some(15),
                 upload_slots: Some(8),
                 fastresume_validation_denom: Some(0),
+                concurrent_recheck_limit: Some(3),
+                recheck_read_mibps: Some(50),
                 ..Default::default()
             }),
         };

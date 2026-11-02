@@ -345,6 +345,8 @@ impl SettingsDraft {
                 &self.fastresume_denom,
                 "Fastresume validation",
             )?,
+            concurrent_recheck_limit: base.advanced.concurrent_recheck_limit,
+            recheck_read_mibps: base.advanced.recheck_read_mibps,
         };
         let shown = AdvancedConfig {
             connect_timeout_secs: base.advanced.connect_timeout_secs,
@@ -354,6 +356,8 @@ impl SettingsDraft {
             magnet_resolution_timeout_secs: base.advanced.magnet_resolution_timeout_secs,
             max_concurrent_handshakes: base.advanced.max_concurrent_handshakes,
             fastresume_validation_denom: base.advanced.fastresume_validation_denom,
+            concurrent_recheck_limit: base.advanced.concurrent_recheck_limit,
+            recheck_read_mibps: base.advanced.recheck_read_mibps,
         };
         if advanced != shown {
             out.advanced = Some(advanced);

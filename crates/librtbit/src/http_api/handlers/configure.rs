@@ -143,6 +143,12 @@ pub const MIN_KEEP_ALIVE_SECS: u64 = crate::session_persistence::MIN_KEEP_ALIVE_
 pub const MAX_KEEP_ALIVE_SECS: u64 = crate::session_persistence::MAX_KEEP_ALIVE_SECS;
 pub const MIN_UPLOAD_SLOTS: u64 = crate::session_persistence::MIN_UPLOAD_SLOTS;
 pub const MAX_UPLOAD_SLOTS: u64 = crate::session_persistence::MAX_UPLOAD_SLOTS;
+pub const MIN_CONCURRENT_RECHECK_LIMIT: u64 =
+    crate::session_persistence::MIN_CONCURRENT_RECHECK_LIMIT;
+pub const MAX_CONCURRENT_RECHECK_LIMIT: u64 =
+    crate::session_persistence::MAX_CONCURRENT_RECHECK_LIMIT;
+pub const MIN_RECHECK_READ_MIBPS: u64 = crate::session_persistence::MIN_RECHECK_READ_MIBPS;
+pub const MAX_RECHECK_READ_MIBPS: u64 = crate::session_persistence::MAX_RECHECK_READ_MIBPS;
 pub const MIN_MAGNET_RESOLUTION_TIMEOUT_SECS: u64 =
     crate::session_persistence::MIN_MAGNET_RESOLUTION_TIMEOUT_SECS;
 pub const MAX_MAGNET_RESOLUTION_TIMEOUT_SECS: u64 =
@@ -187,6 +193,10 @@ pub struct AdvancedConfig {
     pub max_concurrent_handshakes: Option<u64>,
     #[serde(default)]
     pub fastresume_validation_denom: Option<u64>,
+    #[serde(default)]
+    pub concurrent_recheck_limit: Option<u64>,
+    #[serde(default)]
+    pub recheck_read_mibps: Option<u64>,
 }
 
 /// The restart knobs as saved for the next start.
@@ -272,6 +282,18 @@ fn validate_advanced(config: &AdvancedConfig) -> Result<AdvancedSettings> {
             MIN_FASTRESUME_VALIDATION_DENOM,
             MAX_FASTRESUME_VALIDATION_DENOM,
         )?,
+        concurrent_recheck_limit: bounded(
+            "concurrent_recheck_limit",
+            config.concurrent_recheck_limit,
+            MIN_CONCURRENT_RECHECK_LIMIT,
+            MAX_CONCURRENT_RECHECK_LIMIT,
+        )?,
+        recheck_read_mibps: bounded(
+            "recheck_read_mibps",
+            config.recheck_read_mibps,
+            MIN_RECHECK_READ_MIBPS,
+            MAX_RECHECK_READ_MIBPS,
+        )?,
     })
 }
 
@@ -297,6 +319,8 @@ pub async fn h_get_advanced(State(state): State<ApiState>) -> Result<impl IntoRe
             magnet_resolution_timeout_secs: saved.magnet_resolution_timeout_secs,
             max_concurrent_handshakes: saved.max_concurrent_handshakes,
             fastresume_validation_denom: saved.fastresume_validation_denom,
+            concurrent_recheck_limit: saved.concurrent_recheck_limit,
+            recheck_read_mibps: saved.recheck_read_mibps,
         },
         restart_required,
         pending_restart: restart_required.then_some(saved_restart),
@@ -930,7 +954,7 @@ mod tests {
     /// Every knob with its bounds, as a setter and a getter on the body.
     type Knob = (&'static str, u64, u64, fn(&mut AdvancedConfig, Option<u64>));
 
-    fn knobs() -> [Knob; 7] {
+    fn knobs() -> [Knob; 9] {
         [
             (
                 "connect_timeout_secs",
@@ -974,6 +998,18 @@ mod tests {
                 MAX_FASTRESUME_VALIDATION_DENOM,
                 |c, v| c.fastresume_validation_denom = v,
             ),
+            (
+                "concurrent_recheck_limit",
+                MIN_CONCURRENT_RECHECK_LIMIT,
+                MAX_CONCURRENT_RECHECK_LIMIT,
+                |c, v| c.concurrent_recheck_limit = v,
+            ),
+            (
+                "recheck_read_mibps",
+                MIN_RECHECK_READ_MIBPS,
+                MAX_RECHECK_READ_MIBPS,
+                |c, v| c.recheck_read_mibps = v,
+            ),
         ]
     }
 
@@ -990,6 +1026,8 @@ mod tests {
                 ("magnet_resolution_timeout_secs", 10, 900),
                 ("max_concurrent_handshakes", 8, 512),
                 ("fastresume_validation_denom", 0, 1000),
+                ("concurrent_recheck_limit", 1, 32),
+                ("recheck_read_mibps", 1, 100_000),
             ]
         );
         assert_eq!((MIN_PEER_LIMIT, MAX_PEER_LIMIT), (1, 5000));
@@ -1181,6 +1219,8 @@ mod tests {
                 magnet_resolution_timeout_secs: Some(240),
                 max_concurrent_handshakes: Some(200),
                 fastresume_validation_denom: Some(0),
+                concurrent_recheck_limit: Some(1),
+                recheck_read_mibps: Some(25),
             }),
         )
         .await;
@@ -1230,6 +1270,9 @@ mod tests {
         // The restart knobs are now the running ones.
         assert_eq!(session.max_concurrent_handshakes(), 200);
         assert_eq!(session.fastresume_validation_denom, Some(0));
+        // The recheck knobs survived the restart.
+        assert_eq!(session.get_concurrent_init_limit(), 1);
+        assert_eq!(session.recheck_throttle.mibps(), Some(25));
         assert_eq!(
             session.saved_advanced(),
             session.startup_advanced(),

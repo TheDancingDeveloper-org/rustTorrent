@@ -75,6 +75,7 @@ impl<'a> FileOps<'a> {
         &self,
         progress: &AtomicU64,
         cancellation_token: Option<&CancellationToken>,
+        throttle: Option<&ReadThrottle>,
     ) -> anyhow::Result<BF> {
         let mut have_pieces =
             BF::from_boxed_slice(vec![0u8; self.torrent.lengths().piece_bitfield_bytes()].into());
@@ -123,6 +124,9 @@ impl<'a> FileOps<'a> {
             let mut piece_remaining = piece_info.len as usize;
             let mut some_files_broken = false;
             progress.fetch_add(piece_info.len as u64, Ordering::Relaxed);
+            if let Some(t) = throttle {
+                t.wait(piece_info.len as u64);
+            }
 
             while piece_remaining > 0 {
                 let mut to_read_in_file: usize =
@@ -372,5 +376,67 @@ impl<'a> FileOps<'a> {
         }
 
         Ok(())
+    }
+}
+
+/// Session-wide cap on the combined disk read rate of all checks. Each caller
+/// reserves a slot on a shared timeline, so concurrent checks share the cap.
+#[derive(Default)]
+pub struct ReadThrottle {
+    /// MiB/s; 0 is unlimited.
+    mibps: std::sync::atomic::AtomicU64,
+    next_free: parking_lot::Mutex<Option<std::time::Instant>>,
+}
+
+impl ReadThrottle {
+    pub fn set_mibps(&self, mibps: Option<u64>) {
+        self.mibps.store(mibps.unwrap_or(0), Ordering::Relaxed);
+    }
+
+    pub fn mibps(&self) -> Option<u64> {
+        Some(self.mibps.load(Ordering::Relaxed)).filter(|v| *v > 0)
+    }
+
+    /// How long to wait before reading `bytes`, reserving that slot.
+    pub(crate) fn reserve(&self, bytes: u64) -> std::time::Duration {
+        let Some(mibps) = self.mibps() else {
+            return std::time::Duration::ZERO;
+        };
+        let cost = std::time::Duration::from_secs_f64(bytes as f64 / (mibps as f64 * 1048576.0));
+        let now = std::time::Instant::now();
+        let mut next = self.next_free.lock();
+        let start = next.filter(|n| *n > now).unwrap_or(now);
+        *next = Some(start + cost);
+        start - now
+    }
+
+    /// Block the calling (blocking) thread until `bytes` may be read.
+    pub fn wait(&self, bytes: u64) {
+        let d = self.reserve(bytes);
+        if !d.is_zero() {
+            std::thread::sleep(d);
+        }
+    }
+}
+
+#[cfg(test)]
+mod throttle_tests {
+    use super::ReadThrottle;
+    use std::time::Duration;
+
+    #[test]
+    fn unlimited_never_waits() {
+        let t = ReadThrottle::default();
+        assert_eq!(t.reserve(1 << 30), Duration::ZERO);
+    }
+
+    #[test]
+    fn limited_spaces_reads_on_a_shared_timeline() {
+        let t = ReadThrottle::default();
+        t.set_mibps(Some(1));
+        assert!(t.reserve(1 << 20) < Duration::from_millis(50));
+        let second = t.reserve(1 << 20);
+        assert!(second > Duration::from_millis(900), "{second:?}");
+        assert!(second <= Duration::from_secs(1));
     }
 }

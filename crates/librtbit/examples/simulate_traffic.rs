@@ -179,6 +179,7 @@ impl TestHarness {
                     download_bps: Default::default(),
                     peer_limit: None,
                     concurrent_init_limit: None,
+                    recheck_read_mibps: None,
                 },
                 disable_local_service_discovery: false,
                 connect: Some(ConnectionOptions {

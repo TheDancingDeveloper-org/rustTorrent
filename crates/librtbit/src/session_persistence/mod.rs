@@ -81,6 +81,11 @@ pub(crate) const MAX_MAX_CONCURRENT_HANDSHAKES: u64 = 512;
 pub(crate) const DEFAULT_MAX_CONCURRENT_HANDSHAKES: usize = 64;
 pub(crate) const MIN_FASTRESUME_VALIDATION_DENOM: u64 = 0;
 pub(crate) const MAX_FASTRESUME_VALIDATION_DENOM: u64 = 1000;
+pub(crate) const MIN_CONCURRENT_RECHECK_LIMIT: u64 = 1;
+pub(crate) const MAX_CONCURRENT_RECHECK_LIMIT: u64 = 32;
+pub(crate) const DEFAULT_CONCURRENT_RECHECK_LIMIT: usize = 2;
+pub(crate) const MIN_RECHECK_READ_MIBPS: u64 = 1;
+pub(crate) const MAX_RECHECK_READ_MIBPS: u64 = 100_000;
 
 /// Advanced-tab knobs. Each absent field is at its default (the engine
 /// default, or the startup option where there is one).
@@ -102,6 +107,13 @@ pub struct AdvancedSettings {
     /// Read only at start. `Some(0)` skips probabilistic fastresume validation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fastresume_validation_denom: Option<u64>,
+    /// How many torrents may hash (initial check or recheck) at once. Live.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concurrent_recheck_limit: Option<u64>,
+    /// Cap on the combined disk read rate of all checks, in MiB/s. Absent is
+    /// unlimited. Live.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recheck_read_mibps: Option<u64>,
 }
 
 impl AdvancedSettings {
@@ -163,6 +175,18 @@ impl AdvancedSettings {
             &mut self.fastresume_validation_denom,
             MIN_FASTRESUME_VALIDATION_DENOM,
             MAX_FASTRESUME_VALIDATION_DENOM,
+        );
+        keep(
+            "concurrent_recheck_limit",
+            &mut self.concurrent_recheck_limit,
+            MIN_CONCURRENT_RECHECK_LIMIT,
+            MAX_CONCURRENT_RECHECK_LIMIT,
+        );
+        keep(
+            "recheck_read_mibps",
+            &mut self.recheck_read_mibps,
+            MIN_RECHECK_READ_MIBPS,
+            MAX_RECHECK_READ_MIBPS,
         );
         self
     }
