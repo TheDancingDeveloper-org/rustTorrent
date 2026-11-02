@@ -907,7 +907,14 @@
     {
       "endpoint": "torrents/pieceAvailability",
       "method": "GET",
-      "status": "missing"
+      "status": "full",
+      "notes": "Per-piece count of connected peers that advertise the piece; empty array while a magnet is still resolving.",
+      "response": {
+        "content": "json",
+        "schema": [
+          "integer"
+        ]
+      }
     },
     {
       "endpoint": "torrents/pieceHashes",

@@ -54,6 +54,22 @@ impl PeerStates {
             })
     }
 
+    /// Number of live peers that have each piece, from their advertised bitfields.
+    pub fn piece_availability(&self, total_pieces: usize) -> Vec<u32> {
+        let mut counts = vec![0u32; total_pieces];
+        for entry in self.states.iter() {
+            let Some(live) = entry.get_live() else {
+                continue;
+            };
+            for (count, has) in counts.iter_mut().zip(live.bitfield.iter()) {
+                if *has {
+                    *count += 1;
+                }
+            }
+        }
+        counts
+    }
+
     pub fn add_if_not_seen(&self, addr: SocketAddr) -> Option<PeerHandle> {
         use dashmap::mapref::entry::Entry;
         match self.states.entry(addr) {
@@ -246,6 +262,30 @@ mod tests {
 
     fn addr(port: u16) -> SocketAddr {
         SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), port)
+    }
+
+    #[test]
+    fn test_piece_availability_counts_peer_bitfields() {
+        let ps = make_peer_states();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        for (port, bits) in [(1u16, 0b1010_0000u8), (2, 0b1100_0000)] {
+            let peer = Peer::new_live_for_incoming_connection(
+                addr(port),
+                Default::default(),
+                tx.clone(),
+                &ps,
+                crate::stream_connect::ConnectionKind::Tcp,
+            );
+            ps.states.insert(addr(port), peer);
+            ps.update_bitfield(
+                addr(port),
+                BF::from_boxed_slice(vec![bits].into_boxed_slice()),
+            );
+        }
+        // A queued peer without a live connection contributes nothing.
+        ps.add_if_not_seen(addr(3));
+        assert_eq!(ps.piece_availability(4), vec![2, 1, 1, 0]);
+        assert_eq!(PeerStates::piece_availability(&ps, 0), Vec::<u32>::new());
     }
 
     #[test]
