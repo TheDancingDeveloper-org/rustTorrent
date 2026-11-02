@@ -1414,6 +1414,9 @@ impl Session {
                 tags: RwLock::new(crate::tag::normalize_tags(&opts.tags)),
                 ratelimit_override: RwLock::new(opts.ratelimits),
                 name_override: RwLock::new(None),
+                comment_override: RwLock::new(None),
+                auto_management: std::sync::atomic::AtomicBool::new(false),
+                super_seeding: std::sync::atomic::AtomicBool::new(false),
                 output_folder_override: RwLock::new(output_folder),
                 tracker_status,
                 added_on: opts.added_on.unwrap_or_else(|| {
@@ -1624,13 +1627,7 @@ impl Session {
         if let Some(p) = self.persistence.as_ref()
             && let Err(e) = p.update_metadata(handle.id(), handle).await
         {
-            warn!(
-                torrent_id = handle.id(),
-                info_hash = ?handle.info_hash(),
-                storage=?p,
-                error=?e,
-                "error saving torrent state"
-            )
+            warn!(storage=?p, error=?e, "error updating metadata")
         }
     }
 

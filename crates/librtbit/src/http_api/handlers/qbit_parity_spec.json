@@ -776,10 +776,12 @@
         "schema": {
           "name": "string",
           "size": "integer",
-          "files": [{
-            "name": "string",
-            "size": "integer"
-          }],
+          "files": [
+            {
+              "name": "string",
+              "size": "integer"
+            }
+          ],
           "hash": "string"
         }
       }
@@ -911,10 +913,12 @@
         "schema": {
           "name": "string",
           "size": "integer",
-          "files": [{
-            "name": "string",
-            "size": "integer"
-          }],
+          "files": [
+            {
+              "name": "string",
+              "size": "integer"
+            }
+          ],
           "hash": "string"
         }
       }
@@ -1112,7 +1116,11 @@
     {
       "endpoint": "torrents/setAutoManagement",
       "method": "POST",
-      "status": "missing"
+      "status": "partial",
+      "notes": "Persists the per-torrent auto-management flag and reports it in torrents/info auto_tmm.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/setCategory",
@@ -1125,7 +1133,11 @@
     {
       "endpoint": "torrents/setComment",
       "method": "POST",
-      "status": "missing"
+      "status": "partial",
+      "notes": "Persists a per-torrent comment and reports it in torrents/properties.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/setDownloadLimit",
@@ -1186,7 +1198,11 @@
     {
       "endpoint": "torrents/setSuperSeeding",
       "method": "POST",
-      "status": "missing"
+      "status": "partial",
+      "notes": "Persists the per-torrent super-seeding flag and reports it in torrents/info super_seeding; peer behavior is not changed.",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/setTags",
