@@ -814,6 +814,12 @@ pub async fn h_create_torrent(
 pub struct CreateOrEditCategoryRequest {
     pub name: String,
     pub save_path: Option<PathBuf>,
+    #[serde(default)]
+    pub ratio_limit: Option<f64>,
+    #[serde(default)]
+    pub seeding_time_limit: Option<u64>,
+    #[serde(default)]
+    pub inactive_seeding_time_limit: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -831,7 +837,17 @@ pub async fn h_create_or_edit_category(
 ) -> Result<impl IntoResponse> {
     state
         .api
-        .api_create_or_edit_category(req.name, req.save_path)
+        .api_create_or_edit_category(
+            req.name,
+            req.save_path,
+            crate::session::ShareLimits {
+                max_ratio: req.ratio_limit,
+                max_seeding_time: req.seeding_time_limit.map(std::time::Duration::from_secs),
+                max_inactive_seeding_time: req
+                    .inactive_seeding_time_limit
+                    .map(std::time::Duration::from_secs),
+            },
+        )
         .await
         .map(axum::Json)
 }
