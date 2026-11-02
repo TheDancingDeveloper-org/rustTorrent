@@ -157,6 +157,18 @@ pub fn make_api_router(state: ApiState) -> Router {
     if !state.opts.read_only {
         api_router = api_router
             .route("/torrents", post(torrents::h_torrents_post))
+            .route(
+                "/torrents/bulk/category",
+                post(torrents::h_bulk_set_torrent_category),
+            )
+            .route(
+                "/torrents/bulk/tags/add",
+                post(torrents::h_bulk_add_torrent_tags),
+            )
+            .route(
+                "/torrents/bulk/tags/remove",
+                post(torrents::h_bulk_remove_torrent_tags),
+            )
             .route("/torrents/seed_limits", post(torrents::h_set_seed_limits))
             .route(
                 "/torrents/limits",

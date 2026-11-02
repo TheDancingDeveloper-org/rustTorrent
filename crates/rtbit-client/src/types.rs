@@ -223,6 +223,18 @@ pub struct Torrent {
     pub files: Option<Vec<TorrentFile>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct BulkEditFailure {
+    pub id: u64,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+pub struct BulkEditResponse {
+    #[serde(default)]
+    pub failures: Vec<BulkEditFailure>,
+}
+
 /// One file inside `GET /torrents/{id}`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct TorrentFile {
