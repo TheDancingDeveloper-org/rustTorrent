@@ -44,6 +44,36 @@ pub use crate::torrent_state::stats::{LiveStats, TorrentStats};
 
 pub type Result<T> = std::result::Result<T, ApiError>;
 
+fn download_location_allowed(path: &std::path::Path, roots: &[PathBuf]) -> bool {
+    !path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+        && roots.iter().any(|root| path.starts_with(root))
+}
+
+#[cfg(test)]
+mod download_location_tests {
+    use super::download_location_allowed;
+    use std::path::Path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn only_configured_roots_and_descendants_are_allowed() {
+        let roots = vec![PathBuf::from("/downloads"), PathBuf::from("/category")];
+        assert!(download_location_allowed(
+            Path::new("/downloads/new"),
+            &roots
+        ));
+        assert!(download_location_allowed(Path::new("/category"), &roots));
+        assert!(!download_location_allowed(Path::new("/downloaded"), &roots));
+        assert!(!download_location_allowed(
+            Path::new("/downloads/../etc"),
+            &roots
+        ));
+        assert!(!download_location_allowed(Path::new("/etc"), &roots));
+    }
+}
+
 /// Library API for use in different web frameworks.
 /// Contains all methods you might want to expose with (de)serializable inputs/outputs.
 #[derive(Clone)]
@@ -617,6 +647,24 @@ impl Api {
 
     pub fn api_output_folder(&self) -> String {
         self.session.output_folder().to_string_lossy().into_owned()
+    }
+
+    /// Validate that a requested payload location is within a configured
+    /// download root (the default folder or a category save path).
+    pub fn validate_download_location(&self, path: &std::path::Path) -> Result<()> {
+        let roots = std::iter::once(PathBuf::from(self.api_output_folder()))
+            .chain(
+                self.api_list_categories()
+                    .into_values()
+                    .filter_map(|category| category.save_path),
+            )
+            .collect::<Vec<_>>();
+        if !download_location_allowed(path, &roots) {
+            return Err(
+                anyhow::anyhow!("location must be under a configured download folder").into(),
+            );
+        }
+        Ok(())
     }
 
     pub fn api_listen_port(&self) -> u16 {
