@@ -747,17 +747,10 @@ pub(super) async fn h_torrents_piece_states(
         Ok(idx) => idx,
         Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
-    let (bf, len) = match api.api_dump_haves(idx) {
+    let states = match api.api_dump_piece_states(idx) {
         Ok(v) => v,
         Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
     };
-    // qBittorrent: 0 not downloaded, 1 downloading (requested), 2 downloaded.
-    // We only distinguish have/not-have, so emit 0 or 2.
-    let states: Vec<u8> = bf
-        .iter()
-        .take(len as usize)
-        .map(|b| if *b { 2 } else { 0 })
-        .collect();
     axum::Json(states).into_response()
 }
 

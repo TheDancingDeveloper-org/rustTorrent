@@ -756,6 +756,39 @@ impl Api {
         })?)
     }
 
+    /// Return the compatibility piece state values: 0 for missing pieces,
+    /// 1 for pieces currently being downloaded, and 2 for completed pieces.
+    pub fn api_dump_piece_states(&self, idx: TorrentIdOrHash) -> Result<Vec<u8>> {
+        let mgr = self.mgr_handle(idx)?;
+        let Some(live) = mgr.live() else {
+            return self.api_dump_haves(idx).map(|(bf, len)| {
+                bf.iter()
+                    .take(len as usize)
+                    .map(|have| u8::from(*have) * 2)
+                    .collect()
+            });
+        };
+        let locked = live.lock_read("qbit_piece_states");
+        let pieces = locked.get_pieces()?;
+        let lengths = pieces.chunks().get_lengths();
+        let total = lengths.total_pieces();
+        Ok((0..total)
+            .map(|index| {
+                let have = pieces.chunks().get_have_pieces().as_slice()[index as usize];
+                if have {
+                    2
+                } else if lengths
+                    .validate_piece_index(index)
+                    .is_some_and(|piece| pieces.get_inflight(piece).is_some())
+                {
+                    1
+                } else {
+                    0
+                }
+            })
+            .collect())
+    }
+
     /// Per-piece count of connected peers that have the piece. Empty while the
     /// metadata is unknown (magnet still resolving).
     pub fn api_piece_availability(&self, idx: TorrentIdOrHash) -> Result<Vec<u32>> {
