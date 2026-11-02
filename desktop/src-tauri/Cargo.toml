@@ -3,7 +3,7 @@ name = "rtbit-desktop"
 edition = "2024"
 version = "0.2.0-beta.4"
 description = "rtbit torrent client"
-license = ""
+license = "Apache-2.0"
 repository = ""
 
 [lints]
