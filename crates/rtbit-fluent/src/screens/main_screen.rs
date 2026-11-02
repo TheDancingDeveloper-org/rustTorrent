@@ -12,7 +12,7 @@ use std::sync::Arc;
 use fluent_core::{AsyncResource, ThemeProvider as _};
 use fluent_layout::{
     ConfirmModal, ContextMenu, DataCell, DataColumn, DataRow, DataSortDirection, DataTable,
-    MessageIntent, Toast, ToastHost, ToastStack,
+    MessageIntent, ModalStack, Toast, ToastHost, ToastStack,
 };
 use fluent_primitives::{Label, LabelSize, TextInput, Tooltip};
 use gpui::{
@@ -255,6 +255,7 @@ impl MainScreen {
     fn close_add(&mut self, cx: &mut Context<Self>) {
         self.add = None;
         self._add_events = None;
+        self.autofocused = false;
         cx.notify();
     }
 
@@ -780,6 +781,28 @@ impl Render for MainScreen {
         let mut root = div()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
+            .capture_key_down(cx.listener(|screen, event: &KeyDownEvent, window, cx| {
+                if !screen.delete_prompt {
+                    return;
+                }
+                match event.keystroke.key.as_str() {
+                    "escape" => {
+                        screen.delete_prompt = false;
+                        ModalStack::pop(cx);
+                        window.focus(&screen.focus, cx);
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
+                    "enter" => {
+                        screen.delete_prompt = false;
+                        ModalStack::pop(cx);
+                        screen.act(RowAction::Delete, cx);
+                        window.focus(&screen.focus, cx);
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|screen, _, window, cx| {
@@ -1529,6 +1552,37 @@ mod tests {
     }
 
     #[gpui::test]
+    fn add_dialog_escape_cancels_and_enter_submits_only_valid_input(cx: &mut TestAppContext) {
+        let (screen, vcx, runtime, server) = shortcut_screen(cx);
+        vcx.update(|_, cx| ToastStack::init(cx));
+        runtime.block_on(
+            Mock::given(method("POST"))
+                .and(path("/torrents"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server),
+        );
+
+        vcx.simulate_keystrokes("ctrl-o");
+        let dialog = screen.read_with(vcx, |s, _| s.add.clone()).unwrap();
+        vcx.run_until_parked();
+        vcx.update(|window, cx| assert!(dialog.read(cx).magnet_focus(cx).is_focused(window)));
+        vcx.simulate_keystrokes("enter");
+        dialog.read_with(vcx, |dialog, _| assert!(dialog.error().is_some()));
+        assert_eq!(posts_to(&runtime, &server, "/torrents"), 0);
+        vcx.simulate_keystrokes("escape");
+        screen.read_with(vcx, |s, _| assert!(s.add.is_none()));
+
+        vcx.simulate_keystrokes("ctrl-o");
+        let dialog = screen.read_with(vcx, |s, _| s.add.clone()).unwrap();
+        dialog.update(vcx, |dialog, cx| {
+            dialog.fill_for_test(cx, HASH_MAGNET, "/data");
+        });
+        vcx.simulate_keystrokes("enter");
+        drive_window(vcx, |cx| screen.read_with(cx, |s, _| s.add.is_none()));
+        assert_eq!(posts_to(&runtime, &server, "/torrents"), 1);
+    }
+
+    #[gpui::test]
     fn ctrl_v_with_a_magnet_opens_the_dialog_prefilled(cx: &mut TestAppContext) {
         let (screen, vcx, _runtime, _server) = shortcut_screen(cx);
         vcx.write_to_clipboard(gpui::ClipboardItem::new_string(format!(
@@ -1561,6 +1615,25 @@ mod tests {
         vcx.simulate_keystrokes("delete");
         screen.read_with(vcx, |s, _| assert!(s.delete_prompt));
         assert_eq!(posts_to(&runtime, &server, "/torrents/3/delete"), 0);
+    }
+
+    #[gpui::test]
+    fn delete_confirmation_escape_cancels_and_enter_confirms(cx: &mut TestAppContext) {
+        let (screen, vcx, runtime, server) = shortcut_screen(cx);
+        runtime.block_on(
+            Mock::given(method("POST"))
+                .and(path("/torrents/3/delete"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server),
+        );
+        screen.update(vcx, |s, cx| s.select_row("3", cx));
+        vcx.simulate_keystrokes("delete escape");
+        screen.read_with(vcx, |s, _| assert!(!s.delete_prompt));
+        assert_eq!(posts_to(&runtime, &server, "/torrents/3/delete"), 0);
+
+        vcx.simulate_keystrokes("delete enter");
+        drive_window(vcx, |cx| screen.read_with(cx, |s, _| s._action.is_some()));
+        assert_eq!(posts_to(&runtime, &server, "/torrents/3/delete"), 1);
     }
 
     #[gpui::test]

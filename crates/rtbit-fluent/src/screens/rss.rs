@@ -9,8 +9,8 @@ use fluent_layout::{DataColumn, DataRow, DataTable, MessageBar, MessageIntent};
 use fluent_primitives::{Button, ButtonAppearance, Label};
 use fluent_primitives::{Checkbox, TextInput};
 use gpui::{
-    AsyncApp, ClickEvent, Context, Entity, IntoElement, Render, SharedString, Task, WeakEntity,
-    Window, div, prelude::*,
+    AsyncApp, ClickEvent, Context, Entity, FocusHandle, Focusable as _, IntoElement, KeyDownEvent,
+    Render, SharedString, Task, WeakEntity, Window, div, prelude::*,
 };
 use rtbit_client::{Error, RssItem, RssRule, RssRuleBody, RssRuleEpisode, RssSnapshot};
 use rtbit_ui_core::map_error;
@@ -105,6 +105,9 @@ pub struct RssScreen {
     episodes: Vec<RssRuleEpisode>,
     episodes_loading: bool,
     episodes_error: Option<String>,
+    editor_focus: FocusHandle,
+    editor_autofocused: bool,
+    restore_focus: bool,
     _load: Option<Task<()>>,
     _download: Option<Task<()>>,
     _rule: Option<Task<()>>,
@@ -130,6 +133,9 @@ impl RssScreen {
             episodes: Vec::new(),
             episodes_loading: false,
             episodes_error: None,
+            editor_focus: cx.focus_handle(),
+            editor_autofocused: false,
+            restore_focus: false,
             _load: None,
             _download: None,
             _rule: None,
@@ -181,6 +187,7 @@ impl RssScreen {
         self.category_input
             .update(cx, |field, cx| field.set_value(category, cx));
         self.editor = Some(draft);
+        self.editor_autofocused = false;
         self.error = None;
         self.episodes.clear();
         self.episodes_loading = false;
@@ -212,6 +219,8 @@ impl RssScreen {
             return;
         }
         self.editor = None;
+        self.editor_autofocused = false;
+        self.restore_focus = true;
         self.error = None;
         cx.notify();
     }
@@ -525,9 +534,42 @@ pub fn item_status(item: &RssItem) -> &'static str {
 }
 
 impl Render for RssScreen {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.editor.is_some() && !self.editor_autofocused {
+            self.editor_autofocused = true;
+            // The input only owns its focus handle once it has rendered, so focus it after
+            // this frame has drawn.
+            cx.defer_in(window, |screen, window, cx| {
+                let focus = screen.name_input.focus_handle(cx);
+                window.focus(&focus, cx);
+            });
+        } else if self.restore_focus {
+            self.restore_focus = false;
+            window.focus(&self.editor_focus, cx);
+        }
         let me: Entity<Self> = cx.entity();
-        let mut root = div().flex().flex_col().gap_3().child(Label::new("RSS"));
+        let mut root = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .track_focus(&self.editor_focus)
+            .capture_key_down(cx.listener(|screen, event: &KeyDownEvent, _, cx| {
+                if screen.editor.is_none() {
+                    return;
+                }
+                match event.keystroke.key.as_str() {
+                    "escape" => {
+                        screen.cancel_rule(cx);
+                        cx.stop_propagation();
+                    }
+                    "enter" => {
+                        screen.save_rule(cx);
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            }))
+            .child(Label::new("RSS"));
 
         if let Some(message) = self.error.clone() {
             root = root.child(MessageBar::new(message).intent(MessageIntent::Error));
@@ -1072,6 +1114,58 @@ mod tests {
         screen.read_with(cx, |screen, _| {
             assert!(screen.error().is_none(), "save should succeed");
         });
+    }
+
+    #[gpui::test]
+    fn rule_editor_escape_cancels_and_enter_submits_only_valid_input(cx: &mut TestAppContext) {
+        let (runtime, server) = daemon(cx, ITEMS);
+        runtime.block_on(async {
+            Mock::given(method("POST"))
+                .and(path("/rss/rules"))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(1)
+                .mount(&server)
+                .await;
+        });
+        cx.update(fluent_core::Theme::init);
+        let (screen, vcx) = cx.add_window_view(|_, cx| RssScreen::new(cx));
+        screen.update(vcx, |screen, cx| screen.load(cx));
+        for _ in 0..500 {
+            vcx.run_until_parked();
+            if screen.read_with(vcx, |s, _| !s.snapshot.is_loading()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        screen.update(vcx, |screen, cx| screen.open_new_rule(cx));
+        vcx.run_until_parked();
+        vcx.simulate_keystrokes("enter");
+        screen.read_with(vcx, |screen, _| {
+            assert!(screen.editor().is_some());
+            assert!(screen.error().is_some());
+        });
+        vcx.simulate_keystrokes("escape");
+        screen.read_with(vcx, |screen, _| assert!(screen.editor().is_none()));
+
+        screen.update(vcx, |screen, cx| {
+            screen.open_new_rule(cx);
+            screen.name_input.update(cx, |f, cx| f.set_value("Two", cx));
+            screen
+                .regex_input
+                .update(cx, |f, cx| f.set_value("Two.*", cx));
+            screen.editor.as_mut().unwrap().feeds = vec!["Show".to_owned()];
+        });
+        vcx.simulate_keystrokes("enter");
+        for _ in 0..500 {
+            vcx.run_until_parked();
+            if screen.read_with(vcx, |s, _| s.editor().is_none() && !s.rule_busy) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        screen.read_with(vcx, |screen, _| assert!(screen.editor().is_none()));
+        runtime.block_on(server.verify());
     }
 
     #[gpui::test]
