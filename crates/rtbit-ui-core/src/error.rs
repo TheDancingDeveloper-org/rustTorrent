@@ -13,7 +13,7 @@ pub fn map_error(err: &rtbit_client::Error) -> String {
         rtbit_client::Error::Daemon {
             status,
             message: Some(message),
-        } if status.as_u16() == 400 && !message.is_empty() => message.clone(),
+        } if matches!(status.as_u16(), 400 | 409) && !message.is_empty() => message.clone(),
         rtbit_client::Error::Daemon { status, .. } => {
             format!("The daemon returned an error ({status}).")
         }

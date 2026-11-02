@@ -237,6 +237,11 @@ pub fn make_api_router(state: ApiState) -> Router {
                 post(torrents::h_set_torrent_category),
             )
             .route(
+                "/torrents/{id}/set_location",
+                post(torrents::h_set_torrent_location),
+            )
+            .route("/torrents/{id}/rename", post(torrents::h_rename_torrent))
+            .route(
                 "/torrents/{id}/seed_limits",
                 post(torrents::h_set_torrent_seed_limits),
             )
