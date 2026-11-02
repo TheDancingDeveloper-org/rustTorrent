@@ -50,7 +50,10 @@
     {
       "endpoint": "app/getFreeSpaceAtPath",
       "method": "GET",
-      "status": "missing"
+      "status": "full",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "app/networkInterfaceAddressList",

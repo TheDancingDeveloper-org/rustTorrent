@@ -1609,3 +1609,43 @@ fn incomplete_read_only_payload_reports_missing_files() {
         &stats(None)
     ));
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn free_space_at_path_answers_only_under_download_roots() {
+    use super::{FreeSpaceQuery, h_app_get_free_space_at_path};
+    let (state, _session, output) = qbit_state().await;
+    let ask = |path: String| {
+        let state = state.clone();
+        async move {
+            h_app_get_free_space_at_path(
+                axum::extract::State(state),
+                axum::extract::Query(FreeSpaceQuery { path }),
+            )
+            .await
+        }
+    };
+    let root = output.path().to_string_lossy().into_owned();
+    let child = output
+        .path()
+        .join("not/yet/created")
+        .to_string_lossy()
+        .into_owned();
+    for allowed in [root.clone(), child] {
+        let response = ask(allowed).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert!(std::str::from_utf8(&body).unwrap().parse::<u64>().is_ok());
+    }
+    for refused in [
+        String::new(),
+        "/".to_owned(),
+        "/tmp".to_owned(),
+        format!("{root}/../.."),
+        format!("{root}-sibling"),
+    ] {
+        assert_eq!(ask(refused).await.status(), StatusCode::BAD_REQUEST);
+    }
+}

@@ -93,7 +93,7 @@ pub(super) async fn h_sync_maindata(
         queueing: api.session().queueing_enabled(),
         use_alt_speed_limits: api.session().alt_speed_enabled(),
         refresh_interval: 1500,
-        free_space_on_disk: 0,
+        free_space_on_disk: free_space_on_save_volume(api),
         global_ratio,
     };
 
