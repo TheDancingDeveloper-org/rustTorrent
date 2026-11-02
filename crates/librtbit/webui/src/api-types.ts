@@ -250,6 +250,7 @@ export interface TorrentStats {
   error: string | null;
   file_progress: number[];
   progress_bytes: number;
+  queued_for_init?: boolean;
   finished: boolean;
   total_bytes: number;
   live: LiveTorrentStats | null;

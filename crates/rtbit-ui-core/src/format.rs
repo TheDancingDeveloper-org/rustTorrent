@@ -53,6 +53,16 @@ pub fn is_missing_files(stats: Option<&rtbit_client::TorrentStats>) -> bool {
 pub fn row_state_label(stats: Option<&rtbit_client::TorrentStats>) -> String {
     if is_missing_files(stats) {
         "Files missing".to_owned()
+    } else if let Some(stats) = stats.filter(|s| s.state == Some(TorrentState::Initializing)) {
+        if stats.queued_for_init == Some(true) {
+            "Queued for check".to_owned()
+        } else if let Some(pct) =
+            (stats.progress_bytes.min(stats.total_bytes) * 100).checked_div(stats.total_bytes)
+        {
+            format!("Checking {pct}%")
+        } else {
+            "Checking".to_owned()
+        }
     } else {
         state_label(stats.and_then(|stats| stats.state))
     }
@@ -92,5 +102,15 @@ mod tests {
         };
         assert_eq!(row_state_label(Some(&missing)), "Files missing");
         assert_eq!(row_state_label(None), "—");
+        let mut checking = rtbit_client::TorrentStats {
+            state: Some(TorrentState::Initializing),
+            progress_bytes: 42,
+            total_bytes: 100,
+            queued_for_init: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(row_state_label(Some(&checking)), "Checking 42%");
+        checking.queued_for_init = Some(true);
+        assert_eq!(row_state_label(Some(&checking)), "Queued for check");
     }
 }

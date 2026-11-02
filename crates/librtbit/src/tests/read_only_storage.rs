@@ -774,3 +774,58 @@ async fn read_only_complete_payload_is_not_flagged_and_seeds() -> anyhow::Result
     assert!(stats.error.is_none());
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recheck_progress_rises_monotonically() -> anyhow::Result<()> {
+    let payload_dir = TempDir::with_prefix("rtbit_recheck_progress_payload")?;
+    std::fs::write(
+        payload_dir.path().join("payload.bin"),
+        vec![0x6a; 8 * 1024 * 1024],
+    )?;
+    let torrent = create_single_file_torrent(payload_dir.path()).await?;
+
+    let session_dir = TempDir::with_prefix("rtbit_recheck_progress_session")?;
+    let session = create_read_only_session(session_dir.path()).await?;
+    let handle = session
+        .add_torrent(
+            AddTorrent::from_bytes(torrent),
+            Some(AddTorrentOptions {
+                paused: true,
+                overwrite: true,
+                output_folder: Some(payload_dir.path().to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+        )
+        .await?
+        .into_handle()
+        .context("expected a torrent handle")?;
+    timeout(Duration::from_secs(10), handle.wait_until_initialized())
+        .await
+        .context("timed out waiting for initial validation")??;
+
+    session.force_recheck(&handle).await?;
+    let mut last = 0;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let stats = handle.stats();
+        assert!(stats.total_bytes > 0);
+        assert!(
+            stats.progress_bytes >= last,
+            "progress went backwards: {} -> {}",
+            last,
+            stats.progress_bytes
+        );
+        assert!(stats.progress_bytes <= stats.total_bytes);
+        last = stats.progress_bytes;
+        if !matches!(
+            stats.state,
+            crate::torrent_state::TorrentStatsState::Initializing
+        ) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "recheck timed out");
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    assert_eq!(last, handle.stats().total_bytes);
+    Ok(())
+}
