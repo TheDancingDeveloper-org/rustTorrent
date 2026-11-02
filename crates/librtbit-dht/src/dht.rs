@@ -1114,38 +1114,32 @@ impl DhtWorker {
         v4.or(v6)
     }
 
-    async fn bootstrap_hostname_with_backoff(&self, addr: &str) -> crate::Result<()> {
+    async fn bootstrap(&self, bootstrap_addrs: &[String]) -> crate::Result<()> {
         let backoff = ExponentialBuilder::new()
-            .with_max_delay(Duration::from_secs(60))
+            .with_max_delay(Duration::from_secs(60 * 60))
             .with_jitter()
-            .with_total_delay(Some(Duration::from_secs(86400)))
             .without_max_times();
 
-        (|| self.bootstrap_hostname(addr))
-            .retry(backoff)
-            .notify(|error, retry_in| {
-                warn!(?retry_in, ?addr, "error in bootstrap: {error:#}");
-            })
-            .instrument(debug_span!("bootstrap", hostname = addr))
-            .await
-    }
-
-    async fn bootstrap(&self, bootstrap_addrs: &[String]) -> crate::Result<()> {
-        let mut futs = FuturesUnordered::new();
-
-        for addr in bootstrap_addrs.iter() {
-            futs.push(self.bootstrap_hostname_with_backoff(addr));
-        }
-        let mut successes = 0;
-        while let Some(resp) = futs.next().await {
-            if resp.is_ok() {
-                successes += 1
+        (|| async {
+            let mut futs = FuturesUnordered::new();
+            for addr in bootstrap_addrs {
+                futs.push(
+                    self.bootstrap_hostname(addr)
+                        .instrument(debug_span!("bootstrap", hostname = addr.as_str())),
+                );
             }
-        }
-        if successes == 0 {
-            return Err(Error::BootstrapFailed);
-        }
-        Ok(())
+            while let Some(resp) = futs.next().await {
+                if resp.is_ok() {
+                    return Ok(());
+                }
+            }
+            Err(Error::BootstrapFailed)
+        })
+        .retry(backoff)
+        .notify(|error, retry_in| {
+            warn!(?retry_in, "all DHT bootstrap nodes failed: {error:#}");
+        })
+        .await
     }
 
     async fn bucket_refresher(&self, is_v4: bool) -> crate::Result<()> {
