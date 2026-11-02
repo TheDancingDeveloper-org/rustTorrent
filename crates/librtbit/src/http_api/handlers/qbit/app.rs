@@ -2,6 +2,69 @@
 
 use super::*;
 
+#[derive(Serialize)]
+pub(super) struct NetworkInterfaceEntry {
+    name: String,
+    value: String,
+}
+
+pub(super) async fn h_app_network_interface_list() -> axum::Json<Vec<NetworkInterfaceEntry>> {
+    axum::Json(
+        NetworkInterface::show()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|interface| NetworkInterfaceEntry {
+                name: interface.name.clone(),
+                value: interface.name,
+            })
+            .collect(),
+    )
+}
+
+#[derive(Deserialize, Default)]
+pub(super) struct NetworkInterfaceQuery {
+    #[serde(default)]
+    iface: String,
+}
+
+pub(super) async fn h_app_network_interface_address_list(
+    Query(query): Query<NetworkInterfaceQuery>,
+) -> axum::response::Response {
+    let interfaces = match NetworkInterface::show() {
+        Ok(interfaces) => interfaces,
+        Err(error) => return qbit_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+    if query.iface.is_empty() {
+        return axum::Json(Vec::<String>::new()).into_response();
+    }
+    let Some(interface) = interfaces
+        .into_iter()
+        .find(|interface| interface.name == query.iface)
+    else {
+        return qbit_error(StatusCode::NOT_FOUND, "network interface not found");
+    };
+    axum::Json(
+        interface
+            .addr
+            .into_iter()
+            .map(|address| address.ip().to_string())
+            .collect::<Vec<_>>(),
+    )
+    .into_response()
+}
+
+pub(super) async fn h_app_shutdown(State(state): State<Arc<QbitState>>) -> &'static str {
+    let session = state.api_state.api.session().clone();
+    let shutdown_token = state.api_state.opts.shutdown_token.clone();
+    tokio::spawn(async move {
+        session.stop().await;
+        if let Some(token) = shutdown_token {
+            token.cancel();
+        }
+    });
+    ""
+}
+
 // ---------------------------------------------------------------------------
 // App info endpoints
 // ---------------------------------------------------------------------------
