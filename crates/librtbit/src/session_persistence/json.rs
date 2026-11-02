@@ -189,6 +189,15 @@ impl JsonSessionPersistenceStore {
             file_renames: torrent.renamed_files().into_iter().collect(),
             category: torrent.shared().category.read().clone(),
             tags: torrent.shared().tags.read().clone(),
+            comment: torrent.shared().comment_override.read().clone(),
+            auto_management: torrent
+                .shared()
+                .auto_management
+                .load(std::sync::atomic::Ordering::Relaxed),
+            super_seeding: torrent
+                .shared()
+                .super_seeding
+                .load(std::sync::atomic::Ordering::Relaxed),
             added_on: Some(torrent.shared().added_on),
             completion_on: match torrent
                 .shared()
