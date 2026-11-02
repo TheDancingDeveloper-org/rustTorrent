@@ -1017,9 +1017,11 @@ pub async fn h_set_torrent_location(
     if location.is_empty() {
         return Err(anyhow::anyhow!("location is required").into());
     }
+    let location = PathBuf::from(location);
+    state.api.validate_download_location(&location)?;
     let handle = state.api.mgr_handle(idx)?;
     handle
-        .set_location(PathBuf::from(location))
+        .set_location(location)
         .with_status(StatusCode::CONFLICT)?;
     Ok(axum::Json(crate::api::EmptyJsonResponse::default()))
 }
