@@ -86,6 +86,18 @@ impl TorrentStatsProvider for () {
 
 type Sender = tokio::sync::mpsc::Sender<SocketAddr>;
 
+const TRACKER_RETRY_BASE: Duration = Duration::from_secs(10);
+const TRACKER_RETRY_CAP: Duration = Duration::from_secs(60 * 60);
+
+fn tracker_retry_delay(failures: u32) -> Duration {
+    let exponent = failures.saturating_sub(1).min(31);
+    let seconds = TRACKER_RETRY_BASE
+        .as_secs()
+        .saturating_mul(1u64 << exponent)
+        .min(TRACKER_RETRY_CAP.as_secs());
+    Duration::from_secs(seconds)
+}
+
 enum SupportedTracker {
     Udp(Url),
     Http(Url),
@@ -371,7 +383,7 @@ impl TrackerComms {
                     .with_jitter()
                     .with_factor(2.)
                     .with_min_delay(Duration::from_secs(10))
-                    .with_max_delay(Duration::from_secs(600)),
+                    .with_max_delay(Duration::from_secs(60 * 60)),
             )
             .when(|_| self.is_active(&tracker_url, generation))
             .notify(|err, retry_in| {
@@ -483,6 +495,7 @@ impl TrackerComms {
         );
 
         let mut sleep_interval: Option<Duration> = None;
+        let mut announce_failures = 0u32;
         let mut prev_addrs: Option<UdpTrackerResolveResult> = None;
         let mut kick = self.status.as_ref().map(|s| s.subscribe());
         loop {
@@ -525,9 +538,13 @@ impl TrackerComms {
                         .instrument(trace_span!("udp request", ?addr))
                         .await
                     {
-                        Ok(sleep) => sleep_interval = Some(sleep),
+                        Ok(sleep) => {
+                            announce_failures = 0;
+                            sleep_interval = Some(sleep)
+                        }
                         Err(_) => {
-                            sleep_interval = Some(sleep_interval.unwrap_or(Duration::from_secs(60)))
+                            announce_failures = announce_failures.saturating_add(1);
+                            sleep_interval = Some(tracker_retry_delay(announce_failures));
                         }
                     }
                 }
@@ -538,12 +555,16 @@ impl TrackerComms {
                         self.tracker_one_request_udp(&url, v6.into(), &client)
                             .instrument(trace_span!("udp request", addr=?v6))
                     );
-                    sleep_interval = Some(
-                        r4.or(r6)
-                            .ok()
-                            .or(sleep_interval)
-                            .unwrap_or(Duration::from_secs(60)),
-                    )
+                    sleep_interval = match r4.or(r6) {
+                        Ok(sleep) => {
+                            announce_failures = 0;
+                            Some(sleep)
+                        }
+                        Err(_) => {
+                            announce_failures = announce_failures.saturating_add(1);
+                            Some(tracker_retry_delay(announce_failures))
+                        }
+                    };
                 }
             }
         }
@@ -611,5 +632,19 @@ impl TrackerComms {
                 Err(e)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::{TRACKER_RETRY_CAP, tracker_retry_delay};
+    use std::time::Duration;
+
+    #[test]
+    fn udp_tracker_retry_backoff_is_exponential_and_capped() {
+        assert_eq!(tracker_retry_delay(1), Duration::from_secs(10));
+        assert_eq!(tracker_retry_delay(2), Duration::from_secs(20));
+        assert_eq!(tracker_retry_delay(3), Duration::from_secs(40));
+        assert_eq!(tracker_retry_delay(20), TRACKER_RETRY_CAP);
     }
 }
