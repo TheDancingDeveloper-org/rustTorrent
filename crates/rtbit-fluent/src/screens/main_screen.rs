@@ -23,7 +23,7 @@ use gpui::{
 use rtbit_client::{Torrent, TorrentState};
 use rtbit_ui_core::{AddRequest, AddSource, RowAction, Snapshot, StatusFilter, format, map_error};
 
-use crate::bridge::{Bridge, Poller, fetch_snapshot};
+use crate::bridge::{Bridge, LOST_AFTER_FAILURES, PollHealth, Poller, fetch_snapshot};
 use crate::screens::add_dialog::{AddDialog, AddDialogEvent};
 use crate::screens::detail::DetailPane;
 use crate::widgets::status_bar::StatusBar;
@@ -40,6 +40,17 @@ actions!(
         Refresh
     ]
 );
+
+/// Daemon reachability changes the shell reacts to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MainEvent {
+    /// Polls keep failing; the next attempt is in `retry_in_secs`.
+    DaemonLost { retry_in_secs: u64 },
+    /// A poll succeeded after the daemon was reported lost.
+    DaemonRecovered,
+    /// The daemon refused the session; show the connect screen.
+    Unauthorised,
+}
 
 /// Key context of the main screen. Its shortcuts are bound to this context only.
 pub const KEY_CONTEXT: &str = "MainScreen";
@@ -175,6 +186,7 @@ pub struct MainScreen {
     _add_events: Option<Subscription>,
     _add_send: Option<Task<()>>,
     toasts: Entity<ToastHost>,
+    daemon_lost: bool,
     pub(crate) _poller: Option<Poller>,
     pub(crate) _load: Option<Task<()>>,
     _action: Option<Task<()>>,
@@ -213,14 +225,68 @@ impl MainScreen {
             _add_events: None,
             _add_send: None,
             toasts: cx.new(ToastHost::new),
+            daemon_lost: false,
             _poller: None,
             _load: None,
             _action: None,
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn start_polling_for_test(&mut self, cx: &mut Context<Self>) {
+        self.ensure_polling(cx);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn add_open(&self) -> bool {
+        self.add.is_some()
+    }
+
+    /// Whether the daemon is reported lost. Actions that need it are refused meanwhile.
+    #[must_use]
+    pub fn daemon_lost(&self) -> bool {
+        self.daemon_lost
+    }
+
+    /// Fold a poll outcome into the lost state and tell the shell on a change.
+    fn on_poll_health(&mut self, health: PollHealth, cx: &mut Context<Self>) {
+        match health {
+            PollHealth::Ok => {
+                if std::mem::take(&mut self.daemon_lost) {
+                    cx.emit(MainEvent::DaemonRecovered);
+                    cx.notify();
+                }
+            }
+            PollHealth::Failing { failures, retry_in } if failures >= LOST_AFTER_FAILURES => {
+                self.daemon_lost = true;
+                cx.emit(MainEvent::DaemonLost {
+                    retry_in_secs: retry_in.as_secs(),
+                });
+                cx.notify();
+            }
+            PollHealth::Failing { .. } => {}
+            PollHealth::Unauthorised => {
+                self.daemon_lost = false;
+                self._poller = None;
+                cx.emit(MainEvent::Unauthorised);
+            }
+        }
+    }
+
+    /// Refuse an action that needs the daemon while it is lost.
+    fn refuse_if_lost(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.daemon_lost {
+            self.action_error = Some("Lost connection to daemon.".to_owned());
+            cx.notify();
+        }
+        self.daemon_lost
+    }
+
     /// Open the add-torrent dialog over the table.
     pub(crate) fn open_add(&mut self, cx: &mut Context<Self>) {
+        if self.refuse_if_lost(cx) {
+            return;
+        }
         self.menu = None;
         let dialog = cx.new(AddDialog::new);
         let events = cx.subscribe(
@@ -504,10 +570,18 @@ impl MainScreen {
         self._load = Some(Bridge::load(self, cx, snapshot_of, fetch_snapshot));
     }
 
+    pub(crate) fn on_poll_health_cb(screen: &mut Self, health: PollHealth, cx: &mut Context<Self>) {
+        screen.on_poll_health(health, cx);
+    }
+
     /// Start the poll once a bridge is installed. Idempotent.
     fn ensure_polling(&mut self, cx: &mut Context<Self>) {
         if self._poller.is_none() && cx.has_global::<Bridge>() {
-            self._poller = Some(Bridge::poll_snapshot(cx, snapshot_of));
+            self._poller = Some(Bridge::poll_snapshot(
+                cx,
+                snapshot_of,
+                Self::on_poll_health_cb,
+            ));
         }
     }
 
@@ -548,6 +622,9 @@ impl MainScreen {
     /// Run a toolbar or menu command. Delete asks first.
     fn request(&mut self, action: RowAction, cx: &mut Context<Self>) {
         self.menu = None;
+        if self.refuse_if_lost(cx) {
+            return;
+        }
         let targets = self.targets();
         let name = match targets.as_slice() {
             [] => {
@@ -726,6 +803,8 @@ impl MainScreen {
         table
     }
 }
+
+impl gpui::EventEmitter<MainEvent> for MainScreen {}
 
 impl Render for MainScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1134,7 +1213,11 @@ mod tests {
         let status = cx.new(|_| StatusBar::new());
         let screen = cx.new(|cx| MainScreen::new(status.clone(), cx));
         screen.update(cx, |screen, cx| {
-            screen._poller = Some(Bridge::poll_snapshot(cx, snapshot_of));
+            screen._poller = Some(Bridge::poll_snapshot(
+                cx,
+                snapshot_of,
+                MainScreen::on_poll_health_cb,
+            ));
         });
         drive(cx, |cx| screen.read_with(cx, |s, _| s.torrent_count() > 0));
         screen.read_with(cx, |screen, _| {

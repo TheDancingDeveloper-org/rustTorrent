@@ -9,6 +9,7 @@ use rtbit_ui_core::{Connection, Screen, Snapshot, StatusFilter};
 
 use crate::screens::MainScreen;
 use crate::screens::connect::{ConnectEvent, ConnectScreen};
+use crate::screens::main_screen::MainEvent;
 use crate::screens::rss::RssScreen;
 use crate::screens::settings::SettingsScreen;
 use crate::widgets::status_bar::StatusBar;
@@ -29,7 +30,10 @@ pub struct Shell {
     rss: Entity<RssScreen>,
     settings: Entity<SettingsScreen>,
     main: Entity<MainScreen>,
+    /// Seconds until the next retry while the daemon is lost; `None` when reachable.
+    lost_retry_secs: Option<u64>,
     _connect_events: Subscription,
+    _main_events: Subscription,
 }
 
 impl Shell {
@@ -50,6 +54,12 @@ impl Shell {
                 shell.on_connect_event(*event, cx);
             },
         );
+        let main_events = cx.subscribe(
+            &main,
+            |shell: &mut Self, _: Entity<MainScreen>, event: &MainEvent, cx: &mut Context<Self>| {
+                shell.on_main_event(*event, cx);
+            },
+        );
         Self {
             screen: Screen::Connect,
             filter: StatusFilter::All,
@@ -58,12 +68,42 @@ impl Shell {
             rss: cx.new(RssScreen::new),
             settings,
             main,
+            lost_retry_secs: None,
             _connect_events: connect_events,
+            _main_events: main_events,
         }
+    }
+
+    /// Follow daemon reachability from the main screen's poll.
+    fn on_main_event(&mut self, event: MainEvent, cx: &mut Context<Self>) {
+        match event {
+            MainEvent::DaemonLost { retry_in_secs } => {
+                self.lost_retry_secs = Some(retry_in_secs);
+                self.set_connection(Connection::Error, cx);
+            }
+            MainEvent::DaemonRecovered => {
+                self.lost_retry_secs = None;
+                self.set_connection(Connection::Connected, cx);
+            }
+            MainEvent::Unauthorised => {
+                self.lost_retry_secs = None;
+                self.screen = Screen::Connect;
+                self.set_connection(Connection::Disconnected, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// The lost-connection banner text, while the daemon is unreachable.
+    #[must_use]
+    pub fn lost_banner(&self) -> Option<String> {
+        self.lost_retry_secs
+            .map(|secs| format!("Lost connection to daemon — retrying in {secs}s"))
     }
 
     /// Follow a sign-in attempt: badge and title always; the main screen on success.
     fn on_connect_event(&mut self, event: ConnectEvent, cx: &mut Context<Self>) {
+        self.lost_retry_secs = None;
         match event {
             ConnectEvent::Connecting => self.set_connection(Connection::Connecting, cx),
             ConnectEvent::Connected => {
@@ -209,7 +249,20 @@ impl Render for Shell {
                     .child(nav)
                     .child(filters),
             )
-            .child(self.body())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .children(self.lost_banner().map(|text| {
+                        div()
+                            .id("daemon-lost-banner")
+                            .px_3()
+                            .py_1()
+                            .child(fluent_primitives::Label::new(text))
+                    }))
+                    .child(self.body()),
+            )
     }
 }
 
@@ -289,6 +342,125 @@ mod tests {
             screen.submit(cx);
         });
         drive(cx, |cx| connect.read_with(cx, |s, _| !s.is_pending()));
+    }
+
+    /// Sign in, then start the main screen's poll (render does this in the app).
+    fn signed_in(
+        cx: &mut TestAppContext,
+        runtime: &tokio::runtime::Runtime,
+    ) -> (Entity<Shell>, Entity<StatusBar>, MockServer) {
+        let server = daemon(runtime, 200);
+        let (shell, status) = shell(cx);
+        sign_in(&shell, cx, &server.uri(), "secret");
+        let main = shell.read_with(cx, |s, _| s.main.clone());
+        main.update(cx, |main, cx| main.start_polling_for_test(cx));
+        (shell, status, server)
+    }
+
+    /// Step the fake clock a second at a time until `done`.
+    fn tick_until(cx: &mut TestAppContext, mut done: impl FnMut(&mut TestAppContext) -> bool) {
+        for _ in 0..1500 {
+            cx.executor().advance_clock(Duration::from_secs(1));
+            cx.run_until_parked();
+            if done(cx) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("condition never reached");
+    }
+
+    fn failing_routes(runtime: &tokio::runtime::Runtime, server: &MockServer, status: u16) {
+        runtime.block_on(async {
+            server.reset().await;
+            for route in ["/torrents", "/stats"] {
+                // A 401 triggers one refresh; the daemon refuses that too.
+                Mock::given(method("GET"))
+                    .and(path(route))
+                    .respond_with(ResponseTemplate::new(status))
+                    .mount(server)
+                    .await;
+            }
+            Mock::given(method("POST"))
+                .and(path("/auth/refresh"))
+                .respond_with(ResponseTemplate::new(401))
+                .mount(server)
+                .await;
+        });
+    }
+
+    #[gpui::test]
+    fn lost_daemon_shows_banner_then_clears_on_recovery(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (shell, status, server) = signed_in(cx, &runtime);
+        let main = shell.read_with(cx, |s, _| s.main.clone());
+        tick_until(cx, |cx| main.read_with(cx, |m, _| m.torrent_count() > 0));
+        assert_eq!(shell.read_with(cx, |s, _| s.lost_banner()), None);
+
+        failing_routes(&runtime, &server, 503);
+        tick_until(cx, |cx| {
+            shell.read_with(cx, |s, _| s.lost_banner().is_some())
+        });
+        let banner = shell.read_with(cx, |s, _| s.lost_banner()).unwrap();
+        assert!(
+            banner.starts_with("Lost connection to daemon — retrying in "),
+            "{banner}"
+        );
+        assert!(main.read_with(cx, |m, _| m.daemon_lost()));
+        assert_eq!(shell.read_with(cx, |s, _| s.screen()), Screen::Main);
+
+        // Actions that need the daemon are refused while it is lost.
+        let before = runtime.block_on(server.received_requests()).unwrap().len();
+        main.update(cx, |m, cx| m.open_add(cx));
+        assert!(!main.read_with(cx, |m, _| m.add_open()));
+        assert_eq!(
+            runtime.block_on(server.received_requests()).unwrap().len(),
+            before
+        );
+
+        // The first good poll clears the banner.
+        runtime.block_on(async {
+            server.reset().await;
+            for (route, file) in [("/torrents", "torrents.json"), ("/stats", "stats.json")] {
+                let body = std::fs::read_to_string(format!(
+                    "{}/../rtbit-client/tests/fixtures/{file}",
+                    env!("CARGO_MANIFEST_DIR")
+                ))
+                .unwrap();
+                Mock::given(method("GET"))
+                    .and(path(route))
+                    .respond_with(ResponseTemplate::new(200).set_body_raw(body, "application/json"))
+                    .mount(&server)
+                    .await;
+            }
+        });
+        tick_until(cx, |cx| {
+            shell.read_with(cx, |s, _| s.lost_banner().is_none())
+        });
+        assert!(!main.read_with(cx, |m, _| m.daemon_lost()));
+        assert_eq!(
+            status.read_with(cx, |s, _| s.connection()),
+            Connection::Connected
+        );
+    }
+
+    #[gpui::test]
+    fn unauthorised_poll_routes_back_to_connect(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (shell, status, server) = signed_in(cx, &runtime);
+        let main = shell.read_with(cx, |s, _| s.main.clone());
+        tick_until(cx, |cx| main.read_with(cx, |m, _| m.torrent_count() > 0));
+        failing_routes(&runtime, &server, 401);
+        tick_until(cx, |cx| {
+            shell.read_with(cx, |s, _| s.screen() == Screen::Connect)
+        });
+        assert_eq!(shell.read_with(cx, |s, _| s.lost_banner()), None);
+        assert_eq!(
+            status.read_with(cx, |s, _| s.connection()),
+            Connection::Disconnected
+        );
     }
 
     #[gpui::test]
