@@ -133,6 +133,7 @@ impl Shell {
             ConnectEvent::Connected => {
                 self.screen = Screen::Main;
                 self.set_connection(Connection::Connected, cx);
+                self.status.update(cx, |bar, cx| bar.load_settings(cx));
             }
             ConnectEvent::SetupRequired => {
                 self.screen = Screen::Setup;
