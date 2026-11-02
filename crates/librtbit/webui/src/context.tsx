@@ -5,6 +5,7 @@ import {
   AltSpeedStatus,
   BrowseResponse,
   CategoryInfo,
+  CategoryLimitRequest,
   DhtStats,
   AdvancedConfig,
   ProxyConfig,
@@ -100,7 +101,11 @@ export const APIContext = createContext<RtbitAPI>({
   getCategories: function (): Promise<Record<string, CategoryInfo>> {
     throw new Error("Function not implemented.");
   },
-  createCategory: function (name: string, savePath?: string): Promise<void> {
+  createCategory: function (
+    name: string,
+    savePath?: string,
+    limits?: CategoryLimitRequest,
+  ): Promise<void> {
     throw new Error("Function not implemented.");
   },
   deleteCategory: function (name: string): Promise<void> {
@@ -127,10 +132,7 @@ export const APIContext = createContext<RtbitAPI>({
   addTorrentTags: function (_ids: number[], _tags: string[]): Promise<void> {
     throw new Error("Function not implemented.");
   },
-  removeTorrentTags: function (
-    _ids: number[],
-    _tags: string[],
-  ): Promise<void> {
+  removeTorrentTags: function (_ids: number[], _tags: string[]): Promise<void> {
     throw new Error("Function not implemented.");
   },
   setTorrentTags: function (_ids: number[], _tags: string[]): Promise<void> {

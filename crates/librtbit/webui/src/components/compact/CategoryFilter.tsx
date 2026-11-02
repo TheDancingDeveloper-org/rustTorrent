@@ -1,5 +1,6 @@
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
-import { BsTag, BsTagFill, BsPlus } from "react-icons/bs";
+import { BsTag, BsTagFill, BsPlus, BsGear } from "react-icons/bs";
+import { CategoryLimitsModal } from "../modal/CategoryLimitsModal";
 import { APIContext } from "../../context";
 import { useUIStore } from "../../stores/uiStore";
 import { useTorrentStore } from "../../stores/torrentStore";
@@ -15,6 +16,7 @@ export const CategoryFilter: React.FC = () => {
   const [showNewInput, setShowNewInput] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const [editing, setEditing] = useState<string | null>(null);
 
   // Fetch categories on mount
   useEffect(() => {
@@ -175,28 +177,50 @@ export const CategoryFilter: React.FC = () => {
         {categoryNames.map((name) => {
           const count = categoryCounts.counts[name] ?? 0;
           return (
-            <button
-              key={name}
-              onClick={() => setCategoryFilter(name)}
-              aria-pressed={categoryFilter === name}
-              aria-label={`${name}, ${count} ${count === 1 ? "torrent" : "torrents"}`}
-              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded text-sm cursor-pointer transition-colors focus-ring ${
-                categoryFilter === name ? activeItemClass : inactiveItemClass
-              }`}
-            >
-              <BsTagFill className={iconClass} />
-              <span className="flex-1 text-left truncate">{name}</span>
-              <span
-                className={`text-xs tabular-nums ${
-                  categoryFilter === name ? "text-primary" : "text-tertiary"
+            <div key={name} className="flex items-center group">
+              <button
+                onClick={() => setCategoryFilter(name)}
+                aria-pressed={categoryFilter === name}
+                aria-label={`${name}, ${count} ${count === 1 ? "torrent" : "torrents"}`}
+                className={`flex-1 min-w-0 flex items-center gap-2.5 px-2.5 py-1.5 rounded text-sm cursor-pointer transition-colors focus-ring ${
+                  categoryFilter === name ? activeItemClass : inactiveItemClass
                 }`}
               >
-                {count}
-              </span>
-            </button>
+                <BsTagFill className={iconClass} />
+                <span className="flex-1 text-left truncate">{name}</span>
+                <span
+                  className={`text-xs tabular-nums ${
+                    categoryFilter === name ? "text-primary" : "text-tertiary"
+                  }`}
+                >
+                  {count}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditing(name)}
+                aria-label={`Share limits for ${name}`}
+                title="Share limits"
+                className="p-1 text-tertiary hover:text-primary cursor-pointer focus-ring rounded"
+              >
+                <BsGear className="w-3 h-3" />
+              </button>
+            </div>
           );
         })}
       </div>
+      {editing && (
+        <CategoryLimitsModal
+          category={categories[editing] ?? { name: editing }}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            API.getCategories()
+              .then(setCategories)
+              .catch(() => {});
+          }}
+        />
+      )}
     </div>
   );
 };

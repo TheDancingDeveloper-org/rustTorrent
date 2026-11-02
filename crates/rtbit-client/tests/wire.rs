@@ -1082,3 +1082,52 @@ async fn bulk_tag_add_and_remove_each_use_one_request() {
         .unwrap();
     server.verify().await;
 }
+
+#[tokio::test]
+async fn categories_list_reads_limits_and_save_posts_only_set_limits() {
+    let server = MockServer::start().await;
+    let mut client = logged_in(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/torrents/categories"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "tv": {"name": "tv", "ratio_limit": 2.5,
+                   "seeding_time_limit": {"secs": 3600, "nanos": 0}},
+            "iso": {"name": "iso"}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/torrents/categories"))
+        .and(body_json(serde_json::json!({
+            "name": "tv", "ratio_limit": 1.5, "seeding_time_limit": 7200
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let cats = client.list_categories().await.unwrap();
+    assert_eq!(cats[0].name, "iso");
+    assert_eq!(cats[0].ratio_limit, None);
+    assert_eq!(cats[1].ratio_limit, Some(2.5));
+    assert_eq!(cats[1].seeding_time_limit, Some(3600));
+    assert_eq!(cats[1].inactive_seeding_time_limit, None);
+
+    let limits = rtbit_client::CategoryLimits::parse("1.5", "120", "").unwrap();
+    client
+        .save_category(&limits.into_body("tv", None))
+        .await
+        .unwrap();
+}
+
+#[test]
+fn category_limits_validate() {
+    use rtbit_client::CategoryLimits as L;
+    assert_eq!(L::parse(" ", "", "").unwrap(), L::default());
+    assert!(L::parse("-1", "", "").is_err());
+    assert!(L::parse("abc", "", "").is_err());
+    assert!(L::parse("inf", "", "").is_err());
+    assert!(L::parse("", "1.5", "").is_err());
+    assert!(L::parse("", "", "-3").is_err());
+    assert_eq!(L::parse("0", "5", "6").unwrap().inactive_minutes, Some(6));
+}

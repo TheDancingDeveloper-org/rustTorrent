@@ -809,3 +809,98 @@ pub struct RssSnapshot {
     pub items: Vec<RssItem>,
     pub rules: Vec<RssRule>,
 }
+
+/// One entry of `GET /torrents/categories`. A `None` limit means "use the global limit".
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+pub struct Category {
+    pub name: String,
+    #[serde(default)]
+    pub save_path: Option<String>,
+    #[serde(default)]
+    pub ratio_limit: Option<f64>,
+    #[serde(default, deserialize_with = "secs_or_duration")]
+    pub seeding_time_limit: Option<u64>,
+    #[serde(default, deserialize_with = "secs_or_duration")]
+    pub inactive_seeding_time_limit: Option<u64>,
+}
+
+/// The daemon serialises a `Duration` as `{secs, nanos}`; accept a bare number of seconds too.
+fn secs_or_duration<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Wire {
+        Secs(u64),
+        Duration { secs: u64 },
+    }
+    Ok(Option::<Wire>::deserialize(d)?.map(|w| match w {
+        Wire::Secs(secs) | Wire::Duration { secs } => secs,
+    }))
+}
+
+/// Body of `POST /torrents/categories`, which creates or edits a category. `None` limits are
+/// left out of the body, so the category follows the global limit.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct CategoryBody {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub save_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ratio_limit: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seeding_time_limit: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inactive_seeding_time_limit: Option<u64>,
+}
+
+/// Validated category share limits; every field blank means "use global".
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct CategoryLimits {
+    pub ratio: Option<f64>,
+    pub seeding_minutes: Option<u64>,
+    pub inactive_minutes: Option<u64>,
+}
+
+impl CategoryLimits {
+    /// Parse the three text fields. Blank means unset; otherwise ratio must be a finite
+    /// number >= 0 and the times whole minutes.
+    pub fn parse(ratio: &str, seeding: &str, inactive: &str) -> Result<Self, String> {
+        let ratio = ratio.trim();
+        let ratio = if ratio.is_empty() {
+            None
+        } else {
+            let v: f64 = ratio
+                .parse()
+                .map_err(|_| "Ratio limit must be a number.".to_owned())?;
+            if !v.is_finite() || v < 0.0 {
+                return Err("Ratio limit must be 0 or more.".to_owned());
+            }
+            Some(v)
+        };
+        let minutes = |text: &str, what: &str| -> Result<Option<u64>, String> {
+            let text = text.trim();
+            if text.is_empty() {
+                return Ok(None);
+            }
+            text.parse::<u64>()
+                .ok()
+                .filter(|m| m.checked_mul(60).is_some())
+                .map(Some)
+                .ok_or_else(|| format!("{what} must be a whole number of minutes."))
+        };
+        Ok(Self {
+            ratio,
+            seeding_minutes: minutes(seeding, "Seeding time limit")?,
+            inactive_minutes: minutes(inactive, "Inactive seeding time limit")?,
+        })
+    }
+
+    pub fn into_body(self, name: &str, save_path: Option<String>) -> CategoryBody {
+        CategoryBody {
+            name: name.to_owned(),
+            save_path,
+            ratio_limit: self.ratio,
+            seeding_time_limit: self.seeding_minutes.map(|m| m * 60),
+            inactive_seeding_time_limit: self.inactive_minutes.map(|m| m * 60),
+        }
+    }
+}
