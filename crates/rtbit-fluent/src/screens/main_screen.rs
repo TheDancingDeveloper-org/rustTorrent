@@ -168,6 +168,9 @@ pub fn bind_keys(cx: &mut App) {
 pub struct MainScreen {
     pub(crate) snapshot: AsyncResource<Snapshot, String>,
     filter: StatusFilter,
+    category_filter: Option<String>,
+    tag_filter: Option<String>,
+    tracker_filter: Option<String>,
     status: Entity<StatusBar>,
     /// Detail pane for the selected row.
     detail: Entity<DetailPane>,
@@ -238,7 +241,14 @@ impl MainScreen {
         });
         Self {
             snapshot: AsyncResource::new(),
-            filter: StatusFilter::All,
+            filter: prefs
+                .status
+                .as_deref()
+                .and_then(parse_status)
+                .unwrap_or(StatusFilter::All),
+            category_filter: prefs.category.clone(),
+            tag_filter: prefs.tag.clone(),
+            tracker_filter: prefs.tracker.clone(),
             status,
             detail: cx.new(DetailPane::new),
             selected: None,
@@ -492,7 +502,31 @@ impl MainScreen {
     /// Set the sidebar status filter the table shows.
     pub fn set_filter(&mut self, filter: StatusFilter, cx: &mut Context<Self>) {
         self.filter = filter;
+        self.prefs.status = (filter != StatusFilter::All).then(|| filter.label().to_owned());
+        self.save_prefs();
         cx.notify();
+    }
+
+    fn set_category(&mut self, value: Option<String>, cx: &mut Context<Self>) {
+        self.category_filter = value;
+        self.save_filter_prefs();
+        cx.notify();
+    }
+    fn set_tag(&mut self, value: Option<String>, cx: &mut Context<Self>) {
+        self.tag_filter = value;
+        self.save_filter_prefs();
+        cx.notify();
+    }
+    fn set_tracker(&mut self, value: Option<String>, cx: &mut Context<Self>) {
+        self.tracker_filter = value;
+        self.save_filter_prefs();
+        cx.notify();
+    }
+    fn save_filter_prefs(&mut self) {
+        self.prefs.category = self.category_filter.clone();
+        self.prefs.tag = self.tag_filter.clone();
+        self.prefs.tracker = self.tracker_filter.clone();
+        self.save_prefs();
     }
 
     /// Filter the table to names containing `query`, ignoring case.
@@ -1073,6 +1107,27 @@ impl MainScreen {
             .iter()
             .filter(|torrent| matches_filter(self.filter, torrent))
             .filter(|torrent| {
+                self.category_filter
+                    .as_deref()
+                    .is_none_or(|v| torrent.category.as_deref() == Some(v))
+            })
+            .filter(|torrent| {
+                self.tag_filter.as_deref().is_none_or(|v| {
+                    torrent
+                        .tags
+                        .as_ref()
+                        .is_some_and(|tags| tags.iter().any(|tag| tag == v))
+                })
+            })
+            .filter(|torrent| {
+                self.tracker_filter.as_deref().is_none_or(|v| {
+                    torrent.trackers.as_ref().is_some_and(|urls| {
+                        urls.iter()
+                            .any(|url| tracker_host(url).as_deref() == Some(v))
+                    })
+                })
+            })
+            .filter(|torrent| {
                 self.query.is_empty() || torrent_name(torrent).to_lowercase().contains(&self.query)
             })
             .collect();
@@ -1144,6 +1199,134 @@ impl MainScreen {
             table = table.selected(selected.clone());
         }
         table
+    }
+    fn filter_sidebar(
+        &self,
+        me: &Entity<Self>,
+        background: Hsla,
+        accent: Hsla,
+        stroke: Hsla,
+    ) -> impl IntoElement {
+        let rows = self
+            .snapshot
+            .value()
+            .map(|s| &s.torrents.torrents[..])
+            .unwrap_or(&[]);
+        let mut panel = div()
+            .id("filter-sidebar")
+            .flex()
+            .flex_col()
+            .gap_1()
+            .w(px(190.0))
+            .p_2()
+            .border_1()
+            .border_color(stroke)
+            .child(Label::new("Filters").size(LabelSize::Body));
+        for status in StatusFilter::ALL {
+            let target = me.clone();
+            let count = rows
+                .iter()
+                .filter(|torrent| matches_filter(status, torrent))
+                .count();
+            let label = format!("{} ({count})", status.label());
+            panel = panel.child(
+                div()
+                    .id(format!("status-{}", status.label()))
+                    .px_2()
+                    .py_1()
+                    .bg(if self.filter == status {
+                        accent
+                    } else {
+                        background
+                    })
+                    .cursor_pointer()
+                    .on_click(move |_, _, cx| {
+                        target.update(cx, |screen, cx| screen.set_filter(status, cx))
+                    })
+                    .child(Label::new(label).size(LabelSize::Caption)),
+            );
+        }
+        let mut categories: Vec<String> = rows
+            .iter()
+            .filter_map(|t| t.category.clone())
+            .filter(|v| !v.is_empty())
+            .collect();
+        categories.sort();
+        categories.dedup();
+        panel = panel.child(Label::new("Categories").size(LabelSize::Caption));
+        for value in categories {
+            let target = me.clone();
+            let selected = self.category_filter.as_deref() == Some(value.as_str());
+            let label = value.clone();
+            panel = panel.child(
+                div()
+                    .id(format!("category-{value}"))
+                    .px_2()
+                    .py_1()
+                    .cursor_pointer()
+                    .bg(if selected { accent } else { background })
+                    .on_click(move |_, _, cx| {
+                        target.update(cx, |screen, cx| {
+                            screen.set_category((!selected).then_some(label.clone()), cx)
+                        })
+                    })
+                    .child(Label::new(value).size(LabelSize::Caption)),
+            );
+        }
+        let mut tags: Vec<String> = rows
+            .iter()
+            .flat_map(|t| t.tags.clone().unwrap_or_default())
+            .collect();
+        tags.sort();
+        tags.dedup();
+        panel = panel.child(Label::new("Tags").size(LabelSize::Caption));
+        for value in tags {
+            let target = me.clone();
+            let selected = self.tag_filter.as_deref() == Some(value.as_str());
+            let label = value.clone();
+            panel = panel.child(
+                div()
+                    .id(format!("tag-{value}"))
+                    .px_2()
+                    .py_1()
+                    .cursor_pointer()
+                    .bg(if selected { accent } else { background })
+                    .on_click(move |_, _, cx| {
+                        target.update(cx, |screen, cx| {
+                            screen.set_tag((!selected).then_some(label.clone()), cx)
+                        })
+                    })
+                    .child(Label::new(value).size(LabelSize::Caption)),
+            );
+        }
+        let mut trackers: Vec<String> = rows
+            .iter()
+            .flat_map(|torrent| torrent.trackers.clone().unwrap_or_default())
+            .filter_map(|url| tracker_host(&url))
+            .collect();
+        trackers.sort();
+        trackers.dedup();
+        panel = panel.child(Label::new("Trackers").size(LabelSize::Caption));
+        for value in trackers {
+            let target = me.clone();
+            let selected = self.tracker_filter.as_deref() == Some(value.as_str());
+            let label = value.clone();
+            panel = panel.child(
+                div()
+                    .id(format!("tracker-{value}"))
+                    .px_2()
+                    .py_1()
+                    .cursor_pointer()
+                    .bg(if selected { accent } else { background })
+                    .on_click(move |_, _, cx| {
+                        target.update(cx, |screen, cx| {
+                            screen.set_tracker((!selected).then_some(label.clone()), cx)
+                        })
+                    })
+                    .child(Label::new(value).size(LabelSize::Caption)),
+            );
+        }
+        panel
     }
 }
 
@@ -1318,6 +1501,12 @@ impl Render for MainScreen {
                     .absolute()
                     .size_full(),
                 )
+                .child(self.filter_sidebar(
+                    &me,
+                    colors.surface_dim,
+                    colors.accent,
+                    colors.stroke_neutral,
+                ))
                 .child(self.table(&me)),
         );
         root = root.child(Label::new(SHORTCUT_HELP).size(LabelSize::Caption));
@@ -1542,6 +1731,18 @@ fn matches_filter(filter: StatusFilter, torrent: &Torrent) -> bool {
         StatusFilter::Error => state == Some(TorrentState::Error),
         StatusFilter::Initializing => state == Some(TorrentState::Initializing),
     }
+}
+
+fn parse_status(value: &str) -> Option<StatusFilter> {
+    StatusFilter::ALL
+        .into_iter()
+        .find(|status| status.label() == value)
+}
+
+fn tracker_host(url: &str) -> Option<String> {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let host = rest.split(['/', ':']).next().unwrap_or("");
+    (!host.is_empty()).then(|| host.to_owned())
 }
 
 fn row_id(torrent: &Torrent) -> String {
