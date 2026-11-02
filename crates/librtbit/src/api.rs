@@ -683,6 +683,20 @@ impl Api {
         })?)
     }
 
+    /// Per-piece count of connected peers that have the piece. Empty while the
+    /// metadata is unknown (magnet still resolving).
+    pub fn api_piece_availability(&self, idx: TorrentIdOrHash) -> Result<Vec<u32>> {
+        let mgr = self.mgr_handle(idx)?;
+        let Ok(total) = mgr.with_metadata(|m| m.info.lengths().total_pieces()) else {
+            return Ok(Vec::new());
+        };
+        let total = total as usize;
+        Ok(match mgr.live() {
+            Some(live) => live.peers.piece_availability(total),
+            None => vec![0; total],
+        })
+    }
+
     pub async fn api_stream(&self, idx: TorrentIdOrHash, file_id: usize) -> Result<FileStream> {
         let mgr = self.mgr_handle(idx)?;
         Ok(mgr.stream(file_id).await?)
