@@ -218,6 +218,10 @@ pub fn make_api_router(state: ApiState) -> Router {
                 "/torrents/{id}/files/{index}/included",
                 post(torrents::h_torrent_file_set_included),
             )
+            .route(
+                "/torrents/{id}/files/{index}/priority",
+                post(torrents::h_torrent_file_set_priority),
+            )
             .route("/torrents/{id}/add_peers", post(torrents::h_add_peers))
             .route("/torrents/create", post(torrents::h_create_torrent))
             .route(

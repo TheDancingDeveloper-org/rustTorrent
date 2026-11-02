@@ -799,6 +799,29 @@ async fn set_file_included_posts_one_file_and_surfaces_bad_index() {
     server.verify().await;
 }
 
+#[tokio::test]
+async fn set_file_priority_posts_level() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(fixture("login.json"), "application/json"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/torrents/7/files/2/priority"))
+        .and(body_json(serde_json::json!({"priority": 6})))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut client = Client::new(server.uri()).unwrap();
+    client.login("ada", "secret").await.unwrap();
+    client.set_file_priority(7, 2, 6).await.unwrap();
+    server.verify().await;
+}
+
 #[test]
 fn advanced_decodes_legacy_and_full_bodies() {
     // An older daemon sends only the three timeouts. The new knobs read as None.
