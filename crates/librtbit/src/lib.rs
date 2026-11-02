@@ -73,6 +73,10 @@ pub mod rss;
 mod session;
 mod session_persistence;
 pub use session_persistence::TorrentRateLimits;
+pub use session_persistence::missing_report::{
+    MissingFileReport, MissingFileStatus, MissingTorrentDiagnosis, MissingTorrentReport,
+    report_missing_files,
+};
 pub mod session_stats;
 pub mod spawn_utils;
 pub mod tag;
