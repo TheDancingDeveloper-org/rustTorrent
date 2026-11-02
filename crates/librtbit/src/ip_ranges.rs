@@ -69,6 +69,9 @@ impl IpRanges {
 
         let limits = crate::safe_fetch::FetchLimits {
             max_bytes: 256 * 1024 * 1024,
+            // Large compressed blocklists can legitimately take longer than
+            // the normal per-hop timeout to download and parse.
+            timeout: std::time::Duration::from_secs(5 * 60),
             ..Default::default()
         };
         let body = crate::safe_fetch::fetch_bytes(parsed_url.as_str(), &limits)
