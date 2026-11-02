@@ -30,7 +30,7 @@ clone_to_owned.workspace = true
 librtbit-core.workspace = true
 sha1w.workspace = true
 anyhow = "1"
-parking_lot = "0.12"
+parking_lot = "0.13"
 tracing = "0.1"
 backon = { version = "1.6", features = ["tokio-sleep"] }
 futures = "0.3"

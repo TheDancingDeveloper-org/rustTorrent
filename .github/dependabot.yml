@@ -1,77 +1,23 @@
-# Dependabot version-update configuration.
-#
-# Security updates are enabled separately at the repo level and run regardless
-# of this file. This config adds scheduled *version* updates to keep manifests
-# and lockfiles fresh proactively. Updates are grouped to minimise PR noise.
 version: 2
 updates:
-  # ---- Rust: main workspace (covers all crates/* and desktop/src-tauri) ----
   - package-ecosystem: cargo
     directory: "/"
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
+      interval: monthly
     groups:
-      cargo-minor-patch:
-        update-types:
-          - minor
-          - patch
-
-  # ---- Rust: benchv2 (excluded from the workspace) ----
-  - package-ecosystem: cargo
-    directory: "/benchv2"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-    groups:
-      benchv2-minor-patch:
-        update-types:
-          - minor
-          - patch
-
-  # ---- Rust: fuzz (excluded from the workspace) ----
-  - package-ecosystem: cargo
-    directory: "/fuzz"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-    groups:
-      fuzz-minor-patch:
-        update-types:
-          - minor
-          - patch
-
-  # ---- npm: web UI (crates/librtbit/webui) ----
-  - package-ecosystem: npm
-    directory: "/crates/librtbit/webui"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
-    groups:
-      webui-minor-patch:
-        update-types:
-          - minor
-          - patch
-
-  # ---- npm: root workspace (includes the desktop package) ----
+      cargo:
+        patterns: ["*"]
   - package-ecosystem: npm
     directory: "/"
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+      interval: monthly
     groups:
-      root-npm-minor-patch:
-        update-types:
-          - minor
-          - patch
-
-  # ---- GitHub Actions workflows ----
+      npm:
+        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+      interval: monthly
     groups:
-      actions-all:
-        patterns:
-          - "*"
+      actions:
+        patterns: ["*"]
