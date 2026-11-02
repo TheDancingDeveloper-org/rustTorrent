@@ -1,5 +1,7 @@
 pub(crate) mod configure;
 pub(crate) mod dht;
+#[cfg(test)]
+mod file_included_tests;
 pub(crate) mod healthz;
 pub(crate) mod indexarr;
 pub(crate) mod logging;
