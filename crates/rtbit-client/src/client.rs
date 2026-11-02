@@ -168,6 +168,24 @@ impl Client {
         .await
     }
 
+    /// `POST /torrents/{id}/set_location`. Moves the torrent payload to a new root.
+    pub async fn set_torrent_location(&mut self, id: u64, location: &str) -> Result<(), Error> {
+        self.authed_post_json(
+            &format!("torrents/{id}/set_location"),
+            &serde_json::json!({ "location": location }),
+        )
+        .await
+    }
+
+    /// `POST /torrents/{id}/rename`. Changes the torrent's display name.
+    pub async fn rename_torrent(&mut self, id: u64, name: &str) -> Result<(), Error> {
+        self.authed_post_json(
+            &format!("torrents/{id}/rename"),
+            &serde_json::json!({ "name": name }),
+        )
+        .await
+    }
+
     /// Set or clear a category for several torrents in one request.
     pub async fn set_torrents_category(
         &mut self,
@@ -769,7 +787,10 @@ async fn decode_or_default<T: DeserializeOwned + Default>(
 }
 
 async fn error_with_body(status: http::StatusCode, response: reqwest::Response) -> Error {
-    if status != http::StatusCode::BAD_REQUEST {
+    if !matches!(
+        status,
+        http::StatusCode::BAD_REQUEST | http::StatusCode::CONFLICT
+    ) {
         return Error::from_status(status);
     }
     let body = response.text().await.unwrap_or_default();
