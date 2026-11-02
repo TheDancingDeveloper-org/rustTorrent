@@ -994,3 +994,60 @@ async fn set_limits_posts_peer_and_init_limits_to_the_limits_route() {
     client.set_limits(&limits).await.unwrap();
     server.verify().await;
 }
+
+#[tokio::test]
+async fn bulk_category_is_one_request_and_decodes_refused_torrents() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/torrents/bulk/category"))
+        .and(header("authorization", "Bearer access-1"))
+        .and(body_json(serde_json::json!({
+            "ids": [3, 5],
+            "category": "movies"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "failures": [{"id": 5, "error": "torrent is read-only"}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut client = logged_in(&server).await;
+    let response = client
+        .set_torrents_category(&[3, 5], Some("movies"))
+        .await
+        .unwrap();
+    assert_eq!(response.failures.len(), 1);
+    assert_eq!(response.failures[0].id, 5);
+    assert_eq!(response.failures[0].error, "torrent is read-only");
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn bulk_tag_add_and_remove_each_use_one_request() {
+    let server = MockServer::start().await;
+    for (route, tags) in [
+        ("/torrents/bulk/tags/add", serde_json::json!(["new", "tv"])),
+        ("/torrents/bulk/tags/remove", serde_json::json!(["old"])),
+    ] {
+        Mock::given(method("POST"))
+            .and(path(route))
+            .and(header("authorization", "Bearer access-1"))
+            .and(body_json(serde_json::json!({"ids": [3, 5], "tags": tags})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "failures": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let mut client = logged_in(&server).await;
+    client
+        .add_torrents_tags(&[3, 5], &["new".into(), "tv".into()])
+        .await
+        .unwrap();
+    client
+        .remove_torrents_tags(&[3, 5], &["old".into()])
+        .await
+        .unwrap();
+    server.verify().await;
+}
