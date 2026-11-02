@@ -6,16 +6,18 @@
 //! menu opens on a double click.
 
 use std::cmp::Ordering;
+use std::collections::HashSet;
 
 use fluent_core::AsyncResource;
 use fluent_layout::{
     ConfirmModal, ContextMenu, DataCell, DataColumn, DataRow, DataSortDirection, DataTable,
     MessageIntent, Toast, ToastHost, ToastStack, Toolbar, ToolbarItem,
 };
-use fluent_primitives::{Label, LabelSize};
+use fluent_primitives::{Label, LabelSize, TextInput};
 use gpui::{
-    App, AsyncApp, ClickEvent, Context, Entity, IntoElement, Pixels, Point, Render, SharedString,
-    Subscription, Task, WeakEntity, Window, div, prelude::*,
+    App, AsyncApp, ClickEvent, Context, Entity, FocusHandle, Focusable as _, IntoElement,
+    KeyBinding, MouseButton, Pixels, Point, Render, SharedString, Subscription, Task, WeakEntity,
+    Window, actions, div, prelude::*,
 };
 use rtbit_client::{Torrent, TorrentState};
 use rtbit_ui_core::{AddRequest, AddSource, RowAction, Snapshot, StatusFilter, format, map_error};
@@ -24,6 +26,42 @@ use crate::bridge::{Bridge, Poller, fetch_snapshot};
 use crate::screens::add_dialog::{AddDialog, AddDialogEvent};
 use crate::screens::detail::DetailPane;
 use crate::widgets::status_bar::StatusBar;
+
+actions!(
+    main_screen,
+    [
+        OpenAdd,
+        PasteMagnet,
+        DeleteSelected,
+        TogglePause,
+        SelectAll,
+        FocusFilter,
+        Refresh
+    ]
+);
+
+/// Key context of the main screen. Its shortcuts are bound to this context only.
+pub const KEY_CONTEXT: &str = "MainScreen";
+
+/// Contexts for the shortcuts that would clash with typing: Space, Delete, Ctrl+A and Ctrl+V
+/// stay with a focused text field.
+const OUTSIDE_TEXT_INPUT: &str = "MainScreen && !TextInput";
+
+/// One line listing the shortcuts, shown under the table.
+pub const SHORTCUT_HELP: &str = "Ctrl+O add · Ctrl+V paste magnet · Space pause/resume · Delete remove · Ctrl+A select all · Ctrl+F filter · F5 refresh";
+
+/// Bind the main-screen shortcuts. Call once at startup.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("ctrl-o", OpenAdd, Some(KEY_CONTEXT)),
+        KeyBinding::new("ctrl-v", PasteMagnet, Some(OUTSIDE_TEXT_INPUT)),
+        KeyBinding::new("delete", DeleteSelected, Some(OUTSIDE_TEXT_INPUT)),
+        KeyBinding::new("space", TogglePause, Some(OUTSIDE_TEXT_INPUT)),
+        KeyBinding::new("ctrl-a", SelectAll, Some(OUTSIDE_TEXT_INPUT)),
+        KeyBinding::new("ctrl-f", FocusFilter, Some(KEY_CONTEXT)),
+        KeyBinding::new("f5", Refresh, Some(KEY_CONTEXT)),
+    ]);
+}
 
 /// Torrent table, toolbar and context menu. Owns the snapshot the poll fills.
 pub struct MainScreen {
@@ -34,6 +72,15 @@ pub struct MainScreen {
     detail: Entity<DetailPane>,
     /// Selected row id (the daemon id, or the info hash when the daemon omits one).
     selected: Option<String>,
+    /// Rows marked by Select all. When not empty, row commands act on all of them.
+    marked: HashSet<String>,
+    /// Case-insensitive name filter typed in the filter box.
+    query: String,
+    filter_input: Entity<TextInput>,
+    focus: FocusHandle,
+    autofocused: bool,
+    /// Set while the delete confirmation is on screen.
+    delete_prompt: bool,
     sort: Option<(String, DataSortDirection)>,
     menu: Option<Entity<ContextMenu>>,
     action_error: Option<String>,
@@ -51,12 +98,26 @@ pub struct MainScreen {
 impl MainScreen {
     #[must_use]
     pub fn new(status: Entity<StatusBar>, cx: &mut Context<Self>) -> Self {
+        let me = cx.weak_entity();
+        let filter_input = cx.new(|_| {
+            TextInput::new()
+                .placeholder("Filter (Ctrl+F)")
+                .on_change(move |text, app| {
+                    let _ = me.update(app, |screen, cx| screen.set_query(text.to_string(), cx));
+                })
+        });
         Self {
             snapshot: AsyncResource::new(),
             filter: StatusFilter::All,
             status,
             detail: cx.new(DetailPane::new),
             selected: None,
+            marked: HashSet::new(),
+            query: String::new(),
+            filter_input,
+            focus: cx.focus_handle(),
+            autofocused: false,
+            delete_prompt: false,
             sort: None,
             menu: None,
             action_error: None,
@@ -85,6 +146,22 @@ impl MainScreen {
         self.add = Some(dialog);
         self._add_events = Some(events);
         cx.notify();
+    }
+
+    /// Open the add dialog with the clipboard's magnet link filled in. Does nothing when the
+    /// clipboard holds anything else.
+    fn paste_magnet(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
+        let magnet = text.trim();
+        if !magnet.starts_with("magnet:?") {
+            return;
+        }
+        self.open_add(cx);
+        if let Some(dialog) = &self.add {
+            dialog.update(cx, |dialog, cx| dialog.prefill_magnet(magnet, cx));
+        }
     }
 
     /// Close the add dialog. Nothing is sent.
@@ -159,6 +236,58 @@ impl MainScreen {
         cx.notify();
     }
 
+    /// Filter the table to names containing `query`, ignoring case.
+    pub(crate) fn set_query(&mut self, query: String, cx: &mut Context<Self>) {
+        self.query = query.to_lowercase();
+        cx.notify();
+    }
+
+    /// Mark every visible row, so the next command acts on all of them.
+    fn select_all(&mut self, cx: &mut Context<Self>) {
+        self.marked = self.visible_rows().into_iter().map(row_id).collect();
+        cx.notify();
+    }
+
+    /// Number of rows marked by Select all.
+    #[must_use]
+    pub fn marked_count(&self) -> usize {
+        self.marked.len()
+    }
+
+    /// Torrents a command applies to: the marked rows, else the selected row.
+    fn targets(&self) -> Vec<&Torrent> {
+        if self.marked.is_empty() {
+            return self.selected_torrent().into_iter().collect();
+        }
+        self.snapshot.value().map_or_else(Vec::new, |snapshot| {
+            snapshot
+                .torrents
+                .torrents
+                .iter()
+                .filter(|torrent| self.marked.contains(&row_id(torrent)))
+                .collect()
+        })
+    }
+
+    /// Pause what is running and resume what is paused, for each target.
+    fn toggle_pause(&mut self, cx: &mut Context<Self>) {
+        let jobs: Vec<(u64, RowAction)> = self
+            .targets()
+            .into_iter()
+            .filter_map(|torrent| {
+                let paused = torrent.stats.as_ref().and_then(|stats| stats.state)
+                    == Some(TorrentState::Paused);
+                let action = if paused {
+                    RowAction::Start
+                } else {
+                    RowAction::Pause
+                };
+                torrent.id.map(|id| (id, action))
+            })
+            .collect();
+        self.run_jobs(jobs, cx);
+    }
+
     /// Number of torrents in the last good snapshot, before filters.
     #[must_use]
     pub fn torrent_count(&self) -> usize {
@@ -180,6 +309,7 @@ impl MainScreen {
     /// Select a row and load its detail. A row with no daemon id clears the pane.
     fn select_row(&mut self, row: &str, cx: &mut Context<Self>) {
         self.selected = Some(row.to_owned());
+        self.marked.clear();
         let id = self.selected_torrent().and_then(|torrent| torrent.id);
         self.detail.update(cx, |pane, cx| match id {
             Some(id) => pane.select_torrent(id, cx),
@@ -240,10 +370,15 @@ impl MainScreen {
     /// Run a toolbar or menu command. Delete asks first.
     fn request(&mut self, action: RowAction, cx: &mut Context<Self>) {
         self.menu = None;
-        let Some(name) = self.selected_torrent().map(torrent_name) else {
-            self.action_error = Some("Select a torrent first.".to_owned());
-            cx.notify();
-            return;
+        let targets = self.targets();
+        let name = match targets.as_slice() {
+            [] => {
+                self.action_error = Some("Select a torrent first.".to_owned());
+                cx.notify();
+                return;
+            }
+            [only] => format!("“{}”", torrent_name(only)),
+            many => format!("{} torrents", many.len()),
         };
         if action != RowAction::Delete {
             self.act(action, cx);
@@ -252,36 +387,53 @@ impl MainScreen {
         let me = cx.entity();
         ConfirmModal::new(
             "Delete torrent?",
-            format!("“{name}” will be removed from the daemon."),
+            format!("{name} will be removed from the daemon."),
         )
         .confirm_label("Delete")
         .on_confirm(move |app| {
             confirm_delete(&me, app);
         })
         .show(cx);
+        self.delete_prompt = true;
         cx.notify();
     }
 
-    /// Send one row command to the daemon, then refresh the table.
+    /// Send one row command for every target, then refresh the table.
     fn act(&mut self, action: RowAction, cx: &mut Context<Self>) {
+        let jobs = self
+            .targets()
+            .into_iter()
+            .filter_map(|torrent| torrent.id.map(|id| (id, action)))
+            .collect();
+        self.run_jobs(jobs, cx);
+    }
+
+    /// Send row commands to the daemon in order, then refresh the table.
+    fn run_jobs(&mut self, jobs: Vec<(u64, RowAction)>, cx: &mut Context<Self>) {
         self.menu = None;
-        let Some(id) = self.selected_torrent().and_then(|torrent| torrent.id) else {
+        self.delete_prompt = false;
+        if jobs.is_empty() {
             self.action_error = Some("Select a torrent first.".to_owned());
             cx.notify();
             return;
-        };
+        }
         if !cx.has_global::<Bridge>() {
             self.action_error = Some("Not connected to a daemon.".to_owned());
             cx.notify();
             return;
         }
+        let deleting = jobs.iter().any(|(_, action)| *action == RowAction::Delete);
         let rx = cx.global::<Bridge>().call(move |client| async move {
             let mut client = client.lock().await;
-            match action {
-                RowAction::Start => client.start_torrent(id).await,
-                RowAction::Pause => client.pause_torrent(id).await,
-                RowAction::Delete => client.delete_torrent(id).await,
+            for (id, action) in jobs {
+                let sent = match action {
+                    RowAction::Start => client.start_torrent(id).await,
+                    RowAction::Pause => client.pause_torrent(id).await,
+                    RowAction::Delete => client.delete_torrent(id).await,
+                };
+                sent?;
             }
+            Ok(())
         });
         self._action = Some(
             cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -293,8 +445,9 @@ impl MainScreen {
                 let _ = view.update(cx, |screen, cx| match reply {
                     Ok(()) => {
                         screen.action_error = None;
-                        if action == RowAction::Delete {
+                        if deleting {
                             screen.selected = None;
+                            screen.marked.clear();
                             screen.detail.update(cx, |pane, cx| pane.clear(cx));
                         }
                         screen.refresh(cx);
@@ -323,6 +476,9 @@ impl MainScreen {
             .torrents
             .iter()
             .filter(|torrent| matches_filter(self.filter, torrent))
+            .filter(|torrent| {
+                self.query.is_empty() || torrent_name(torrent).to_lowercase().contains(&self.query)
+            })
             .collect();
         if let Some((column, direction)) = &self.sort {
             rows.sort_by(|a, b| {
@@ -394,7 +550,11 @@ impl MainScreen {
 }
 
 impl Render for MainScreen {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.autofocused {
+            self.autofocused = true;
+            window.focus(&self.focus, cx);
+        }
         self.ensure_polling(cx);
         self.apply_to_status(cx);
         if self.menu.as_ref().is_some_and(|menu| !menu.read(cx).open) {
@@ -419,16 +579,60 @@ impl Render for MainScreen {
             .clone()
             .or_else(|| self.snapshot.error().cloned());
         let mut root = div()
+            .key_context(KEY_CONTEXT)
+            .track_focus(&self.focus)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|screen, _, window, cx| {
+                    if !screen.focus.contains_focused(window, cx) {
+                        window.focus(&screen.focus, cx);
+                    }
+                }),
+            )
+            .on_action(cx.listener(|screen, _: &OpenAdd, _, cx| {
+                if screen.add.is_none() {
+                    screen.open_add(cx);
+                }
+            }))
+            .on_action(cx.listener(|screen, _: &PasteMagnet, _, cx| {
+                if screen.add.is_none() {
+                    screen.paste_magnet(cx);
+                }
+            }))
+            .on_action(cx.listener(|screen, _: &DeleteSelected, _, cx| {
+                if screen.add.is_none() {
+                    screen.request(RowAction::Delete, cx);
+                }
+            }))
+            .on_action(cx.listener(|screen, _: &TogglePause, _, cx| {
+                if screen.add.is_none() {
+                    screen.toggle_pause(cx);
+                }
+            }))
+            .on_action(cx.listener(|screen, _: &SelectAll, _, cx| {
+                if screen.add.is_none() {
+                    screen.select_all(cx);
+                }
+            }))
+            .on_action(cx.listener(|screen, _: &FocusFilter, window, cx| {
+                if screen.add.is_none() {
+                    let handle = screen.filter_input.focus_handle(cx);
+                    window.focus(&handle, cx);
+                }
+            }))
+            .on_action(cx.listener(|screen, _: &Refresh, _, cx| screen.refresh(cx)))
             .flex()
             .flex_col()
             .flex_1()
             .p_4()
             .gap_2()
-            .child(toolbar);
+            .child(toolbar)
+            .child(self.filter_input.clone());
         if let Some(message) = message {
             root = root.child(Label::new(message).size(LabelSize::Caption));
         }
         root = root.child(self.table(&me));
+        root = root.child(Label::new(SHORTCUT_HELP).size(LabelSize::Caption));
         root = root.child(self.detail.clone());
         if let Some(menu) = &self.menu {
             root = root.child(menu.clone());
@@ -984,5 +1188,165 @@ mod tests {
             .filter(|req| req.method.as_str() == "POST" && req.url.path() == "/torrents/3/start")
             .count();
         assert_eq!(hits, 1, "start must hit the daemon exactly once");
+    }
+
+    // --- keyboard shortcuts: each test sends real keystrokes through the keymap ---
+
+    fn drive_window(
+        cx: &mut gpui::VisualTestContext,
+        mut done: impl FnMut(&mut gpui::VisualTestContext) -> bool,
+    ) {
+        for _ in 0..500 {
+            cx.run_until_parked();
+            if done(cx) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("daemon reply never arrived");
+    }
+
+    /// A main screen in a window with the shortcuts bound, the snapshot loaded and row 3 shown.
+    fn shortcut_screen(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<MainScreen>,
+        &mut gpui::VisualTestContext,
+        tokio::runtime::Runtime,
+        MockServer,
+    ) {
+        let (runtime, server) = daemon(cx);
+        runtime.block_on(
+            Mock::given(method("POST"))
+                .and(path("/torrents/3/start"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server),
+        );
+        cx.update(|app| {
+            fluent_core::Theme::init(app);
+            fluent_layout::ModalStack::init(app);
+            bind_keys(app);
+        });
+        let status = cx.new(|_| StatusBar::new());
+        let (screen, vcx) = cx.add_window_view(|_, cx| MainScreen::new(status, cx));
+        screen.update(vcx, |screen, cx| {
+            screen._load = Some(Bridge::load(screen, cx, snapshot_of, fetch_snapshot));
+        });
+        drive_window(vcx, |cx| screen.read_with(cx, |s, _| s.torrent_count() > 0));
+        (screen, vcx, runtime, server)
+    }
+
+    fn posts_to(runtime: &tokio::runtime::Runtime, server: &MockServer, route: &str) -> usize {
+        std::thread::sleep(Duration::from_millis(50));
+        runtime
+            .block_on(server.received_requests())
+            .unwrap()
+            .iter()
+            .filter(|req| req.method.as_str() == "POST" && req.url.path() == route)
+            .count()
+    }
+
+    #[gpui::test]
+    fn ctrl_o_opens_the_add_dialog(cx: &mut TestAppContext) {
+        let (screen, vcx, _runtime, _server) = shortcut_screen(cx);
+        screen.read_with(vcx, |s, _| assert!(s.add.is_none()));
+        vcx.simulate_keystrokes("ctrl-o");
+        screen.read_with(vcx, |s, _| assert!(s.add.is_some()));
+    }
+
+    #[gpui::test]
+    fn ctrl_v_with_a_magnet_opens_the_dialog_prefilled(cx: &mut TestAppContext) {
+        let (screen, vcx, _runtime, _server) = shortcut_screen(cx);
+        vcx.write_to_clipboard(gpui::ClipboardItem::new_string(format!(
+            "  {HASH_MAGNET}\n"
+        )));
+        vcx.simulate_keystrokes("ctrl-v");
+        let dialog = screen.read_with(vcx, |s, _| s.add.clone()).unwrap();
+        dialog.read_with(vcx, |dialog, cx| {
+            assert_eq!(dialog.magnet_text(cx), HASH_MAGNET)
+        });
+    }
+
+    #[gpui::test]
+    fn ctrl_v_without_a_magnet_opens_nothing(cx: &mut TestAppContext) {
+        let (screen, vcx, _runtime, _server) = shortcut_screen(cx);
+        vcx.write_to_clipboard(gpui::ClipboardItem::new_string("just some text".to_owned()));
+        vcx.simulate_keystrokes("ctrl-v");
+        screen.read_with(vcx, |s, _| assert!(s.add.is_none()));
+    }
+
+    #[gpui::test]
+    fn delete_asks_before_removing_the_selection(cx: &mut TestAppContext) {
+        let (screen, vcx, runtime, server) = shortcut_screen(cx);
+        vcx.simulate_keystrokes("delete");
+        screen.read_with(vcx, |s, _| {
+            assert_eq!(s.action_error.as_deref(), Some("Select a torrent first."));
+            assert!(!s.delete_prompt);
+        });
+        screen.update(vcx, |s, cx| s.select_row("3", cx));
+        vcx.simulate_keystrokes("delete");
+        screen.read_with(vcx, |s, _| assert!(s.delete_prompt));
+        assert_eq!(posts_to(&runtime, &server, "/torrents/3/delete"), 0);
+    }
+
+    #[gpui::test]
+    fn space_pauses_the_selected_torrent(cx: &mut TestAppContext) {
+        let (screen, vcx, runtime, server) = shortcut_screen(cx);
+        screen.update(vcx, |s, cx| s.select_row("3", cx));
+        vcx.simulate_keystrokes("space");
+        drive_window(vcx, |cx| screen.read_with(cx, |s, _| s._action.is_some()));
+        // The fixture row is not paused, so Space pauses it.
+        assert_eq!(posts_to(&runtime, &server, "/torrents/3/pause"), 1);
+        assert_eq!(posts_to(&runtime, &server, "/torrents/3/start"), 0);
+    }
+
+    #[gpui::test]
+    fn ctrl_a_marks_every_visible_row(cx: &mut TestAppContext) {
+        let (screen, vcx, _runtime, _server) = shortcut_screen(cx);
+        vcx.simulate_keystrokes("ctrl-a");
+        screen.read_with(vcx, |s, _| assert_eq!(s.marked_count(), 1));
+        // Picking a row again drops the marks.
+        screen.update(vcx, |s, cx| s.select_row("3", cx));
+        screen.read_with(vcx, |s, _| assert_eq!(s.marked_count(), 0));
+    }
+
+    #[gpui::test]
+    fn ctrl_f_focuses_the_filter_and_typing_keys_stay_there(cx: &mut TestAppContext) {
+        let (screen, vcx, runtime, server) = shortcut_screen(cx);
+        screen.update(vcx, |s, cx| s.select_row("3", cx));
+        vcx.simulate_keystrokes("ctrl-f");
+        let filter = screen.read_with(vcx, |s, _| s.filter_input.clone());
+        let focused = vcx.update(|window, cx| filter.focus_handle(cx).is_focused(window));
+        assert!(focused, "Ctrl+F must focus the filter box");
+        // Space belongs to the text field now: it must not pause the torrent.
+        vcx.simulate_keystrokes("space");
+        assert_eq!(posts_to(&runtime, &server, "/torrents/3/pause"), 0);
+    }
+
+    #[gpui::test]
+    fn the_filter_box_narrows_the_rows(cx: &mut TestAppContext) {
+        let (screen, vcx, _runtime, _server) = shortcut_screen(cx);
+        screen.update(vcx, |s, cx| s.set_query("EXAM".to_owned(), cx));
+        screen.read_with(vcx, |s, _| assert_eq!(s.visible_rows().len(), 1));
+        screen.update(vcx, |s, cx| s.set_query("nomatch".to_owned(), cx));
+        screen.read_with(vcx, |s, _| assert!(s.visible_rows().is_empty()));
+    }
+
+    #[gpui::test]
+    fn f5_asks_the_daemon_for_a_fresh_snapshot(cx: &mut TestAppContext) {
+        let (screen, vcx, runtime, server) = shortcut_screen(cx);
+        let gets = |runtime: &tokio::runtime::Runtime, server: &MockServer| {
+            runtime
+                .block_on(server.received_requests())
+                .unwrap()
+                .iter()
+                .filter(|req| req.method.as_str() == "GET" && req.url.path() == "/torrents")
+                .count()
+        };
+        let before = gets(&runtime, &server);
+        screen.update(vcx, |s, _| s._load = None);
+        vcx.simulate_keystrokes("f5");
+        screen.read_with(vcx, |s, _| assert!(s._load.is_some()));
+        drive_window(vcx, |_| gets(&runtime, &server) > before);
     }
 }
