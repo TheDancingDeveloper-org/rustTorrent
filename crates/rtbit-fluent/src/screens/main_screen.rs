@@ -1903,7 +1903,7 @@ fn speed_text(torrent: &Torrent) -> String {
 }
 
 fn state_of(torrent: &Torrent) -> String {
-    format::state_label(torrent.stats.as_ref().and_then(|stats| stats.state))
+    format::row_state_label(torrent.stats.as_ref())
 }
 
 /// Seconds left at the current download speed, or `None` when nothing is moving.

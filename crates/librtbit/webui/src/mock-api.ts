@@ -879,6 +879,8 @@ export const MockAPI: RtbitAPI & { getVersion: () => Promise<string> } = {
     torrentStates.set(index, "live");
   },
 
+  setLocation: async (): Promise<void> => {},
+
   recheck: async (index: number): Promise<void> => {
     await new Promise((r) => setTimeout(r, 50));
     torrentStates.set(index, "initializing");

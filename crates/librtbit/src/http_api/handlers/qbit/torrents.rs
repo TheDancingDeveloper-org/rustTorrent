@@ -49,7 +49,10 @@ pub(super) fn qbit_state_for(
     forced: bool,
 ) -> &'static str {
     if matches!(stats.state, TorrentStatsState::Paused)
-        && stats.error.as_deref() == Some(crate::torrent_state::READ_ONLY_INCOMPLETE_PAYLOAD)
+        && stats
+            .error
+            .as_deref()
+            .is_some_and(crate::torrent_state::is_read_only_incomplete_payload)
     {
         return "missingFiles";
     }

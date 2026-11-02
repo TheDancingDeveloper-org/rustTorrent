@@ -709,10 +709,14 @@ async fn read_only_incomplete_payload_stays_stopped_and_flagged() -> anyhow::Res
         );
         assert!(handle.is_paused(), "{what}: not marked paused");
         assert!(!stats.finished, "{what}");
-        assert_eq!(
-            stats.error.as_deref(),
-            Some(crate::torrent_state::READ_ONLY_INCOMPLETE_PAYLOAD),
+        let error = stats.error.as_deref().unwrap_or_default();
+        assert!(
+            crate::torrent_state::is_read_only_incomplete_payload(error),
             "{what}: not flagged"
+        );
+        assert!(
+            error.contains(": "),
+            "{what}: error does not name the first missing path: {error}"
         );
         assert!(stats.live.is_none(), "{what}: went live");
     };

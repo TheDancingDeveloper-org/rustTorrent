@@ -576,6 +576,7 @@ export interface RtbitAPI {
   updateOnlyFiles: (index: number, files: number[]) => Promise<void>;
   start: (index: number) => Promise<void>;
   recheck: (index: number) => Promise<void>;
+  setLocation: (index: number, location: string) => Promise<void>;
   addTrackers: (index: number, trackers: string[]) => Promise<void>;
   forget: (index: number) => Promise<void>;
   delete: (index: number) => Promise<void>;

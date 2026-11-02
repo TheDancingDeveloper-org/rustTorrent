@@ -126,6 +126,12 @@ impl ManagedTorrentState {
 pub const READ_ONLY_INCOMPLETE_PAYLOAD: &str =
     "payload is missing or incomplete on read-only storage";
 
+/// True for [`READ_ONLY_INCOMPLETE_PAYLOAD`] with or without the
+/// `: <first missing path>` suffix the stats add.
+pub fn is_read_only_incomplete_payload(error: &str) -> bool {
+    error.starts_with(READ_ONLY_INCOMPLETE_PAYLOAD)
+}
+
 pub(crate) struct ManagedTorrentLocked {
     // The torrent might not be in "paused" state technically,
     // but the intention might be for it to stay paused.
@@ -1102,7 +1108,17 @@ impl ManagedTorrent {
                     resp.finished = hns.finished();
                     resp.file_progress = p.chunk_tracker.per_file_have_bytes().to_owned();
                     if p.files.is_read_only() && !resp.finished {
-                        resp.error = Some(READ_ONLY_INCOMPLETE_PAYLOAD.to_owned());
+                        let first_missing = self.metadata.load().as_ref().and_then(|m| {
+                            m.file_infos
+                                .iter()
+                                .zip(resp.file_progress.iter().chain(std::iter::repeat(&0)))
+                                .find(|(fi, have)| **have < fi.len)
+                                .map(|(fi, _)| fi.relative_filename.display().to_string())
+                        });
+                        resp.error = Some(match first_missing {
+                            Some(path) => format!("{READ_ONLY_INCOMPLETE_PAYLOAD}: {path}"),
+                            None => READ_ONLY_INCOMPLETE_PAYLOAD.to_owned(),
+                        });
                     } else if self.shared.held_for_disk.load(Ordering::Relaxed) {
                         resp.error = Some(LOW_DISK_SPACE.to_owned());
                     }
