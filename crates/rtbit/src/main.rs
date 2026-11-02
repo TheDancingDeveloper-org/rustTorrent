@@ -589,6 +589,36 @@ enum SubCommand {
     Auth(AuthOpts),
     /// Inspect the effective configuration.
     Config(ConfigOpts),
+    /// Run read-only diagnostics against saved session state.
+    Diagnose(DiagnoseOpts),
+}
+
+#[derive(Parser)]
+struct DiagnoseOpts {
+    #[clap(subcommand)]
+    subcommand: DiagnoseSubcommand,
+}
+
+#[derive(Parser)]
+enum DiagnoseSubcommand {
+    /// Report persisted torrents whose expected payload files are missing or the wrong size.
+    Missing(DiagnoseMissingOpts),
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum DiagnoseOutput {
+    Table,
+    Json,
+}
+
+#[derive(Parser)]
+struct DiagnoseMissingOpts {
+    /// JSON persistence directory. Defaults to rtbit's normal session directory.
+    #[arg(long)]
+    persistence_location: Option<PathBuf>,
+    /// Report output format.
+    #[arg(long, value_enum, default_value = "table")]
+    output: DiagnoseOutput,
 }
 
 #[derive(Parser)]
@@ -717,6 +747,10 @@ fn main() -> anyhow::Result<()> {
         return run_config_command(&opts, config_opts);
     }
 
+    if let SubCommand::Diagnose(diagnose_opts) = &opts.subcommand {
+        return run_diagnose_command(diagnose_opts);
+    }
+
     #[cfg(not(target_os = "windows"))]
     if let Some(umask) = opts.umask {
         unsafe { libc::umask(umask) };
@@ -789,6 +823,62 @@ fn main() -> anyhow::Result<()> {
     match result {
         Ok(_) => std::process::exit(0),
         Err(_) => std::process::exit(1),
+    }
+}
+
+fn run_diagnose_command(opts: &DiagnoseOpts) -> anyhow::Result<()> {
+    let DiagnoseSubcommand::Missing(opts) = &opts.subcommand;
+    let persistence_location = opts
+        .persistence_location
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(SessionPersistenceConfig::default_json_persistence_folder)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .build()?;
+    let reports = runtime.block_on(librtbit::report_missing_files(&persistence_location))?;
+    match opts.output {
+        DiagnoseOutput::Json => println!("{}", serde_json::to_string_pretty(&reports)?),
+        DiagnoseOutput::Table => print_missing_table(&reports),
+    }
+    Ok(())
+}
+
+fn print_missing_table(reports: &[librtbit::MissingTorrentReport]) {
+    if reports.is_empty() {
+        println!("No torrents have missing or wrong-sized payload files.");
+        return;
+    }
+    for report in reports {
+        println!(
+            "torrent {} {} ({})\nsave_path: {}\ndiagnosis: {:?}",
+            report.id,
+            report.name,
+            report.info_hash,
+            report.save_path.display(),
+            report.diagnosis
+        );
+        println!("status\tparent\texpected\tactual\tpath");
+        for file in &report.files {
+            let (status, actual) = match file.status {
+                librtbit::MissingFileStatus::Exists => ("exists", file.expected_size.to_string()),
+                librtbit::MissingFileStatus::WrongSize { actual_size } => {
+                    ("wrong-size", actual_size.to_string())
+                }
+                librtbit::MissingFileStatus::Absent => ("absent", "-".into()),
+            };
+            println!(
+                "{status}\t{}\t{}\t{actual}\t{}",
+                if file.parent_dir_exists {
+                    "exists"
+                } else {
+                    "absent"
+                },
+                file.expected_size,
+                file.path.display()
+            );
+        }
+        println!();
     }
 }
 
@@ -1266,6 +1356,7 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
         SubCommand::Completions(_) => unreachable!(),
         SubCommand::Auth(_) => unreachable!(),
         SubCommand::Config(_) => unreachable!(),
+        SubCommand::Diagnose(_) => unreachable!(),
     }
 }
 
