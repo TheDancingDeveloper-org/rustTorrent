@@ -62,7 +62,13 @@ impl JsonSessionPersistenceStore {
                 let mut rdr = tokio::io::BufReader::new(f);
                 rdr.read_to_end(&mut buf).await?;
 
-                serde_json::from_reader(&buf[..]).context("error deserializing session database")?
+                match serde_json::from_slice(&buf) {
+                    Ok(db) => db,
+                    Err(e) => {
+                        quarantine_corrupt(&db_filename, &e);
+                        Default::default()
+                    }
+                }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Default::default(),
             Err(e) => {
@@ -106,19 +112,14 @@ impl JsonSessionPersistenceStore {
         trace!(?tmp_filename, "serialized DB as JSON");
         // The database now holds the proxy URL, including its password, so the
         // file is owner-only the same way the other private config files are.
-        write_owner_only(&tmp_filename, &buf)
-            .with_context(|| format!("error writing {tmp_filename:?}"))?;
-        trace!(?tmp_filename, "wrote to temp file");
-
-        tokio::fs::rename(&tmp_filename, &self.db_filename)
-            .await
-            .context("error renaming persistence file")?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&self.db_filename, std::fs::Permissions::from_mode(0o600))
-                .with_context(|| format!("error restricting {:?}", self.db_filename))?;
-        }
+        atomic_write(
+            std::path::Path::new(&tmp_filename),
+            &self.db_filename,
+            &buf,
+            true,
+        )
+        .await
+        .with_context(|| format!("error writing {:?}", self.db_filename))?;
         trace!(filename=?self.db_filename, "wrote persistence");
         Ok(())
     }
@@ -277,20 +278,10 @@ impl BitVFactory for JsonSessionPersistenceStore {
         // Use a distinct .init_tmp suffix from the DiskBackedBitV flusher (which uses .bitv.tmp)
         // to avoid a race where an old flusher's rename steals our temp file before we rename it.
         let tmp_filename = format!("{}.init_tmp", filename.to_str().context("bug")?);
-        let mut dst = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&tmp_filename)
-            .await
-            .with_context(|| format!("error opening {tmp_filename:?}"))?;
         let data = crate::bitv::bitv_with_header(b.as_raw_slice());
-        dst.write_all(&data)
+        atomic_write(std::path::Path::new(&tmp_filename), &filename, &data, false)
             .await
-            .with_context(|| format!("error writing bitslice to {tmp_filename:?}"))?;
-        tokio::fs::rename(&tmp_filename, &filename)
-            .await
-            .with_context(|| format!("error renaming {tmp_filename:?} to {filename:?}"))?;
+            .with_context(|| format!("error writing {filename:?}"))?;
         trace!(?filename, "stored initial check bitfield");
         Ok(DiskBackedBitV::new(filename.clone(), self.spawner.clone())
             .await
@@ -409,9 +400,13 @@ impl SessionPersistenceStore for JsonSessionPersistenceStore {
                 let mut buf = Vec::new();
                 let mut rdr = tokio::io::BufReader::new(f);
                 rdr.read_to_end(&mut buf).await?;
-                let categories: HashMap<String, TorrentCategory> =
-                    serde_json::from_reader(&buf[..]).context("error deserializing categories")?;
-                Ok(categories)
+                match serde_json::from_slice(&buf) {
+                    Ok(categories) => Ok(categories),
+                    Err(e) => {
+                        quarantine_corrupt(&filename, &e);
+                        Ok(HashMap::new())
+                    }
+                }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
             Err(e) => Err(e).context(format!("error opening categories file {filename:?}")),
@@ -423,26 +418,11 @@ impl SessionPersistenceStore for JsonSessionPersistenceStore {
         categories: &HashMap<String, TorrentCategory>,
     ) -> anyhow::Result<()> {
         let filename = self.categories_filename();
-        let tmp_filename = format!("{}.tmp", filename.to_str().unwrap());
-        let mut tmp = tokio::fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&tmp_filename)
+        let tmp_filename = filename.with_extension("json.tmp");
+        let buf = serde_json::to_vec_pretty(categories).context("error serializing categories")?;
+        atomic_write(&tmp_filename, &filename, &buf, false)
             .await
-            .with_context(|| format!("error opening {tmp_filename:?}"))?;
-
-        let mut buf = Vec::new();
-        serde_json::to_writer_pretty(&mut buf, categories)
-            .context("error serializing categories")?;
-
-        tmp.write_all(&buf)
-            .await
-            .with_context(|| format!("error writing {tmp_filename:?}"))?;
-
-        tokio::fs::rename(&tmp_filename, &filename)
-            .await
-            .context("error renaming categories file")?;
+            .with_context(|| format!("error writing {filename:?}"))?;
         trace!(filename=?filename, "wrote categories");
         Ok(())
     }
@@ -450,7 +430,13 @@ impl SessionPersistenceStore for JsonSessionPersistenceStore {
     async fn load_tags(&self) -> anyhow::Result<BTreeSet<String>> {
         let filename = self.tags_filename();
         match tokio::fs::read(&filename).await {
-            Ok(buf) => serde_json::from_slice(&buf).context("error deserializing tags"),
+            Ok(buf) => match serde_json::from_slice(&buf) {
+                Ok(tags) => Ok(tags),
+                Err(e) => {
+                    quarantine_corrupt(&filename, &e);
+                    Ok(BTreeSet::new())
+                }
+            },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeSet::new()),
             Err(e) => Err(e).context(format!("error reading tags file {filename:?}")),
         }
@@ -460,35 +446,77 @@ impl SessionPersistenceStore for JsonSessionPersistenceStore {
         let filename = self.tags_filename();
         let tmp_filename = filename.with_extension("json.tmp");
         let buf = serde_json::to_vec_pretty(tags).context("error serializing tags")?;
-        tokio::fs::write(&tmp_filename, &buf)
+        atomic_write(&tmp_filename, &filename, &buf, false)
             .await
-            .with_context(|| format!("error writing {tmp_filename:?}"))?;
-        tokio::fs::rename(&tmp_filename, &filename)
-            .await
-            .context("error renaming tags file")?;
+            .with_context(|| format!("error writing {filename:?}"))?;
         trace!(filename=?filename, "wrote tags");
         Ok(())
     }
 }
-/// Write bytes to a new file that only the owner can read. Used for the session
-/// database because it stores the proxy URL with its password.
-fn write_owner_only(path: &str, bytes: &[u8]) -> anyhow::Result<()> {
-    if let Some(parent) = std::path::Path::new(path).parent() {
-        std::fs::create_dir_all(parent)?;
+/// Crash-safe replace of `dest`: write `tmp`, fsync it, rename over `dest`,
+/// then fsync the parent directory so the rename itself is durable.
+async fn atomic_write(
+    tmp: &std::path::Path,
+    dest: &std::path::Path,
+    bytes: &[u8],
+    owner_only: bool,
+) -> anyhow::Result<()> {
+    let (tmp, dest, bytes) = (tmp.to_owned(), dest.to_owned(), bytes.to_vec());
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        use std::io::Write;
+        let _ = std::fs::remove_file(&tmp);
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if owner_only {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let _ = owner_only;
+        let mut file = options
+            .open(&tmp)
+            .with_context(|| format!("error opening {tmp:?}"))?;
+        file.write_all(&bytes)
+            .with_context(|| format!("error writing {tmp:?}"))?;
+        file.sync_all()
+            .with_context(|| format!("error syncing {tmp:?}"))?;
+        drop(file);
+        std::fs::rename(&tmp, &dest)
+            .with_context(|| format!("error renaming {tmp:?} to {dest:?}"))?;
+        #[cfg(unix)]
+        if let Some(parent) = dest.parent() {
+            let parent = if parent.as_os_str().is_empty() {
+                std::path::Path::new(".")
+            } else {
+                parent
+            };
+            std::fs::File::open(parent)
+                .and_then(|d| d.sync_all())
+                .with_context(|| format!("error syncing directory {parent:?}"))?;
+        }
+        Ok(())
+    })
+    .await
+    .context("atomic write task failed")?
+}
+
+/// Move an unparseable state file aside as `<name>.corrupt` and warn, so the
+/// daemon starts with empty state instead of refusing to start.
+fn quarantine_corrupt(path: &std::path::Path, err: &dyn std::fmt::Display) {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".corrupt");
+    let corrupt = PathBuf::from(name);
+    match std::fs::rename(path, &corrupt) {
+        Ok(()) => warn!(
+            ?path,
+            ?corrupt,
+            "corrupt state file ({err}); quarantined, starting with empty state"
+        ),
+        Err(re) => warn!(
+            ?path,
+            "corrupt state file ({err}); could not quarantine: {re}; starting with empty state"
+        ),
     }
-    let _ = std::fs::remove_file(path);
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
-    use std::io::Write;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -574,6 +602,28 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(again.load_session_settings().await.unwrap().proxy_url, None);
+    }
+
+    #[tokio::test]
+    async fn truncated_state_files_are_quarantined() {
+        let dir = tempfile::tempdir().unwrap();
+        let spawner = BlockingSpawner::new(1);
+        for name in ["tags.json", "categories.json", "session.json"] {
+            std::fs::write(dir.path().join(name), b"{\"trunc").unwrap();
+        }
+        let store = JsonSessionPersistenceStore::new(dir.path().to_path_buf(), spawner)
+            .await
+            .unwrap();
+        assert!(store.load_tags().await.unwrap().is_empty());
+        assert!(store.load_categories().await.unwrap().is_empty());
+        assert!(store.load_session_settings().await.is_ok());
+        for name in ["tags.json", "categories.json", "session.json"] {
+            assert!(!dir.path().join(name).exists(), "{name} should be moved");
+            assert!(dir.path().join(format!("{name}.corrupt")).exists());
+        }
+        let tags: BTreeSet<String> = ["a".to_owned()].into();
+        store.store_tags(&tags).await.unwrap();
+        assert_eq!(store.load_tags().await.unwrap(), tags);
     }
 
     #[tokio::test]
