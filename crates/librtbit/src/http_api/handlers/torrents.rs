@@ -886,19 +886,25 @@ pub async fn h_bulk_set_torrent_category(
     axum::Json(req): axum::Json<BulkCategoryRequest>,
 ) -> impl IntoResponse {
     let mut failures = Vec::new();
-    for id in req.ids {
+    for raw_id in req.ids {
+        let id = match usize::try_from(raw_id) {
+            Ok(id) => id,
+            Err(_) => {
+                return (StatusCode::BAD_REQUEST, "torrent id is out of range").into_response();
+            }
+        };
         if let Err(error) = state
             .api
             .api_set_torrent_category(TorrentIdOrHash::Id(id), req.category.clone())
             .await
         {
             failures.push(BulkEditFailure {
-                id,
+                id: raw_id,
                 error: format!("{error:#}"),
             });
         }
     }
-    axum::Json(BulkEditResponse { failures })
+    axum::Json(BulkEditResponse { failures }).into_response()
 }
 
 pub async fn h_bulk_add_torrent_tags(
@@ -906,19 +912,25 @@ pub async fn h_bulk_add_torrent_tags(
     axum::Json(req): axum::Json<BulkTagsRequest>,
 ) -> impl IntoResponse {
     let mut failures = Vec::new();
-    for id in req.ids {
+    for raw_id in req.ids {
+        let id = match usize::try_from(raw_id) {
+            Ok(id) => id,
+            Err(_) => {
+                return (StatusCode::BAD_REQUEST, "torrent id is out of range").into_response();
+            }
+        };
         if let Err(error) = state
             .api
             .api_add_torrent_tags(TorrentIdOrHash::Id(id), &req.tags)
             .await
         {
             failures.push(BulkEditFailure {
-                id,
+                id: raw_id,
                 error: format!("{error:#}"),
             });
         }
     }
-    axum::Json(BulkEditResponse { failures })
+    axum::Json(BulkEditResponse { failures }).into_response()
 }
 
 pub async fn h_bulk_remove_torrent_tags(
@@ -926,19 +938,25 @@ pub async fn h_bulk_remove_torrent_tags(
     axum::Json(req): axum::Json<BulkTagsRequest>,
 ) -> impl IntoResponse {
     let mut failures = Vec::new();
-    for id in req.ids {
+    for raw_id in req.ids {
+        let id = match usize::try_from(raw_id) {
+            Ok(id) => id,
+            Err(_) => {
+                return (StatusCode::BAD_REQUEST, "torrent id is out of range").into_response();
+            }
+        };
         if let Err(error) = state
             .api
             .api_remove_torrent_tags(TorrentIdOrHash::Id(id), &req.tags)
             .await
         {
             failures.push(BulkEditFailure {
-                id,
+                id: raw_id,
                 error: format!("{error:#}"),
             });
         }
     }
-    axum::Json(BulkEditResponse { failures })
+    axum::Json(BulkEditResponse { failures }).into_response()
 }
 
 pub async fn h_list_categories(State(state): State<ApiState>) -> impl IntoResponse {
