@@ -251,6 +251,12 @@ pub struct SerializedTorrent {
     /// means the paths from the info dict.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     file_renames: BTreeMap<usize, PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    comment: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    auto_management: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    super_seeding: bool,
 }
 
 /// The per-torrent speed limits kept in session state. `None` is unlimited.
@@ -302,6 +308,9 @@ impl SerializedTorrent {
             force_start: self.force_start,
             sequential_download: self.sequential_download,
             first_last_piece_priority: self.first_last_piece_priority,
+            comment: self.comment.clone(),
+            auto_management: self.auto_management,
+            super_seeding: self.super_seeding,
         }
     }
 
@@ -381,6 +390,9 @@ pub(crate) struct RestoredState {
     force_start: bool,
     sequential_download: bool,
     first_last_piece_priority: bool,
+    comment: Option<String>,
+    auto_management: bool,
+    super_seeding: bool,
 }
 
 impl RestoredState {
@@ -406,6 +418,13 @@ impl RestoredState {
             self.first_last_piece_priority,
             std::sync::atomic::Ordering::Relaxed,
         );
+        *shared.comment_override.write() = self.comment;
+        shared
+            .auto_management
+            .store(self.auto_management, std::sync::atomic::Ordering::Relaxed);
+        shared
+            .super_seeding
+            .store(self.super_seeding, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
