@@ -514,46 +514,66 @@ fn files(
 }
 
 /// The piece bar's numbers: how many pieces are held out of the total.
-fn pieces_summary(snapshot: &DetailSnapshot) -> impl IntoElement {
+fn pieces_text(snapshot: &DetailSnapshot) -> String {
     let have = snapshot.pieces.have.iter().filter(|h| **h).count();
     let total = snapshot.pieces.have.len();
+    format!("Pieces held: {have} of {total}")
+}
+
+fn pieces_summary(snapshot: &DetailSnapshot) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
         .gap_1()
-        .child(Label::new(format!("Pieces held: {have} of {total}")))
+        .child(Label::new(pieces_text(snapshot)))
 }
 
-fn general(snapshot: &DetailSnapshot) -> impl IntoElement {
+/// The General tab's lines, in display order.
+fn general_lines(snapshot: &DetailSnapshot) -> Vec<String> {
     let torrent = &snapshot.torrent;
     let state = format::state_label(torrent.stats.as_ref().and_then(|stats| stats.state));
     let have = snapshot.pieces.have.iter().filter(|h| **h).count() as u64;
-    div()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .child(Label::new(torrent.name.clone().unwrap_or_default()))
-        .child(Label::new(format!("Info hash: {}", torrent.info_hash)))
-        .child(Label::new(format!("Folder: {}", torrent.output_folder)))
-        .child(Label::new(format!("State: {state}")))
-        .child(Label::new(format!(
+    vec![
+        torrent.name.clone().unwrap_or_default(),
+        format!("Info hash: {}", torrent.info_hash),
+        format!("Folder: {}", torrent.output_folder),
+        format!("State: {state}"),
+        format!(
             "Pieces: {}",
             format::progress(have, u64::from(torrent.total_pieces))
-        )))
+        ),
+    ]
 }
 
-fn peers_table(snapshot: &DetailSnapshot) -> impl IntoElement {
-    let rows = snapshot.peers.peers.iter().map(|peer| {
-        DataRow::new(
-            peer.addr.clone(),
+fn general(snapshot: &DetailSnapshot) -> impl IntoElement {
+    let mut column = div().flex().flex_col().gap_1();
+    for line in general_lines(snapshot) {
+        column = column.child(Label::new(line));
+    }
+    column
+}
+
+/// One row per connected peer: address, state, downloaded, uploaded.
+fn peer_rows(snapshot: &DetailSnapshot) -> Vec<[String; 4]> {
+    snapshot
+        .peers
+        .peers
+        .iter()
+        .map(|peer| {
             [
                 peer.addr.clone(),
                 peer.state.clone(),
                 format::bytes(peer.fetched_bytes),
                 format::bytes(peer.uploaded_bytes),
-            ],
-        )
-    });
+            ]
+        })
+        .collect()
+}
+
+fn peers_table(snapshot: &DetailSnapshot) -> impl IntoElement {
+    let rows = peer_rows(snapshot)
+        .into_iter()
+        .map(|cells| DataRow::new(cells[0].clone(), cells));
     DataTable::new()
         .columns([
             DataColumn::new("addr", "Address").width(200.0),
@@ -566,18 +586,27 @@ fn peers_table(snapshot: &DetailSnapshot) -> impl IntoElement {
         .max_body_height(240.0)
 }
 
-fn trackers_table(snapshot: &DetailSnapshot) -> impl IntoElement {
-    let rows = snapshot.trackers.trackers.iter().map(|tracker| {
-        DataRow::new(
-            tracker.url.clone(),
+/// One row per tracker: url, state, seeders, leechers.
+fn tracker_rows(snapshot: &DetailSnapshot) -> Vec<[String; 4]> {
+    snapshot
+        .trackers
+        .trackers
+        .iter()
+        .map(|tracker| {
             [
                 tracker.url.clone(),
                 format!("{:?}", tracker.state),
                 tracker.seeders.map_or_else(String::new, |n| n.to_string()),
                 tracker.leechers.map_or_else(String::new, |n| n.to_string()),
-            ],
-        )
-    });
+            ]
+        })
+        .collect()
+}
+
+fn trackers_table(snapshot: &DetailSnapshot) -> impl IntoElement {
+    let rows = tracker_rows(snapshot)
+        .into_iter()
+        .map(|cells| DataRow::new(cells[0].clone(), cells));
     DataTable::new()
         .columns([
             DataColumn::new("url", "Tracker").width(260.0),
@@ -875,5 +904,182 @@ mod tests {
         };
         drive(cx, |_| count_posts(&runtime, &server) == 1);
         pane.read_with(cx, |p, _| assert!(p.error().is_none()));
+    }
+
+    fn loaded(cx: &mut TestAppContext) -> (Arc<Runtime>, MockServer, Entity<DetailPane>) {
+        let (runtime, server) = daemon(cx);
+        let pane = cx.new(DetailPane::new);
+        pane.update(cx, |pane, cx| pane.select_torrent(7, cx));
+        drive(cx, |cx| pane.read_with(cx, |p, _| p.snapshot().is_some()));
+        (runtime, server, pane)
+    }
+
+    fn count_posts(runtime: &Runtime, server: &MockServer, route: &str) -> usize {
+        runtime
+            .block_on(server.received_requests())
+            .unwrap()
+            .iter()
+            .filter(|r| r.method.as_str() == "POST" && r.url.path() == route)
+            .count()
+    }
+
+    #[gpui::test]
+    fn general_tab_shows_name_hash_folder_and_pieces(cx: &mut TestAppContext) {
+        let (_r, _s, pane) = loaded(cx);
+        pane.read_with(cx, |p, _| {
+            let lines = general_lines(p.snapshot().unwrap());
+            assert_eq!(lines[0], "example");
+            assert_eq!(lines[1], "Info hash: abc");
+            assert_eq!(lines[2], "Folder: /data");
+            assert_eq!(lines[3], "State: —");
+            assert_eq!(lines[4], "Pieces: 1 B / 10 B");
+        });
+    }
+
+    #[gpui::test]
+    fn general_tab_is_the_default_tab(cx: &mut TestAppContext) {
+        let (_r, _s, pane) = loaded(cx);
+        pane.read_with(cx, |p, cx| assert_eq!(p.active_tab(cx), "general"));
+    }
+
+    #[gpui::test]
+    fn files_tab_tree_lists_fixture_files_with_sizes_and_priority(cx: &mut TestAppContext) {
+        let (_r, _s, pane) = loaded(cx);
+        pane.read_with(cx, |p, _| {
+            let files = p.files().unwrap();
+            let tree = file_tree(&files, &HashSet::new());
+            let ids: Vec<&str> = tree.iter().map(|i| i.id.as_ref()).collect();
+            assert_eq!(ids, ["file:0", "file:1"]);
+            assert_eq!(tree[0].badge.as_deref(), Some("100 B  Normal"));
+            assert_eq!(tree[1].badge.as_deref(), Some("50 B  Do not download"));
+        });
+    }
+
+    #[gpui::test]
+    fn peers_tab_shows_the_peer_row(cx: &mut TestAppContext) {
+        let (_r, _s, pane) = loaded(cx);
+        pane.read_with(cx, |p, _| {
+            let rows = peer_rows(p.snapshot().unwrap());
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0], ["1.2.3.4:6881", "live", "20 B", "5 B"]);
+        });
+    }
+
+    #[gpui::test]
+    fn trackers_tab_shows_status_and_swarm_counts(cx: &mut TestAppContext) {
+        let (_r, _s, pane) = loaded(cx);
+        pane.read_with(cx, |p, _| {
+            let rows = tracker_rows(p.snapshot().unwrap());
+            assert_eq!(
+                rows,
+                [["http://tracker.example/announce", "Working", "4", "1"]]
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn pieces_tab_text_reports_one_of_ten(cx: &mut TestAppContext) {
+        let (_r, _s, pane) = loaded(cx);
+        pane.read_with(cx, |p, _| {
+            assert_eq!(pieces_text(p.snapshot().unwrap()), "Pieces held: 1 of 10");
+        });
+    }
+
+    #[gpui::test]
+    fn tab_switch_follows_the_strip(cx: &mut TestAppContext) {
+        let (_r, _s, pane) = loaded(cx);
+        for (i, (id, _)) in TABS.iter().enumerate() {
+            pane.update(cx, |pane, cx| {
+                pane.tabs.update(cx, |strip, _| strip.active = i);
+                assert_eq!(pane.active_tab(cx), *id);
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn toggle_node_on_an_excluded_file_posts_included_true(cx: &mut TestAppContext) {
+        let (runtime, server, pane) = loaded(cx);
+        runtime.block_on(
+            Mock::given(method("POST"))
+                .and(path("/torrents/7/files/1/included"))
+                .and(body_string(r#"{"included":true}"#))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server),
+        );
+        pane.update(cx, |pane, cx| pane.toggle_node("file:1", cx));
+        drive(cx, |_| {
+            count_posts(&runtime, &server, "/torrents/7/files/1/included") == 1
+        });
+        pane.read_with(cx, |p, _| assert!(p.error().is_none()));
+    }
+
+    #[gpui::test]
+    fn toggle_node_on_an_included_file_posts_included_false(cx: &mut TestAppContext) {
+        let (runtime, server, pane) = loaded(cx);
+        runtime.block_on(
+            Mock::given(method("POST"))
+                .and(path("/torrents/7/files/0/included"))
+                .and(body_string(r#"{"included":false}"#))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server),
+        );
+        pane.update(cx, |pane, cx| pane.toggle_node("file:0", cx));
+        drive(cx, |_| {
+            count_posts(&runtime, &server, "/torrents/7/files/0/included") == 1
+        });
+    }
+
+    #[gpui::test]
+    fn including_an_already_included_file_posts_nothing(cx: &mut TestAppContext) {
+        let (runtime, server, pane) = loaded(cx);
+        pane.update(cx, |pane, cx| pane.set_included(&[0], true, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            count_posts(&runtime, &server, "/torrents/7/files/0/included"),
+            0
+        );
+    }
+
+    #[gpui::test]
+    fn failed_file_post_shows_an_error(cx: &mut TestAppContext) {
+        let (runtime, server, pane) = loaded(cx);
+        runtime.block_on(
+            Mock::given(method("POST"))
+                .and(path("/torrents/7/files/1/included"))
+                .respond_with(ResponseTemplate::new(500))
+                .mount(&server),
+        );
+        pane.update(cx, |pane, cx| pane.toggle_file(1, cx));
+        drive(cx, |cx| pane.read_with(cx, |p, _| p.error().is_some()));
+    }
+
+    #[gpui::test]
+    fn clear_drops_the_snapshot_and_selection(cx: &mut TestAppContext) {
+        let (_r, _s, pane) = loaded(cx);
+        pane.update(cx, |pane, cx| {
+            pane.select_node("file:0".into(), cx);
+            assert!(pane.selected_node().is_some());
+            pane.clear(cx);
+        });
+        pane.read_with(cx, |p, _| {
+            assert!(p.snapshot().is_none());
+            assert_eq!(p.torrent_id(), None);
+            assert!(p.selected_node().is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn toggle_without_a_loaded_torrent_is_ignored(cx: &mut TestAppContext) {
+        let (runtime, server) = daemon(cx);
+        let pane = cx.new(DetailPane::new);
+        pane.update(cx, |pane, cx| {
+            pane.toggle_file(0, cx);
+            pane.toggle_node("file:0", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            count_posts(&runtime, &server, "/torrents/7/files/0/included"),
+            0
+        );
     }
 }
