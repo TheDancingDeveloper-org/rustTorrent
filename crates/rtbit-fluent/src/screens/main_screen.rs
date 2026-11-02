@@ -326,12 +326,66 @@ impl MainScreen {
             &dialog,
             |screen: &mut Self, dialog: Entity<AddDialog>, event: &AddDialogEvent, cx| match event {
                 AddDialogEvent::Cancel => screen.close_add(cx),
-                AddDialogEvent::Submit(request) => screen.send_add(dialog, request.clone(), cx),
+                AddDialogEvent::Submit(requests) => screen.send_add(dialog, requests.clone(), cx),
             },
         );
         self.add = Some(dialog);
         self._add_events = Some(events);
         cx.notify();
+    }
+
+    pub(crate) fn open_add_with_magnet(&mut self, magnet: &str, cx: &mut Context<Self>) {
+        self.open_add(cx);
+        if let Some(dialog) = &self.add {
+            dialog.update(cx, |dialog, cx| dialog.prefill_magnet(magnet.trim(), cx));
+        }
+    }
+
+    pub(crate) fn open_add_with_paths(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        self.open_add(cx);
+        if paths.is_empty() {
+            return;
+        }
+        let Some(dialog) = &self.add else { return };
+        let dialog = dialog.clone();
+        let paths = paths.to_owned();
+        let task = cx.background_executor().spawn(async move {
+            paths
+                .into_iter()
+                .map(|path| {
+                    let name = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("torrent")
+                        .to_owned();
+                    (name, std::fs::read(path))
+                })
+                .collect::<Vec<_>>()
+        });
+        cx.spawn(async move |_, cx| {
+            let results = task.await;
+            dialog.update(cx, |dialog, cx| {
+                let mut files = Vec::new();
+                for (name, result) in results {
+                    match result {
+                        Ok(bytes) => files.push((name, bytes)),
+                        Err(err) => {
+                            dialog.set_error(format!("could not read torrent: {err}"), cx);
+                            return;
+                        }
+                    }
+                }
+                dialog.set_files(files, cx);
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn show_not_torrent_toast(&mut self, cx: &mut Context<Self>) {
+        ToastStack::push(
+            Toast::new("not-torrent", "That drop is not a torrent.").intent(MessageIntent::Warning),
+            cx,
+        );
     }
 
     /// Open the add dialog with the clipboard's magnet link filled in. Does nothing when the
@@ -360,7 +414,12 @@ impl MainScreen {
 
     /// Send an add request through the bridge. The dialog closes on success and
     /// shows the daemon's reason on failure.
-    fn send_add(&mut self, dialog: Entity<AddDialog>, request: AddRequest, cx: &mut Context<Self>) {
+    fn send_add(
+        &mut self,
+        dialog: Entity<AddDialog>,
+        requests: Vec<AddRequest>,
+        cx: &mut Context<Self>,
+    ) {
         if !cx.has_global::<Bridge>() {
             dialog.update(cx, |dialog, cx| {
                 dialog.refused("Not connected to a daemon.".to_owned(), cx);
@@ -368,31 +427,39 @@ impl MainScreen {
             return;
         }
         let rx = cx.global::<Bridge>().call(move |client| async move {
-            let AddRequest {
+            let mut client = client.lock().await;
+            for AddRequest {
                 source,
                 save_path,
                 category,
                 start_paused,
-            } = request;
-            let category = (!category.is_empty()).then_some(category);
-            let mut client = client.lock().await;
-            match source {
-                AddSource::Magnet(magnet) => {
-                    client
-                        .add_magnet(&magnet, Some(&save_path), category.as_deref(), start_paused)
-                        .await
-                }
-                AddSource::File { bytes, .. } => {
-                    client
-                        .add_torrent_file(
-                            &bytes,
-                            Some(&save_path),
-                            category.as_deref(),
-                            start_paused,
-                        )
-                        .await
+            } in requests
+            {
+                let category = (!category.is_empty()).then_some(category);
+                match source {
+                    AddSource::Magnet(magnet) => {
+                        client
+                            .add_magnet(
+                                &magnet,
+                                Some(&save_path),
+                                category.as_deref(),
+                                start_paused,
+                            )
+                            .await?
+                    }
+                    AddSource::File { bytes, .. } => {
+                        client
+                            .add_torrent_file(
+                                &bytes,
+                                Some(&save_path),
+                                category.as_deref(),
+                                start_paused,
+                            )
+                            .await?
+                    }
                 }
             }
+            Ok(())
         });
         self._add_send = Some(
             cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
