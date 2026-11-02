@@ -794,7 +794,7 @@
       "endpoint": "torrents/filePrio",
       "method": "POST",
       "status": "partial",
-      "notes": "Maps priority 0 to file exclusion and any non-zero priority to inclusion (no per-file priority tiers).",
+      "notes": "Accepts and persists the full per-file priority levels 0 (skipped), 1 (normal), 6 (high), and 7 (maximum); values round-trip through torrents/files.",
       "response": {
         "content": "text"
       }
@@ -965,7 +965,7 @@
       "endpoint": "torrents/pieceStates",
       "method": "GET",
       "status": "partial",
-      "notes": "Emits 0 (not downloaded) / 2 (downloaded) from the have bitfield; the in-flight state 1 is not distinguished.",
+      "notes": "Emits 0 (not downloaded), 1 (currently in-flight), or 2 (downloaded) for each piece.",
       "response": {
         "content": "json",
         "schema": [
@@ -1287,7 +1287,7 @@
       "endpoint": "torrents/trackers",
       "method": "GET",
       "status": "partial",
-      "notes": "Real per-tracker announce state; tier always 0 and num_downloaded always -1 (not tracked).",
+      "notes": "Real per-tracker announce state and peer counts. Tracker tier and num_downloaded remain unavailable because configured trackers are currently stored without tier or scrape-download metadata.",
       "response": {
         "content": "json",
         "schema": [
