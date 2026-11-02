@@ -3,7 +3,8 @@
 use fluent_app::WindowTitle;
 use fluent_layout::{SelectableList, SelectableListItem};
 use gpui::{
-    AnyElement, Context, Entity, IntoElement, Render, Subscription, Window, div, prelude::*, px,
+    AnyElement, ClipboardItem, Context, Entity, ExternalPaths, IntoElement, Render, Subscription,
+    Window, div, prelude::*, px,
 };
 use rtbit_ui_core::{Connection, Screen, Snapshot, StatusFilter};
 
@@ -13,6 +14,29 @@ use crate::screens::main_screen::MainEvent;
 use crate::screens::rss::RssScreen;
 use crate::screens::settings::SettingsScreen;
 use crate::widgets::status_bar::StatusBar;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DropKind {
+    TorrentFiles,
+    Magnet,
+    Other,
+}
+
+pub(crate) fn classify_drop(paths: Option<&ExternalPaths>, text: Option<&str>) -> DropKind {
+    if paths.is_some_and(|paths| {
+        !paths.paths().is_empty()
+            && paths.paths().iter().all(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("torrent"))
+            })
+    }) {
+        return DropKind::TorrentFiles;
+    }
+    if text.is_some_and(|text| text.trim_start().starts_with("magnet:?")) {
+        return DropKind::Magnet;
+    }
+    DropKind::Other
+}
 
 /// Screens reachable from the sidebar. Connect and Setup come before login and are not listed.
 const NAV: [(&str, &str, Screen); 3] = [
@@ -239,6 +263,30 @@ impl Render for Shell {
             });
 
         div()
+            .on_drop(cx.listener(|shell, item: &ExternalPaths, window, cx| {
+                if classify_drop(Some(item), None) == DropKind::TorrentFiles {
+                    shell
+                        .main
+                        .update(cx, |main, cx| main.open_add_with_paths(item.paths(), cx));
+                } else {
+                    shell
+                        .main
+                        .update(cx, |main, cx| main.show_not_torrent_toast(cx));
+                }
+                window.refresh();
+            }))
+            .on_drop(cx.listener(|shell, item: &ClipboardItem, window, cx| {
+                let text = item.text();
+                match classify_drop(None, text.as_deref()) {
+                    DropKind::Magnet => shell.main.update(cx, |main, cx| {
+                        main.open_add_with_magnet(text.as_deref().unwrap_or_default(), cx);
+                    }),
+                    DropKind::Other | DropKind::TorrentFiles => shell
+                        .main
+                        .update(cx, |main, cx| main.show_not_torrent_toast(cx)),
+                }
+                window.refresh();
+            }))
             .flex()
             .size_full()
             .child(
@@ -275,6 +323,21 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
+
+    #[test]
+    fn classifies_torrent_magnet_and_other_drops() {
+        let paths = ExternalPaths(
+            [std::path::PathBuf::from("one.TORRENT")]
+                .into_iter()
+                .collect(),
+        );
+        assert_eq!(classify_drop(Some(&paths), None), DropKind::TorrentFiles);
+        assert_eq!(
+            classify_drop(None, Some("  magnet:?xt=urn:btih:abc")),
+            DropKind::Magnet
+        );
+        assert_eq!(classify_drop(None, Some("hello")), DropKind::Other);
+    }
 
     /// A daemon whose `/auth/login` answers `login`, with the snapshot routes the main screen polls.
     fn daemon(runtime: &tokio::runtime::Runtime, login: u16) -> MockServer {
