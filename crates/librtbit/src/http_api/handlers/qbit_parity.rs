@@ -1672,7 +1672,7 @@ async fn bridge_endpoints_through_compat_router() {
         .json();
     assert_eq!(states, Value::from(vec![2; pieces]));
 
-    // filePrio: 0 skips a file, any other level includes it again.
+    // filePrio preserves qBittorrent's skip/normal/high/max levels.
     let file_priorities = || async {
         get(&router, &format!("/torrents/files?hash={hash}"))
             .await
@@ -1699,8 +1699,12 @@ async fn bridge_endpoints_through_compat_router() {
     };
     assert_eq!(set_prio("1", "0").await, StatusCode::OK);
     assert_eq!(file_priorities().await, vec![1, 0]);
+    assert_eq!(set_prio("0", "6").await, StatusCode::OK);
+    assert_eq!(file_priorities().await, vec![6, 0]);
     assert_eq!(set_prio("1", "7").await, StatusCode::OK);
-    assert_eq!(file_priorities().await, vec![1, 1]);
+    assert_eq!(file_priorities().await, vec![6, 7]);
+    assert_eq!(set_prio("0", "1").await, StatusCode::OK);
+    assert_eq!(file_priorities().await, vec![1, 7]);
     assert_eq!(set_prio("5", "0").await, StatusCode::CONFLICT);
 
     let added = post_form(

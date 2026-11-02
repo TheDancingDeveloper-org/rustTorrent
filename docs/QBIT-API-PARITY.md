@@ -88,6 +88,10 @@ of H4, and tag persistence):
   qBittorrent's default of 3. There is no combined `max_active_torrents` limit
   (reported as -1). A newly added torrent starts at once and is moved back to
   the queue by the next pass if the queue is full.
+- **Per-file priorities**: `torrents/filePrio` accepts and persists qBittorrent's
+  `0` (skipped), `1` (normal), `6` (high), and `7` (maximum) levels. The values
+  round-trip through `torrents/files`; `0` retains the existing include/skip
+  behavior, while the picker requests pieces from higher-priority files first.
 - **Errors**: compat handlers return plain-text errors through one helper, with
   lowercase messages. Serde parse details are no longer echoed to clients.
 

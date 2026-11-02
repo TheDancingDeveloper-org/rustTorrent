@@ -12,6 +12,7 @@ pub struct TorrentStatePaused {
     pub(crate) metadata: Arc<TorrentMetadata>,
     pub(crate) files: FileStorage,
     pub(crate) chunk_tracker: ChunkTracker,
+    pub(crate) file_priority_levels: Vec<u8>,
     pub(crate) streams: Arc<TorrentStreams>,
 }
 
