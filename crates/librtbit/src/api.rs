@@ -282,7 +282,7 @@ impl Api {
         let only_files = handle.only_files();
         let category = handle.shared().category.read().clone();
         let output_folder = handle.output_folder().to_string_lossy().into_owned();
-        make_torrent_details(
+        let mut details = make_torrent_details(
             Some(handle.id()),
             &info_hash,
             handle.metadata.load().as_ref().map(|r| &r.info),
@@ -290,7 +290,18 @@ impl Api {
             only_files.as_deref(),
             output_folder,
             category,
-        )
+        )?;
+        if let Some(files) = details.files.as_mut() {
+            let priorities = handle.file_priority_levels();
+            for (index, file) in files.iter_mut().enumerate() {
+                file.priority =
+                    priorities
+                        .get(index)
+                        .copied()
+                        .unwrap_or(if file.included { 1 } else { 0 });
+            }
+        }
+        Ok(details)
     }
 
     pub fn api_session_stats(&self) -> SessionStatsSnapshot {
@@ -963,8 +974,14 @@ pub struct TorrentDetailsResponseFile {
     pub components: Vec<String>,
     pub length: u64,
     pub included: bool,
+    #[serde(default = "default_file_priority")]
+    pub priority: u8,
     #[cfg_attr(feature = "swagger", schema(value_type = Object))]
     pub attributes: FileDetailsAttrs,
+}
+
+const fn default_file_priority() -> u8 {
+    1
 }
 
 #[derive(Default, Serialize)]
@@ -1033,6 +1050,7 @@ fn make_torrent_details(
                     components,
                     length: d.len,
                     included,
+                    priority: if included { 1 } else { 0 },
                     attributes: d.attrs(),
                 }
             })
