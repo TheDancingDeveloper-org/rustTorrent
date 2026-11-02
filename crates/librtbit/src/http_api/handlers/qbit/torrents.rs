@@ -714,6 +714,21 @@ pub(super) fn qbit_tracker_status(state: tracker_comms::TrackerAnnounceState) ->
     }
 }
 
+pub(super) fn qbit_tracker_info(t: tracker_comms::TrackerStatus) -> QbitTrackerInfo {
+    QbitTrackerInfo {
+        status: qbit_tracker_status(t.state),
+        tier: i32::try_from(t.tier).unwrap_or(i32::MAX),
+        num_peers: t.peers_returned.map_or(-1, i64::from),
+        num_seeds: t.seeders.map_or(-1, i64::from),
+        num_leeches: t.leechers.map_or(-1, i64::from),
+        num_downloaded: t
+            .num_downloaded
+            .map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX)),
+        msg: t.last_error.unwrap_or_default(),
+        url: t.url,
+    }
+}
+
 pub(super) async fn h_torrents_trackers(
     State(state): State<Arc<QbitState>>,
     Query(query): Query<HashQuery>,
@@ -731,16 +746,7 @@ pub(super) async fn h_torrents_trackers(
     let trackers: Vec<QbitTrackerInfo> = response
         .trackers
         .into_iter()
-        .map(|t| QbitTrackerInfo {
-            status: qbit_tracker_status(t.state),
-            tier: 0,
-            num_peers: t.peers_returned.map_or(-1, i64::from),
-            num_seeds: t.seeders.map_or(-1, i64::from),
-            num_leeches: t.leechers.map_or(-1, i64::from),
-            num_downloaded: -1,
-            msg: t.last_error.unwrap_or_default(),
-            url: t.url,
-        })
+        .map(qbit_tracker_info)
         .collect();
     axum::Json(trackers).into_response()
 }

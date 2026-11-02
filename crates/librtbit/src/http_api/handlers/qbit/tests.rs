@@ -1571,6 +1571,28 @@ fn tracker_status_maps_to_qbit_codes() {
 }
 
 #[test]
+fn tracker_info_maps_tier_and_completed_count() {
+    use super::qbit_tracker_info;
+    use tracker_comms::{TrackerAnnounceState, TrackerStatus};
+
+    let info = qbit_tracker_info(TrackerStatus {
+        url: "https://tracker.example/announce".to_owned(),
+        state: TrackerAnnounceState::Working,
+        tier: 3,
+        seeders: Some(4),
+        leechers: Some(2),
+        peers_returned: Some(6),
+        num_downloaded: Some(17),
+        last_announce_unix: Some(1),
+        interval_secs: Some(60),
+        last_error: None,
+    });
+
+    assert_eq!(info.tier, 3);
+    assert_eq!(info.num_downloaded, 17);
+}
+
+#[test]
 fn rate_limit_conversions_round_trip_and_treat_zero_as_unlimited() {
     use std::num::NonZeroU32;
     assert_eq!(super::limit_to_bps(0), None);

@@ -34,12 +34,16 @@ pub enum TrackerAnnounceState {
 pub struct TrackerStatus {
     pub url: String,
     pub state: TrackerAnnounceState,
+    /// Zero-based announce-list tier containing this tracker.
+    pub tier: u32,
     /// Seeder count ("complete") reported by the last successful announce.
     pub seeders: Option<u32>,
     /// Leecher count ("incomplete") reported by the last successful announce.
     pub leechers: Option<u32>,
     /// Number of peer addresses returned by the last successful announce.
     pub peers_returned: Option<u32>,
+    /// Number of peers that have completed the torrent, as reported by the tracker.
+    pub num_downloaded: Option<u64>,
     /// Unix timestamp of the last successful announce.
     pub last_announce_unix: Option<u64>,
     /// Announce interval (seconds) the tracker asked for.
@@ -48,13 +52,15 @@ pub struct TrackerStatus {
 }
 
 impl TrackerStatus {
-    fn new(url: String) -> Self {
+    fn new(url: String, tier: u32) -> Self {
         Self {
             url,
             state: TrackerAnnounceState::NotContacted,
+            tier,
             seeders: None,
             leechers: None,
             peers_returned: None,
+            num_downloaded: None,
             last_announce_unix: None,
             interval_secs: None,
             last_error: None,
@@ -92,9 +98,14 @@ impl Default for TrackerStatusRegistry {
 }
 
 impl TrackerStatusRegistry {
-    fn insert_or_get<'a>(&self, g: &'a mut HashMap<String, Entry>, url: &str) -> &'a mut Entry {
+    fn insert_or_get<'a>(
+        &self,
+        g: &'a mut HashMap<String, Entry>,
+        url: &str,
+        tier: u32,
+    ) -> &'a mut Entry {
         g.entry(url.to_owned()).or_insert_with(|| Entry {
-            status: TrackerStatus::new(url.to_owned()),
+            status: TrackerStatus::new(url.to_owned(), tier),
             generation: self.next_generation.fetch_add(1, Ordering::Relaxed),
         })
     }
@@ -110,8 +121,13 @@ impl TrackerStatusRegistry {
     /// Register a tracker without changing its state. Returns the entry's
     /// generation, which an announce loop passes to [`Self::is_current`].
     pub fn ensure(&self, url: &str) -> u64 {
+        self.ensure_with_tier(url, 0)
+    }
+
+    /// Register a tracker with its announce-list tier.
+    pub fn ensure_with_tier(&self, url: &str, tier: u32) -> u64 {
         let mut g = self.inner.write();
-        self.insert_or_get(&mut g, url).generation
+        self.insert_or_get(&mut g, url, tier).generation
     }
 
     /// Whether a loop started at `generation` for `url` should keep announcing.
@@ -161,6 +177,7 @@ impl TrackerStatusRegistry {
         seeders: Option<u32>,
         leechers: Option<u32>,
         peers_returned: u32,
+        num_downloaded: Option<u64>,
         interval_secs: u64,
     ) {
         self.with_existing(url, |e| {
@@ -168,6 +185,7 @@ impl TrackerStatusRegistry {
             e.seeders = seeders.or(e.seeders);
             e.leechers = leechers.or(e.leechers);
             e.peers_returned = Some(peers_returned);
+            e.num_downloaded = num_downloaded.or(e.num_downloaded);
             e.last_announce_unix = Some(now_unix());
             e.interval_secs = Some(interval_secs);
             e.last_error = None;
@@ -183,7 +201,7 @@ impl TrackerStatusRegistry {
 
     pub fn record_disabled(&self, url: &str, reason: &str) {
         let mut g = self.inner.write();
-        let e = &mut self.insert_or_get(&mut g, url).status;
+        let e = &mut self.insert_or_get(&mut g, url, 0).status;
         e.state = TrackerAnnounceState::Disabled;
         e.last_error = Some(reason.to_owned());
     }
@@ -219,7 +237,7 @@ mod tests {
         assert!(!r.remove(URL));
 
         // A stopping loop's late report must not resurrect the entry.
-        r.record_success(URL, Some(1), Some(1), 1, 60);
+        r.record_success(URL, Some(1), Some(1), 1, Some(1), 60);
         r.record_error(URL, "boom");
         assert!(r.snapshot().is_empty());
 
@@ -228,6 +246,17 @@ mod tests {
         assert_ne!(readded, generation);
         assert!(!r.is_current(URL, generation));
         assert!(r.is_current(URL, readded));
+    }
+
+    #[test]
+    fn snapshot_retains_tier_and_completed_count() {
+        let r = TrackerStatusRegistry::default();
+        r.ensure_with_tier(URL, 2);
+        r.record_success(URL, Some(4), Some(3), 7, Some(19), 60);
+
+        let status = r.snapshot().pop().unwrap();
+        assert_eq!(status.tier, 2);
+        assert_eq!(status.num_downloaded, Some(19));
     }
 
     #[test]

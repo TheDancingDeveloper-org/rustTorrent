@@ -474,6 +474,7 @@ impl TrackerComms {
                 u32::try_from(response.complete).ok(),
                 u32::try_from(response.incomplete).ok(),
                 peers_returned,
+                Some(response.complete),
                 interval,
             );
         }
@@ -609,6 +610,12 @@ impl TrackerComms {
             Ok(response) => {
                 trace!(len = response.addrs.len(), "received announce response");
                 let peers_returned = response.addrs.len() as u32;
+                let num_downloaded = client
+                    .scrape(addr, vec![self.info_hash])
+                    .await
+                    .ok()
+                    .and_then(|stats| stats.into_iter().next())
+                    .map(|stats| u64::from(stats.completed));
                 for addr in response.addrs {
                     self.tx.send(addr).await.context("rx closed")?;
                 }
@@ -619,6 +626,7 @@ impl TrackerComms {
                         Some(response.seeders),
                         Some(response.leechers),
                         peers_returned,
+                        num_downloaded,
                         sleep,
                     );
                 }

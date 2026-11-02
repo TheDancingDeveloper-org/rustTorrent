@@ -418,6 +418,7 @@ pub(super) struct InternalAddResult {
     pub info_hash: Id20,
     pub metadata: Option<TorrentMetadata>,
     pub trackers: Vec<url::Url>,
+    pub tracker_tiers: std::collections::HashMap<String, u32>,
     pub name: Option<String>,
     pub web_seed_urls: Vec<String>,
 }

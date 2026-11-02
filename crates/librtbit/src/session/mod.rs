@@ -1116,6 +1116,7 @@ impl Session {
                             .into_iter()
                             .filter_map(|t| url::Url::parse(&t).ok())
                             .collect(),
+                        tracker_tiers: std::collections::HashMap::new(),
                         metadata: None,
                         name: magnet.name,
                         web_seed_urls: Vec::new(),
@@ -1152,6 +1153,19 @@ impl Session {
                             }
                         })
                         .collect::<Vec<_>>();
+                    let tracker_tiers = torrent.meta.announce_list.iter().enumerate().fold(
+                        std::collections::HashMap::new(),
+                        |mut tiers, (tier, urls)| {
+                            for url in urls {
+                                if let Ok(url) = std::str::from_utf8(url.as_ref()) {
+                                    tiers
+                                        .entry(url.to_owned())
+                                        .or_insert(u32::try_from(tier).unwrap_or(u32::MAX));
+                                }
+                            }
+                            tiers
+                        },
+                    );
                     if let Some(custom_trackers) = opts.trackers.clone() {
                         trackers.extend(custom_trackers);
                     }
@@ -1176,6 +1190,7 @@ impl Session {
                             .iter()
                             .filter_map(|t| url::Url::parse(t).ok())
                             .collect(),
+                        tracker_tiers,
                         name: None,
                         web_seed_urls,
                     }
@@ -1241,6 +1256,7 @@ impl Session {
             info_hash,
             metadata,
             trackers,
+            tracker_tiers,
             name,
             web_seed_urls,
         } = add_res;
@@ -1253,7 +1269,10 @@ impl Session {
         // are recorded too; moved into ManagedTorrentShared below.
         let tracker_status = Arc::new(tracker_comms::TrackerStatusRegistry::default());
         for t in &trackers {
-            tracker_status.ensure(t.as_str());
+            tracker_status.ensure_with_tier(
+                t.as_str(),
+                tracker_tiers.get(t.as_str()).copied().unwrap_or(0),
+            );
         }
 
         let make_peer_rx = || {
