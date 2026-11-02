@@ -115,6 +115,7 @@ pub(crate) struct TorrentStateLocked {
 
     // The sorted file list in which order to download them.
     pub(crate) file_priorities: FilePriorities,
+    pub(crate) file_priority_levels: Vec<u8>,
 
     // If this is None, then it was already used
     fatal_errors_tx: Option<tokio::sync::oneshot::Sender<anyhow::Error>>,
@@ -255,11 +256,14 @@ impl TorrentStateLive {
             let mut pri = (0..paused.metadata.file_infos.len()).collect::<Vec<usize>>();
             // sort by filename, cause many torrents have random sort order.
             pri.sort_unstable_by_key(|id| {
-                paused
-                    .metadata
-                    .file_infos
-                    .get(*id)
-                    .map(|fi| fi.relative_filename.as_path())
+                (
+                    std::cmp::Reverse(paused.file_priority_levels.get(*id).copied().unwrap_or(1)),
+                    paused
+                        .metadata
+                        .file_infos
+                        .get(*id)
+                        .map(|fi| fi.relative_filename.as_path()),
+                )
             });
             pri
         };
@@ -286,6 +290,7 @@ impl TorrentStateLive {
             _locked: RwLock::new(TorrentStateLocked {
                 pieces: Some(PieceTracker::new(paused.chunk_tracker)),
                 file_priorities,
+                file_priority_levels: paused.file_priority_levels,
                 fatal_errors_tx: Some(fatal_errors_tx),
                 unflushed_bitv_bytes: 0,
             }),
@@ -624,6 +629,7 @@ impl TorrentStateLive {
             metadata: self.metadata.clone(),
             files: self.files.take()?,
             chunk_tracker,
+            file_priority_levels: g.file_priority_levels.clone(),
             streams: self.streams.clone(),
         })
     }
@@ -646,6 +652,43 @@ impl TorrentStateLive {
         let mut g = self.lock_write("update_only_files");
         let pt = g.get_pieces_mut()?;
         let hns = pt.update_only_files(&self.metadata.file_infos, only_files)?;
+        if !hns.finished() {
+            self.reconnect_all_not_needed_peers();
+        }
+        Ok(())
+    }
+
+    pub(crate) fn update_file_priority(
+        &self,
+        file_index: usize,
+        priority: u8,
+    ) -> anyhow::Result<()> {
+        let mut g = self.lock_write("update_file_priority");
+        let file_count = self.metadata.file_infos.len();
+        if file_index >= file_count {
+            anyhow::bail!("file index out of range");
+        }
+        if let Some(level) = g.file_priority_levels.get_mut(file_index) {
+            *level = priority;
+        }
+        let levels = g.file_priority_levels.clone();
+        g.file_priorities.sort_unstable_by_key(|id| {
+            (
+                std::cmp::Reverse(levels.get(*id).copied().unwrap_or(1)),
+                self.metadata
+                    .file_infos
+                    .get(*id)
+                    .map(|fi| fi.relative_filename.as_path()),
+            )
+        });
+        let selected: HashSet<_> = levels
+            .iter()
+            .enumerate()
+            .filter_map(|(id, level)| (*level != 0).then_some(id))
+            .collect();
+        let hns = g
+            .get_pieces_mut()?
+            .update_only_files(&self.metadata.file_infos, &selected)?;
         if !hns.finished() {
             self.reconnect_all_not_needed_peers();
         }

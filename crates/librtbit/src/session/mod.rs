@@ -1293,6 +1293,21 @@ impl Session {
             opts.only_files_regex,
             opts.list_only,
         )?;
+        let file_count = metadata.info.iter_file_lengths().count();
+        let mut file_priority_levels = opts
+            .file_priority_levels
+            .take()
+            .unwrap_or_else(|| vec![1; file_count]);
+        if file_priority_levels.len() != file_count {
+            file_priority_levels.resize(file_count, 1);
+        }
+        if let Some(only_files) = &only_files {
+            for (idx, priority) in file_priority_levels.iter_mut().enumerate() {
+                if !only_files.contains(&idx) {
+                    *priority = 0;
+                }
+            }
+        }
 
         let default_output_folder =
             expand_folder_template(&self.output_folder.read().clone(), opts.category.as_deref());
@@ -1427,6 +1442,7 @@ impl Session {
                 minfo.clone(),
                 metadata.clone(),
                 only_files.clone(),
+                file_priority_levels.clone(),
                 self.spawner
                     .block_in_place(|| minfo.storage_factory.create_and_init(&minfo, &metadata))?,
                 false,
@@ -1436,6 +1452,7 @@ impl Session {
                     paused: opts.paused,
                     state: ManagedTorrentState::Initializing(initializing),
                     only_files,
+                    file_priority_levels,
                 }),
                 state_change_notify: Notify::new(),
                 shared: minfo,

@@ -30,6 +30,7 @@ pub struct TorrentStateInitializing {
     pub(crate) shared: Arc<ManagedTorrentShared>,
     pub(crate) metadata: Arc<TorrentMetadata>,
     pub(crate) only_files: Option<Vec<usize>>,
+    pub(crate) file_priority_levels: Vec<u8>,
     pub(crate) checked_bytes: AtomicU64,
     /// True while the torrent is waiting for a concurrent init semaphore slot.
     pub(crate) queued_for_init: AtomicBool,
@@ -44,6 +45,7 @@ impl TorrentStateInitializing {
         shared: Arc<ManagedTorrentShared>,
         metadata: Arc<TorrentMetadata>,
         only_files: Option<Vec<usize>>,
+        file_priority_levels: Vec<u8>,
         files: FileStorage,
         previously_errored: bool,
     ) -> Self {
@@ -51,6 +53,7 @@ impl TorrentStateInitializing {
             shared,
             metadata,
             only_files,
+            file_priority_levels,
             files,
             checked_bytes: AtomicU64::new(0),
             queued_for_init: AtomicBool::new(false),
@@ -327,6 +330,7 @@ impl TorrentStateInitializing {
             metadata: self.metadata.clone(),
             files: self.files.take()?,
             chunk_tracker,
+            file_priority_levels: self.file_priority_levels.clone(),
             streams: Arc::new(Default::default()),
         })
     }
