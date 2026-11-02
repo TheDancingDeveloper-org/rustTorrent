@@ -176,6 +176,7 @@ pub struct Session {
     pub ratelimits: Limits,
     pub(crate) peer_limit_atomic: AtomicUsize,
     pub(crate) concurrent_init_limit_atomic: AtomicUsize,
+    pub(crate) recheck_throttle: Arc<crate::file_ops::ReadThrottle>,
 
     pub blocklist: parking_lot::RwLock<IpRanges>,
     /// Last text submitted to the IP filter. Not a secret.
@@ -326,9 +327,24 @@ impl Session {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Resize the concurrent init/recheck gate. Growing adds permits now;
+    /// shrinking takes permits as running checks release them.
     pub fn set_concurrent_init_limit(&self, limit: usize) {
-        self.concurrent_init_limit_atomic
-            .store(limit, std::sync::atomic::Ordering::Relaxed);
+        let old = self
+            .concurrent_init_limit_atomic
+            .swap(limit, std::sync::atomic::Ordering::Relaxed);
+        if limit > old {
+            self.concurrent_initialize_semaphore
+                .add_permits(limit - old);
+        } else if limit < old {
+            let sem = self.concurrent_initialize_semaphore.clone();
+            let shrink = u32::try_from(old - limit).unwrap_or(u32::MAX);
+            tokio::spawn(async move {
+                if let Ok(p) = sem.acquire_many(shrink).await {
+                    p.forget();
+                }
+            });
+        }
     }
 
     /// Create a new session with options.
@@ -672,7 +688,13 @@ impl Session {
             };
 
             let resolved_peer_limit = opts.peer_limit.unwrap_or(200);
-            let resolved_concurrent_init_limit = opts.concurrent_init_limit.unwrap_or(3);
+            let resolved_concurrent_init_limit = saved_advanced
+                .concurrent_recheck_limit
+                .and_then(|v| usize::try_from(v).ok())
+                .or(opts.concurrent_init_limit)
+                .unwrap_or(crate::session_persistence::DEFAULT_CONCURRENT_RECHECK_LIMIT);
+            let recheck_throttle = Arc::new(crate::file_ops::ReadThrottle::default());
+            recheck_throttle.set_mibps(saved_advanced.recheck_read_mibps.or(opts.recheck_read_mibps));
 
             let session = Arc::new(Self {
                 persistence,
@@ -733,6 +755,7 @@ impl Session {
                 ratelimits: Limits::new(opts.ratelimits),
                 peer_limit_atomic: AtomicUsize::new(resolved_peer_limit),
                 concurrent_init_limit_atomic: AtomicUsize::new(resolved_concurrent_init_limit),
+                recheck_throttle,
                 ipv4_only: opts.ipv4_only,
                 trackers: opts.trackers,
                 disable_trackers: opts.disable_trackers,
@@ -941,6 +964,13 @@ impl Session {
             ),
             Ordering::Relaxed,
         );
+        if let Some(limit) = settings
+            .concurrent_recheck_limit
+            .and_then(|v| usize::try_from(v).ok())
+        {
+            self.set_concurrent_init_limit(limit);
+        }
+        self.recheck_throttle.set_mibps(settings.recheck_read_mibps);
         self.magnet_resolution_timeout_secs.store(
             settings
                 .magnet_resolution_timeout_secs
@@ -2398,7 +2428,7 @@ mod tests {
             "semaphore should have 5 permits"
         );
 
-        // Default (no explicit limit) should give 3 permits.
+        // Default (no explicit limit) should give 2 permits.
         let session_default = super::Session::new_with_opts(
             tempdir.path().to_owned(),
             SessionOptions {
@@ -2415,8 +2445,8 @@ mod tests {
             session_default
                 .concurrent_initialize_semaphore
                 .available_permits(),
-            3,
-            "default semaphore should have 3 permits"
+            2,
+            "default semaphore should have 2 permits"
         );
     }
 
@@ -2463,5 +2493,56 @@ mod tests {
             acquired.load(std::sync::atomic::Ordering::SeqCst),
             "second acquire should have succeeded after permit was dropped"
         );
+    }
+
+    /// Five checkers contending for the gate with a cap of 2 never run more
+    /// than 2 at once; the limit can be resized live.
+    #[tokio::test]
+    async fn test_recheck_gate_caps_concurrency_and_resizes() {
+        use crate::SessionOptions;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        let tempdir = tempfile::TempDir::new().unwrap();
+        let session = super::Session::new_with_opts(
+            tempdir.path().to_owned(),
+            SessionOptions {
+                disable_dht: true,
+                disable_trackers: true,
+                disable_local_service_discovery: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(session.get_concurrent_init_limit(), 2);
+
+        async fn run_five(session: &std::sync::Arc<super::Session>) -> usize {
+            let running = std::sync::Arc::new(AtomicUsize::new(0));
+            let peak = std::sync::Arc::new(AtomicUsize::new(0));
+            let mut tasks = Vec::new();
+            for _ in 0..5 {
+                let sem = session.concurrent_initialize_semaphore.clone();
+                let (running, peak) = (running.clone(), peak.clone());
+                tasks.push(tokio::spawn(async move {
+                    let _p = sem.acquire().await.unwrap();
+                    let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(30)).await;
+                    running.fetch_sub(1, Ordering::SeqCst);
+                }));
+            }
+            for t in tasks {
+                t.await.unwrap();
+            }
+            peak.load(Ordering::SeqCst)
+        }
+
+        assert_eq!(run_five(&session).await, 2);
+        session.set_concurrent_init_limit(1);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(run_five(&session).await, 1);
+        session.set_concurrent_init_limit(4);
+        assert_eq!(run_five(&session).await, 4);
     }
 }

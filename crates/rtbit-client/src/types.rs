@@ -483,6 +483,10 @@ pub const MAX_CONCURRENT_HANDSHAKES_MAX: u64 = 512;
 /// 0 means skip fastresume validation.
 pub const FASTRESUME_VALIDATION_DENOM_MIN: u64 = 0;
 pub const FASTRESUME_VALIDATION_DENOM_MAX: u64 = 1000;
+pub const CONCURRENT_RECHECK_LIMIT_MIN: u64 = 1;
+pub const CONCURRENT_RECHECK_LIMIT_MAX: u64 = 32;
+pub const RECHECK_READ_MIBPS_MIN: u64 = 1;
+pub const RECHECK_READ_MIBPS_MAX: u64 = 100_000;
 
 /// `GET /session/advanced`. Seconds; null is the engine default.
 ///
@@ -511,6 +515,12 @@ pub struct AdvancedConfig {
     /// Restart knob: 0 skips fastresume validation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fastresume_validation_denom: Option<u64>,
+    /// Torrents that may hash at once; the rest wait queued. Default 2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concurrent_recheck_limit: Option<u64>,
+    /// Combined check read cap in MiB/s. Null is unlimited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recheck_read_mibps: Option<u64>,
 }
 
 /// Reply to `POST /session/advanced`. `restart_required` is true when a saved

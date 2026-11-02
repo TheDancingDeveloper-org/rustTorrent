@@ -342,6 +342,10 @@ pub struct SessionOptions {
     /// how many concurrent torrent initializations can happen
     pub concurrent_init_limit: Option<usize>,
 
+    /// Cap on the combined disk read rate of checks, in MiB/s. None is unlimited.
+    /// A saved Advanced setting wins over this.
+    pub recheck_read_mibps: Option<u64>,
+
     /// How many blocking threads does the tokio runtime have.
     /// Will limit blocking work to that number to avoid starving the runtime.
     pub runtime_worker_threads: Option<usize>,

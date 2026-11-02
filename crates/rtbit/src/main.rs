@@ -333,8 +333,12 @@ struct Opts {
     socks_url: Option<String>,
 
     /// How many torrents can be initializing (rehashing) at the same time
-    #[arg(long, default_value = "5", env = "RTBIT_CONCURRENT_INIT_LIMIT")]
+    #[arg(long, default_value = "2", env = "RTBIT_CONCURRENT_INIT_LIMIT")]
     concurrent_init_limit: usize,
+
+    /// Cap the combined disk read rate of torrent checks, in MiB/s (default unlimited)
+    #[arg(long, env = "RTBIT_RECHECK_READ_MIBPS")]
+    recheck_read_mibps: Option<u64>,
 
     /// Set the process umask to this value.
     ///
@@ -996,6 +1000,7 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
             }
         }),
         concurrent_init_limit: Some(opts.concurrent_init_limit),
+        recheck_read_mibps: opts.recheck_read_mibps,
         root_span: None,
         fastresume: false,
         fastresume_validation_denom: None,
