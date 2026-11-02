@@ -30,6 +30,8 @@ See [TESTING.md](TESTING.md#webui-api-v2-compatibility-client-replay-and-differe
 | `.github/`, `ci/`, `.cargo/`, `Dockerfile*`, `.dockerignore`, `rust-toolchain.toml` | everything, as in the queue |
 | `crates/librtbit/` (outside the web UI) | `rust`, scoped to `swarmforge`; `desktop` |
 | `crates/rtbit/` | `rust`, scoped to `rtbit` |
+| `crates/rtbit-client/`, `crates/rtbit-ui-core/` | `rust`, plus `rtbit-fluent` nextest (reverse dependencies) |
+| `crates/librtbit/src/http_api_types.rs` | `rust`, plus `rtbit-fluent` nextest (API type consumer) |
 | `crates/librtbit/webui/` | `webui`, `gui-e2e` |
 | `desktop/src/` (the splash, tested by `e2e/desktop-splash.spec.ts`) | `webui`, `gui-e2e`, `desktop` |
 | `desktop/src-tauri/`, `packaging/scripts/check-desktop.sh` | `desktop` |
@@ -53,6 +55,11 @@ that alters how the workspace resolves (the lockfile, the root manifest, the
 toolchain, cargo config, workflows and task scripts) takes the full workspace.
 The scope is also widened when the classifier sees a Rust change it cannot
 attribute to a package, so it never silently runs nothing.
+
+`rtbit-fluent` is a reverse dependency of `rtbit-client` and `rtbit-ui-core`,
+and consumes `librtbit` API types from `http_api_types.rs`. Those paths set a
+separate fluent flag so the `rust` job runs `cargo nextest -p rtbit-fluent`
+without applying the daemon-only `default-tls` feature.
 
 ### Cache and test runner
 

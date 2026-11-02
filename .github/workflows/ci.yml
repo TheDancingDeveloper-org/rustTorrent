@@ -31,6 +31,7 @@ jobs:
       rust: ${{ steps.classify.outputs.rust }}
       rust_full: ${{ steps.classify.outputs.rust_full }}
       rust_packages: ${{ steps.classify.outputs.rust_packages }}
+      rust_fluent: ${{ steps.classify.outputs.rust_fluent }}
       desktop: ${{ steps.classify.outputs.desktop }}
       webui: ${{ steps.classify.outputs.webui }}
       website: ${{ steps.classify.outputs.website }}
@@ -46,11 +47,11 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$EVENT" != pull_request ]]; then
-            printf 'rust=true\nrust_full=true\nrust_packages=\ndesktop=true\nwebui=true\nwebsite=true\n' >>"$GITHUB_OUTPUT"
+            printf 'rust=true\nrust_full=true\nrust_packages=\nrust_fluent=true\ndesktop=true\nwebui=true\nwebsite=true\n' >>"$GITHUB_OUTPUT"
             exit 0
           fi
           files="$(git diff --name-only "$(git merge-base "$BASE_SHA" HEAD)" HEAD)"
-          rust=false full=false desktop=false webui=false website=false
+          rust=false full=false fluent=false desktop=false webui=false website=false
           packages=()
           add_package() {
             local pkg
@@ -80,8 +81,15 @@ jobs:
               # The menu description has no window toolkit, so CI can test it.
               # The Tauri binary stays excluded: the runner has no webkit.
               desktop/menu/*) rust=true desktop=true; add_package rtbit-desktop-menu ;;
+              # The native app consumes the daemon's API types directly.
+              crates/librtbit/src/http_api_types.rs)
+                rust=true; fluent=true ;;
               crates/librtbit/*) rust=true desktop=true; add_package swarmforge ;;
               crates/rtbit/*) rust=true; add_package rtbit ;;
+              # The native client and UI crates are reverse dependencies of the
+              # fluent app, so changes to either must test the app as well.
+              crates/rtbit-client/*|crates/rtbit-ui-core/*)
+                rust=true; fluent=true ;;
               website/*) website=true ;;
               # An unrecognised crate path (a new member, or a path we have not
               # mapped yet) is not safe to narrow, so it takes everything.
@@ -90,11 +98,11 @@ jobs:
           done <<<"$files"
           # A Rust change we could not attribute to a package still needs the
           # full workspace rather than no check at all.
-          if [[ "$rust" == true && "$full" == false && ${#packages[@]} -eq 0 ]]; then
+          if [[ "$rust" == true && "$full" == false && "$fluent" == false && ${#packages[@]} -eq 0 ]]; then
             full=true
           fi
-          printf 'rust=%s\nrust_full=%s\nrust_packages=%s\ndesktop=%s\nwebui=%s\nwebsite=%s\n' \
-            "$rust" "$full" "${packages[*]-}" "$desktop" "$webui" "$website" | tee -a "$GITHUB_OUTPUT"
+          printf 'rust=%s\nrust_full=%s\nrust_packages=%s\nrust_fluent=%s\ndesktop=%s\nwebui=%s\nwebsite=%s\n' \
+            "$rust" "$full" "${packages[*]-}" "$fluent" "$desktop" "$webui" "$website" | tee -a "$GITHUB_OUTPUT"
 
   # Shell checks for the release scripts and repository layout. They take
   # seconds and touch no network, so they run on every event.
@@ -181,10 +189,14 @@ jobs:
       - name: Test
         env:
           SCOPE_ARGS: ${{ steps.scope.outputs.args }}
+          RUST_FLUENT: ${{ needs.changes.outputs.rust_fluent }}
           CARGO_PROFILE_TEST_DEBUG: 0
         run: |
           read -r -a args <<<"$SCOPE_ARGS"
           cargo nextest run "${args[@]}" --all-targets --locked --no-default-features --features default-tls
+          if [[ "$RUST_FLUENT" == true ]]; then
+            cargo nextest run -p rtbit-fluent --all-targets --locked
+          fi
       # The shipped binary is worth a release-profile compile on a PR that
       # touches it. The queue builds it for every entry anyway.
       - name: Build the release binary
