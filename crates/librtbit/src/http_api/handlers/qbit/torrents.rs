@@ -746,6 +746,20 @@ pub(super) async fn h_torrents_piece_states(
     axum::Json(states).into_response()
 }
 
+pub(super) async fn h_torrents_piece_availability(
+    State(state): State<Arc<QbitState>>,
+    Query(query): Query<HashQuery>,
+) -> impl IntoResponse {
+    let idx = match TorrentIdOrHash::parse(&query.hash) {
+        Ok(idx) => idx,
+        Err(_) => return qbit_error(StatusCode::NOT_FOUND, "Not found"),
+    };
+    match state.api_state.api.api_piece_availability(idx) {
+        Ok(counts) => axum::Json(counts).into_response(),
+        Err(_) => qbit_error(StatusCode::NOT_FOUND, "Not found"),
+    }
+}
+
 pub(super) async fn h_torrents_piece_hashes(
     State(state): State<Arc<QbitState>>,
     Query(query): Query<HashQuery>,
