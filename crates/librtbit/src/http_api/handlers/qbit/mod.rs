@@ -590,6 +590,7 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
         .route("/trackers", get(h_torrents_trackers))
         .route("/webseeds", get(h_torrents_webseeds))
         .route("/export", get(h_torrents_export))
+        .route("/pieceAvailability", get(h_torrents_piece_availability))
         .route("/pieceStates", get(h_torrents_piece_states))
         .route("/pieceHashes", get(h_torrents_piece_hashes))
         .route("/add", post(h_torrents_add))
