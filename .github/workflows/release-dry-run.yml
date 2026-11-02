@@ -278,3 +278,48 @@ jobs:
           done
           test "$count" -eq 2 || { echo "::error::expected 2 signed executables (daemon and fluent), verified $count"; exit 1; }
           (cd release-artifacts && sha256sum -c "SHA256SUMS-$tag.txt")
+
+  report-failure:
+    name: Report release dry-run failure
+    if: >-
+      ${{ always() && github.event_name != 'pull_request' &&
+          (needs.build-windows-fluent.result == 'failure' || needs.dry-run.result == 'failure') }}
+    needs: [build-windows-fluent, dry-run]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the tracking issue
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const title = '[CI] Release dry run is failing';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const report = [
+              `The ${context.eventName} release dry run failed.`,
+              '',
+              `Run: ${runUrl}`,
+              `Commit: ${context.sha}`,
+              '',
+              'This workflow does not publish release artifacts.',
+            ].join('\n');
+            const {data: issues} = await github.rest.issues.listForRepo({
+              ...context.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const existing = issues.find(issue => !issue.pull_request && issue.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: existing.number,
+                body: report,
+              });
+            } else {
+              await github.rest.issues.create({
+                ...context.repo,
+                title,
+                body: report,
+              });
+            }
