@@ -755,7 +755,7 @@ impl Session {
                 on_complete: RwLock::new(OnCompleteHook::default()),
                 max_active_downloads: AtomicUsize::new(max_active_downloads),
                 max_active_seeds: AtomicUsize::new(max_active_seeds),
-                min_free_disk_space: std::sync::atomic::AtomicU64::new(0),
+                min_free_disk_space: std::sync::atomic::AtomicU64::new(scheduler::DEFAULT_MIN_FREE_DISK_SPACE),
                 free_space_provider: RwLock::new(None),
                 use_part_files: std::sync::atomic::AtomicBool::new(use_part_files),
                 seed_limits: RwLock::new(seed_limits),
