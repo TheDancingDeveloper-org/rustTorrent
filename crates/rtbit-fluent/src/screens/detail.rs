@@ -629,18 +629,27 @@ fn pieces_summary(snapshot: &DetailSnapshot) -> impl IntoElement {
 /// The General tab's lines, in display order.
 fn general_lines(snapshot: &DetailSnapshot) -> Vec<String> {
     let torrent = &snapshot.torrent;
-    let state = format::state_label(torrent.stats.as_ref().and_then(|stats| stats.state));
+    let state = format::row_state_label(torrent.stats.as_ref());
     let have = snapshot.pieces.have.iter().filter(|h| **h).count() as u64;
-    vec![
+    let mut lines = vec![
         torrent.name.clone().unwrap_or_default(),
         format!("Info hash: {}", torrent.info_hash),
         format!("Folder: {}", torrent.output_folder),
         format!("State: {state}"),
-        format!(
-            "Pieces: {}",
-            format::progress(have, u64::from(torrent.total_pieces))
-        ),
-    ]
+    ];
+    if let Some(error) = torrent
+        .stats
+        .as_ref()
+        .filter(|stats| format::is_missing_files(Some(stats)))
+        .and_then(|stats| stats.error.as_ref())
+    {
+        lines.push(format!("Error: {error}"));
+    }
+    lines.push(format!(
+        "Pieces: {}",
+        format::progress(have, u64::from(torrent.total_pieces))
+    ));
+    lines
 }
 
 fn general(snapshot: &DetailSnapshot) -> impl IntoElement {

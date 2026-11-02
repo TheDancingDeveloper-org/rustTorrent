@@ -198,6 +198,9 @@ pub struct TorrentStats {
     pub finished: bool,
     #[serde(default)]
     pub live: Option<LiveSpeeds>,
+    /// The daemon's error flag on the torrent, if any.
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// One row of `GET /torrents`. Extra daemon fields are ignored.
