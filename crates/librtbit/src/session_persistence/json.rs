@@ -170,6 +170,7 @@ impl JsonSessionPersistenceStore {
             // we don't serialize this here, but to a file instead.
             torrent_bytes: Default::default(),
             only_files: torrent.only_files().clone(),
+            file_priority_levels: Some(torrent.file_priority_levels()),
             is_paused: torrent.is_paused(),
             queued: policy.queued,
             held_for_disk: policy.held_for_disk,

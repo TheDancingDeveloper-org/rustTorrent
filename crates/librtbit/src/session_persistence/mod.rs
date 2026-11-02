@@ -204,6 +204,8 @@ pub struct SerializedTorrent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     output_folder_root: Option<PathBuf>,
     only_files: Option<Vec<usize>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    file_priority_levels: Option<Vec<u8>>,
     is_paused: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     category: Option<String>,
@@ -351,6 +353,7 @@ impl SerializedTorrent {
             output_folder,
             output_folder_root,
             only_files: self.only_files,
+            file_priority_levels: self.file_priority_levels,
             overwrite: true,
             category,
             tags,

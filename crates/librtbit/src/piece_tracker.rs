@@ -428,6 +428,39 @@ mod tests {
     }
 
     #[test]
+    fn test_file_priority_order_picks_max_before_high_and_normal() {
+        let (mut tracker, file_infos) = make_two_file_tracker(2, 2);
+        let file_priorities = vec![1, 7];
+        let mut ordered_files = (0..file_infos.len()).collect::<Vec<_>>();
+        ordered_files.sort_unstable_by_key(|id| std::cmp::Reverse(file_priorities[*id]));
+        let picked = {
+            let mut picked = Vec::new();
+            loop {
+                match tracker.acquire_piece(AcquireRequest {
+                    peer: peer(1),
+                    peer_avg_time: None,
+                    priority_pieces: std::iter::empty(),
+                    file_priorities: &ordered_files,
+                    file_infos: &file_infos,
+                    order: PieceOrder {
+                        sequential: true,
+                        first_last_piece_priority: false,
+                    },
+                    peer_has_piece: |_| true,
+                    can_steal: |_| false,
+                }) {
+                    AcquireResult::Reserved(piece) => picked.push(piece.get()),
+                    AcquireResult::NoneAvailable => break picked,
+                    other => panic!("unexpected {other:?}"),
+                }
+            }
+        };
+        assert_eq!(file_priorities, vec![1, 7]);
+        assert_eq!(ordered_files, vec![1, 0]);
+        assert_eq!(picked, vec![2, 3, 0, 1]);
+    }
+
+    #[test]
     fn test_sequential_order() {
         let (mut tracker, file_infos) = make_two_file_tracker(4, 3);
         let order = PieceOrder {

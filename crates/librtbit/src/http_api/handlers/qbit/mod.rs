@@ -5,7 +5,7 @@
 //! pretending to be qBittorrent.
 
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashMap},
     num::{NonZeroU16, NonZeroU32},
     path::Path,
     path::PathBuf,
