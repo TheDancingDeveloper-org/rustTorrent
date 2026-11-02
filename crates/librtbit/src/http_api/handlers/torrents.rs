@@ -22,7 +22,7 @@ use crate::api::{
 use crate::{
     AddTorrent, ApiError, CreateTorrentOptions, SUPPORTED_SCHEMES,
     api::{ApiTorrentListOpts, Result, TorrentIdOrHash},
-    api_error::WithStatusError,
+    api_error::{WithStatus, WithStatusError},
     http_api::timeout::Timeout,
     http_api_types::TorrentAddQueryParams,
     torrent_state::peer::stats::snapshot::{PeerStatsFilter, PeerStatsFilterState},
@@ -1001,6 +1001,48 @@ pub async fn h_set_torrent_category(
         .api_set_torrent_category(idx, req.category)
         .await
         .map(axum::Json)
+}
+
+#[derive(Deserialize)]
+pub struct SetTorrentLocationRequest {
+    pub location: String,
+}
+
+pub async fn h_set_torrent_location(
+    State(state): State<ApiState>,
+    Path(idx): Path<TorrentIdOrHash>,
+    axum::Json(req): axum::Json<SetTorrentLocationRequest>,
+) -> Result<impl IntoResponse> {
+    let location = req.location.trim();
+    if location.is_empty() {
+        return Err(anyhow::anyhow!("location is required").into());
+    }
+    let handle = state.api.mgr_handle(idx)?;
+    handle
+        .set_location(PathBuf::from(location))
+        .with_status(StatusCode::CONFLICT)?;
+    Ok(axum::Json(crate::api::EmptyJsonResponse::default()))
+}
+
+#[derive(Deserialize)]
+pub struct RenameTorrentRequest {
+    pub name: String,
+}
+
+pub async fn h_rename_torrent(
+    State(state): State<ApiState>,
+    Path(idx): Path<TorrentIdOrHash>,
+    axum::Json(req): axum::Json<RenameTorrentRequest>,
+) -> Result<impl IntoResponse> {
+    let name = req.name.trim();
+    if name.is_empty() {
+        return Err(anyhow::anyhow!("name is required").into());
+    }
+    state
+        .api
+        .mgr_handle(idx)?
+        .set_display_name(Some(name.to_owned()));
+    Ok(axum::Json(crate::api::EmptyJsonResponse::default()))
 }
 
 pub async fn h_get_torrent_rate_limits(
