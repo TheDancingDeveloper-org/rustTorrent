@@ -65,6 +65,7 @@ peer_binary_protocol.workspace = true
 sha1w.workspace = true
 dht.workspace = true
 librtbit-upnp.workspace = true
+network-interface.workspace = true
 upnp-serve = { workspace = true, optional = true }
 
 # External deps
