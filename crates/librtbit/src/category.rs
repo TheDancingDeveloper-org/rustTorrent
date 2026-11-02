@@ -5,11 +5,29 @@ use anyhow::bail;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
+use crate::session::ShareLimits;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TorrentCategory {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub save_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ratio_limit: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seeding_time_limit: Option<std::time::Duration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inactive_seeding_time_limit: Option<std::time::Duration>,
+}
+
+impl TorrentCategory {
+    pub fn share_limits(&self) -> ShareLimits {
+        ShareLimits {
+            max_ratio: self.ratio_limit,
+            max_seeding_time: self.seeding_time_limit,
+            max_inactive_seeding_time: self.inactive_seeding_time_limit,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -40,21 +58,43 @@ impl CategoryManager {
         self.categories.read().clone()
     }
 
-    pub fn create(&self, name: String, save_path: Option<PathBuf>) -> anyhow::Result<()> {
+    pub fn create(
+        &self,
+        name: String,
+        save_path: Option<PathBuf>,
+        limits: ShareLimits,
+    ) -> anyhow::Result<()> {
         let mut cats = self.categories.write();
         if cats.contains_key(&name) {
             bail!("category '{name}' already exists");
         }
-        cats.insert(name.clone(), TorrentCategory { name, save_path });
+        cats.insert(
+            name.clone(),
+            TorrentCategory {
+                name,
+                save_path,
+                ratio_limit: limits.max_ratio,
+                seeding_time_limit: limits.max_seeding_time,
+                inactive_seeding_time_limit: limits.max_inactive_seeding_time,
+            },
+        );
         Ok(())
     }
 
-    pub fn edit(&self, name: &str, save_path: Option<PathBuf>) -> anyhow::Result<()> {
+    pub fn edit(
+        &self,
+        name: &str,
+        save_path: Option<PathBuf>,
+        limits: ShareLimits,
+    ) -> anyhow::Result<()> {
         let mut cats = self.categories.write();
         let cat = cats.get_mut(name);
         match cat {
             Some(cat) => {
                 cat.save_path = save_path;
+                cat.ratio_limit = limits.max_ratio;
+                cat.seeding_time_limit = limits.max_seeding_time;
+                cat.inactive_seeding_time_limit = limits.max_inactive_seeding_time;
                 Ok(())
             }
             None => bail!("category '{name}' does not exist"),

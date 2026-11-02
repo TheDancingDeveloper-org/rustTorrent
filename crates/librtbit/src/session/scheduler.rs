@@ -115,6 +115,32 @@ pub(crate) enum ShareLimitReason {
 /// `seeding_secs` is zero when the completion time is unknown, which disables
 /// the seeding-time check rather than tripping it. `inactive_secs` is the time
 /// since the upload counter last moved, and zero likewise disables its check.
+fn effective_share_limits_for_torrent(
+    session: &Session,
+    handle: &ManagedTorrentHandle,
+    own: ShareLimits,
+) -> ShareLimits {
+    if !own.is_unset() {
+        return own;
+    }
+    let category = handle.shared().category.read().clone();
+    category
+        .as_deref()
+        .and_then(|name| session.categories().get(name))
+        .map(|category| category.share_limits())
+        .map(|category| {
+            let global = *session.seed_limits.read();
+            ShareLimits {
+                max_ratio: category.max_ratio.or(global.max_ratio),
+                max_seeding_time: category.max_seeding_time.or(global.max_seeding_time),
+                max_inactive_seeding_time: category
+                    .max_inactive_seeding_time
+                    .or(global.max_inactive_seeding_time),
+            }
+        })
+        .unwrap_or_else(|| *session.seed_limits.read())
+}
+#[cfg(test)]
 pub(crate) fn effective_share_limits(own: ShareLimits, global: ShareLimits) -> ShareLimits {
     if own.is_unset() { global } else { own }
 }
@@ -513,7 +539,7 @@ impl Session {
                 && !handle.is_paused()
             {
                 let own = *handle.shared().share_limits.read();
-                let limits = effective_share_limits(own, *self.seed_limits.read());
+                let limits = effective_share_limits_for_torrent(self, handle, own);
                 let completed_at = handle.shared().completion_on.load(Ordering::Relaxed);
                 let seeding_secs = if completed_at > 0 {
                     now.saturating_sub(completed_at)
@@ -645,6 +671,17 @@ mod tests {
 
         let own = limits(Some(1.5), None);
         assert_eq!(effective_share_limits(own, global), own);
+    }
+
+    #[test]
+    fn category_limits_fill_unset_global_fields() {
+        let category = limits(Some(1.5), Some(30));
+        let global = limits(Some(2.0), Some(60));
+        assert_eq!(category.max_ratio.or(global.max_ratio), Some(1.5));
+        assert_eq!(
+            category.max_seeding_time.or(global.max_seeding_time),
+            Some(Duration::from_secs(30))
+        );
     }
 
     #[test]
