@@ -149,6 +149,25 @@ impl Client {
             .await
     }
 
+    /// `POST /torrents/{id}/recheck`. Verifies the payload on disk again.
+    pub async fn recheck_torrent(&mut self, id: u64) -> Result<(), Error> {
+        self.authed_post_empty(&format!("torrents/{id}/recheck"))
+            .await
+    }
+
+    /// `POST /torrents/{id}/set_category`. `None` clears the category.
+    pub async fn set_torrent_category(
+        &mut self,
+        id: u64,
+        category: Option<&str>,
+    ) -> Result<(), Error> {
+        self.authed_post_json(
+            &format!("torrents/{id}/set_category"),
+            &serde_json::json!({ "category": category }),
+        )
+        .await
+    }
+
     /// `POST /torrents/{id}/delete`. Removes the torrent and its files.
     pub async fn delete_torrent(&mut self, id: u64) -> Result<(), Error> {
         self.authed_post_empty(&format!("torrents/{id}/delete"))
