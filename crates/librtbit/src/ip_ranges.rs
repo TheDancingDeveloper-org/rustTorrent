@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use async_compression::tokio::bufread::GzipDecoder;
-use futures::TryStreamExt;
 use intervaltree::IntervalTree;
 use std::iter::empty;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -9,7 +8,6 @@ use std::path::Path;
 use std::str::FromStr;
 use tokio::io::{AsyncBufRead, AsyncRead};
 use tokio::{io::AsyncBufReadExt, io::BufReader};
-use tokio_util::io::StreamReader;
 use tracing::trace;
 use url::Url;
 
@@ -69,14 +67,14 @@ impl IpRanges {
             return Self::load_from_file(path).await;
         }
 
-        let response = reqwest::get(parsed_url)
+        let limits = crate::safe_fetch::FetchLimits {
+            max_bytes: 256 * 1024 * 1024,
+            ..Default::default()
+        };
+        let body = crate::safe_fetch::fetch_bytes(parsed_url.as_str(), &limits)
             .await
             .context("error fetching list")?;
-        if !response.status().is_success() {
-            anyhow::bail!("error fetching list: HTTP {}", response.status());
-        }
-
-        let mut reader = StreamReader::new(response.bytes_stream().map_err(std::io::Error::other));
+        let mut reader = std::io::Cursor::new(body);
         let bl = Self::create_from_stream(&mut reader).await?;
         Ok(bl)
     }

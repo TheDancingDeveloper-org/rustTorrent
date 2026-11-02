@@ -358,6 +358,11 @@ pub struct SessionOptions {
     pub blocklist_url: Option<String>,
     pub allowlist_url: Option<String>,
 
+    /// Hosts or IPs that server-side URL fetches (torrent URL adds, RSS,
+    /// blocklists) may reach even when they resolve to a private, loopback or
+    /// link-local address. Empty by default.
+    pub fetch_allowlist: Vec<String>,
+
     // The list of tracker URLs to always use for each torrent.
     pub trackers: std::collections::HashSet<url::Url>,
 

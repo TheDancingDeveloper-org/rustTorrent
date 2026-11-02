@@ -27,19 +27,11 @@ pub(super) async fn torrent_from_url(
         return torrent_from_bytes(bytes.into()).context("error decoding torrent");
     }
 
-    let response = reqwest_client
-        .get(url)
-        .send()
+    let _ = reqwest_client;
+    let b = crate::safe_fetch::fetch_bytes(url, &crate::safe_fetch::FetchLimits::default())
         .await
-        .context("error downloading torrent metadata")?;
-    if !response.status().is_success() {
-        bail!("GET {} returned {}", url, response.status())
-    }
-    let b = response
-        .bytes()
-        .await
-        .with_context(|| format!("error reading response body from {url}"))?;
-    torrent_from_bytes(b).context("error decoding torrent")
+        .with_context(|| format!("error downloading torrent metadata from {url}"))?;
+    torrent_from_bytes(b.into()).context("error decoding torrent")
 }
 
 pub(super) fn compute_only_files_regex<ByteBuf: AsRef<[u8]>>(
