@@ -13,12 +13,12 @@ pub use error::Error;
 pub use http::StatusCode;
 pub use types::{
     AdvancedConfig, AdvancedSaved, AltSpeedConfig, AltSpeedSchedule, AltSpeedStatus, AuthStatus,
-    ConnectionFamily, ConnectionKindStats, Connections, DownloadsConfig, FoldersConfig,
-    IpFilterConfig, LiveSpeeds, NetworkConfig, NetworkSettings, PeerCounts, PeerList, PeerView,
-    PieceProgress, ProxyConfig, RateLimits, Role, RssFeed, RssItem, RssRule, RssRuleBody,
-    RssRuleEpisode, RssSnapshot, SavedNetworkStatus, SeedLimits, SessionCounters, SessionStats,
-    SettingsSnapshot, Speed, TokenPair, Torrent, TorrentFile, TorrentList, TorrentState,
-    TorrentStats, TrackerList, TrackerState, TrackerStatus,
+    BulkEditFailure, BulkEditResponse, ConnectionFamily, ConnectionKindStats, Connections,
+    DownloadsConfig, FoldersConfig, IpFilterConfig, LiveSpeeds, NetworkConfig, NetworkSettings,
+    PeerCounts, PeerList, PeerView, PieceProgress, ProxyConfig, RateLimits, Role, RssFeed, RssItem,
+    RssRule, RssRuleBody, RssRuleEpisode, RssSnapshot, SavedNetworkStatus, SeedLimits,
+    SessionCounters, SessionStats, SettingsSnapshot, Speed, TokenPair, Torrent, TorrentFile,
+    TorrentList, TorrentState, TorrentStats, TrackerList, TrackerState, TrackerStatus,
 };
 
 /// Caps for `AdvancedConfig`, matching the daemon's limits.

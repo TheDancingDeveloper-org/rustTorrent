@@ -28,6 +28,7 @@ use rtbit_ui_core::{AddRequest, AddSource, RowAction, Snapshot, StatusFilter, fo
 
 use crate::bridge::{Bridge, LOST_AFTER_FAILURES, PollHealth, Poller, fetch_snapshot};
 use crate::screens::add_dialog::{AddDialog, AddDialogEvent};
+use crate::screens::bulk_edit_dialog::{BulkEditDialog, BulkEditDialogEvent, BulkEditRequest};
 use crate::screens::detail::DetailPane;
 use crate::table_prefs::TablePrefs;
 use crate::widgets::status_bar::StatusBar;
@@ -197,6 +198,8 @@ pub struct MainScreen {
     add: Option<Entity<AddDialog>>,
     _add_events: Option<Subscription>,
     _add_send: Option<Task<()>>,
+    bulk_edit: Option<Entity<BulkEditDialog>>,
+    _bulk_edit_events: Option<Subscription>,
     toasts: Entity<ToastHost>,
     daemon_lost: bool,
     pub(crate) _poller: Option<Poller>,
@@ -257,6 +260,8 @@ impl MainScreen {
             add: None,
             _add_events: None,
             _add_send: None,
+            bulk_edit: None,
+            _bulk_edit_events: None,
             toasts: cx.new(ToastHost::new),
             daemon_lost: false,
             _poller: None,
@@ -771,6 +776,11 @@ impl MainScreen {
                 ContextMenuItem::submenu("Set category", category_items)
                     .disabled(!available.category),
             )
+            .item(item(
+                "Edit category and tags…",
+                !targets.is_empty(),
+                MenuCommand::BulkEdit,
+            ))
             .separator()
             .item(item(
                 "Copy magnet link",
@@ -788,6 +798,7 @@ impl MainScreen {
     fn run_menu_command(&mut self, command: MenuCommand, cx: &mut Context<Self>) {
         self.menu = None;
         match command {
+            MenuCommand::BulkEdit => self.open_bulk_edit(cx),
             MenuCommand::Delete => self.request(RowAction::Delete, cx),
             MenuCommand::CopyMagnet | MenuCommand::CopyName => {
                 let text = copy_text(&self.targets(), &command);
@@ -813,6 +824,110 @@ impl MainScreen {
                 self.run_jobs(jobs, cx);
             }
         }
+    }
+
+    fn open_bulk_edit(&mut self, cx: &mut Context<Self>) {
+        let count = self.targets().len();
+        if count == 0 {
+            self.action_error = Some("Select a torrent first.".to_owned());
+            cx.notify();
+            return;
+        }
+        let categories = category_names(self.snapshot.value().map(|s| &s.torrents.torrents[..]));
+        let dialog = cx.new(|cx| BulkEditDialog::new(count, categories, cx));
+        let events = cx.subscribe(&dialog, |screen, _, event, cx| match event {
+            BulkEditDialogEvent::Cancel => {
+                screen.bulk_edit = None;
+                screen._bulk_edit_events = None;
+                cx.notify();
+            }
+            BulkEditDialogEvent::Submit(request) => screen.send_bulk_edit(request.clone(), cx),
+        });
+        self.bulk_edit = Some(dialog);
+        self._bulk_edit_events = Some(events);
+        cx.notify();
+    }
+
+    fn send_bulk_edit(&mut self, request: BulkEditRequest, cx: &mut Context<Self>) {
+        let targets = self
+            .targets()
+            .into_iter()
+            .filter_map(|torrent| torrent.id.map(|id| (id, torrent.name.clone())))
+            .collect::<Vec<_>>();
+        let ids = targets.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        let names = targets
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>();
+        let Some(bridge) = cx.try_global::<Bridge>() else {
+            self.action_error = Some("Not connected to a daemon.".to_owned());
+            cx.notify();
+            return;
+        };
+        self.bulk_edit = None;
+        self._bulk_edit_events = None;
+        let rx = bridge.call(move |client| async move {
+            let mut client = client.lock().await;
+            let mut failures = Vec::new();
+            if let Some(category) = request.category.as_ref() {
+                failures.extend(
+                    client
+                        .set_torrents_category(&ids, category.as_deref())
+                        .await?
+                        .failures,
+                );
+            }
+            if !request.add_tags.is_empty() {
+                failures.extend(
+                    client
+                        .add_torrents_tags(&ids, &request.add_tags)
+                        .await?
+                        .failures,
+                );
+            }
+            if !request.remove_tags.is_empty() {
+                failures.extend(
+                    client
+                        .remove_torrents_tags(&ids, &request.remove_tags)
+                        .await?
+                        .failures,
+                );
+            }
+            Ok(failures)
+        });
+        self._action = Some(cx.spawn(async move |view, cx| {
+            let result = match rx.await {
+                Ok(result) => result,
+                Err(_) => Err(rtbit_client::Error::Unreachable(
+                    "request cancelled".to_owned(),
+                )),
+            };
+            let _ = view.update(cx, |screen, cx| match result {
+                Ok(failures) if failures.is_empty() => {
+                    screen.action_error = None;
+                    screen.refresh(cx);
+                }
+                Ok(failures) => {
+                    screen.action_error = Some(
+                        failures
+                            .into_iter()
+                            .map(|failure| {
+                                let name = names
+                                    .get(&failure.id)
+                                    .and_then(|name| name.as_deref())
+                                    .unwrap_or("unnamed torrent");
+                                format!("{name}: {}", failure.error)
+                            })
+                            .collect::<Vec<_>>()
+                            .join("; "),
+                    );
+                    cx.notify();
+                }
+                Err(error) => {
+                    screen.action_error = Some(map_error(&error));
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     /// Run a toolbar or menu command. Delete asks first.
@@ -1215,6 +1330,9 @@ impl Render for MainScreen {
         if let Some(add) = &self.add {
             root = root.child(add.clone());
         }
+        if let Some(dialog) = &self.bulk_edit {
+            root = root.child(dialog.clone());
+        }
         root = root.child(self.toasts.clone());
         root
     }
@@ -1275,6 +1393,7 @@ enum MenuCommand {
     Stop,
     Recheck,
     SetCategory(Option<String>),
+    BulkEdit,
     CopyMagnet,
     CopyName,
     Delete,
