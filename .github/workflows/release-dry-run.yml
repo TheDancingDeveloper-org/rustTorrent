@@ -302,7 +302,7 @@ jobs:
       ${{ always() && github.event_name != 'pull_request' &&
           (needs.build-windows-fluent.result == 'failure' || needs.dry-run.result == 'failure') }}
     needs: [build-windows-fluent, dry-run]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     permissions:
       contents: read
       issues: write
