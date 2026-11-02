@@ -3,25 +3,17 @@
 //!
 //! Every read and write runs on the bridge's tokio runtime. The pane keeps
 //! the last good [`DetailSnapshot`] in an [`AsyncResource`], so a reply from a
-//! superseded selection cannot overwrite the current one. The Files tab is a
-//! `Tree` of folders and files. Double-clicking a node, or the checkbox and
-//! priority buttons under the tree, posts the new selection and reloads.
-//!
-//! The daemon has two file priorities only: download ("Normal") and skip
-//! ("Do not download"). A folder that holds both reads as "Mixed".
-
-use std::collections::{BTreeMap, HashSet};
+//! superseded selection cannot overwrite the current one. A file checkbox posts
+//! the whole new selection with `update_only_files`, then reloads the detail.
 
 use fluent_core::AsyncResource;
-use fluent_layout::{
-    DataColumn, DataRow, DataTable, MessageBar, MessageIntent, TabItem, TabStrip, Tree, TreeItem,
-};
-use fluent_primitives::{Button, Checkbox, CheckboxState, Label};
+use fluent_layout::{DataColumn, DataRow, DataTable, MessageBar, MessageIntent, TabItem, TabStrip};
+use fluent_primitives::{Checkbox, Label};
 use gpui::{
-    App, AsyncApp, ClickEvent, Context, Entity, IntoElement, Render, SharedString, Task,
-    WeakEntity, Window, div, prelude::*, px,
+    App, AsyncApp, Context, Entity, IntoElement, Render, Task, WeakEntity, Window, div, prelude::*,
+    px,
 };
-use rtbit_client::{Error, TorrentFile};
+use rtbit_client::Error;
 use rtbit_ui_core::{DetailSnapshot, format, map_error};
 
 use crate::bridge::{Bridge, Poller, SharedClient};
@@ -41,10 +33,6 @@ pub struct DetailPane {
     detail: AsyncResource<DetailSnapshot, String>,
     tabs: Entity<TabStrip>,
     error: Option<String>,
-    /// The Files tree node the checkbox and priority buttons act on.
-    selected_node: Option<SharedString>,
-    /// Folder nodes the user collapsed; folders start expanded.
-    collapsed: HashSet<SharedString>,
     _load: Option<Task<()>>,
     _action: Option<Task<()>>,
     _poller: Option<Poller>,
@@ -86,8 +74,6 @@ impl DetailPane {
             detail: AsyncResource::default(),
             tabs,
             error: None,
-            selected_node: None,
-            collapsed: HashSet::new(),
             _load: None,
             _action: None,
             _poller: None,
@@ -121,10 +107,6 @@ impl DetailPane {
     /// Show torrent `id`: load its detail on the bridge. The previous detail
     /// stays until the new one lands, and superseded replies are dropped.
     pub fn select_torrent(&mut self, id: u64, cx: &mut Context<Self>) {
-        if self.torrent_id != Some(id) {
-            self.selected_node = None;
-            self.collapsed.clear();
-        }
         self.torrent_id = Some(id);
         self.error = None;
         self._load = Some(Bridge::load(self, cx, detail_of, move |client| {
@@ -137,8 +119,6 @@ impl DetailPane {
         self.torrent_id = None;
         self.detail = AsyncResource::default();
         self.error = None;
-        self.selected_node = None;
-        self.collapsed.clear();
         self._load = None;
         self._action = None;
         cx.notify();
@@ -165,90 +145,6 @@ impl DetailPane {
             let mut client = client.lock().await;
             client.set_file_included(id, index, included).await
         });
-        self.await_action(id, rx, cx);
-    }
-
-    /// The selected Files tree node, if any.
-    #[must_use]
-    pub fn selected_node(&self) -> Option<&SharedString> {
-        self.selected_node.as_ref()
-    }
-
-    /// Select a Files tree node for the checkbox and priority buttons.
-    pub fn select_node(&mut self, node: SharedString, cx: &mut Context<Self>) {
-        self.selected_node = Some(node);
-        cx.notify();
-    }
-
-    /// Expand or collapse a folder node.
-    pub fn set_expanded(&mut self, node: SharedString, expanded: bool, cx: &mut Context<Self>) {
-        if expanded {
-            self.collapsed.remove(&node);
-        } else {
-            self.collapsed.insert(node);
-        }
-        cx.notify();
-    }
-
-    /// Flip a tree node: a file or every file under a folder. A fully
-    /// included node is skipped; anything else is included.
-    pub fn toggle_node(&mut self, node: &str, cx: &mut Context<Self>) {
-        let Some(files) = self.files() else {
-            return;
-        };
-        let indices = indices_under(&files, node);
-        let include = inclusion(&files, &indices) != CheckboxState::Checked;
-        self.set_included(&indices, include, cx);
-    }
-
-    /// Include (priority "Normal") or skip ("Do not download") every listed
-    /// file. One file posts to its own route; several post the whole new
-    /// selection with `update_only_files`.
-    pub fn set_included(&mut self, indices: &[usize], included: bool, cx: &mut Context<Self>) {
-        let Some(id) = self.torrent_id else {
-            return;
-        };
-        let Some(files) = self.files() else {
-            return;
-        };
-        let indices: Vec<usize> = indices
-            .iter()
-            .copied()
-            .filter(|&i| files.get(i).is_some_and(|f| f.included != included))
-            .collect();
-        match indices.as_slice() {
-            [] => {}
-            [index] => {
-                let index = *index;
-                let rx = cx.global::<Bridge>().call(move |client| async move {
-                    let mut client = client.lock().await;
-                    client.set_file_included(id, index, included).await
-                });
-                self.await_action(id, rx, cx);
-            }
-            _ => {
-                let selection = new_selection(&files, &indices, included);
-                let rx = cx.global::<Bridge>().call(move |client| async move {
-                    let mut client = client.lock().await;
-                    client.update_only_files(id, &selection).await
-                });
-                self.await_action(id, rx, cx);
-            }
-        }
-    }
-
-    fn files(&self) -> Option<Vec<TorrentFile>> {
-        self.detail
-            .ready_value()
-            .and_then(|snapshot| snapshot.torrent.files.clone())
-    }
-
-    fn await_action(
-        &mut self,
-        id: u64,
-        rx: tokio::sync::oneshot::Receiver<Result<(), Error>>,
-        cx: &mut Context<Self>,
-    ) {
         self._action = Some(
             cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 let reply = match rx.await {
@@ -281,7 +177,7 @@ impl DetailPane {
             return Label::new(text).into_any_element();
         };
         match self.active_tab(cx) {
-            "files" => files(snapshot, self, cx).into_any_element(),
+            "files" => files(snapshot, cx).into_any_element(),
             "peers" => peers_table(snapshot).into_any_element(),
             "trackers" => trackers_table(snapshot).into_any_element(),
             "pieces" => pieces_summary(snapshot).into_any_element(),
@@ -290,206 +186,33 @@ impl DetailPane {
     }
 }
 
-/// Tree node id of a folder (its path joined with `/`).
-fn dir_id(path: &str) -> SharedString {
-    format!("dir:{path}").into()
-}
-
-/// Tree node id of file `index`.
-fn file_id(index: usize) -> SharedString {
-    format!("file:{index}").into()
-}
-
-/// A file's path parts. Older daemons send no `components`; split the name.
-fn parts(file: &TorrentFile) -> Vec<&str> {
-    if file.components.is_empty() {
-        file.name.split('/').filter(|p| !p.is_empty()).collect()
-    } else {
-        file.components.iter().map(String::as_str).collect()
-    }
-}
-
-/// Indices of the files a node covers: one for a file, every file below for a folder.
-fn indices_under(files: &[TorrentFile], node: &str) -> Vec<usize> {
-    if let Some(index) = node.strip_prefix("file:") {
-        return index
-            .parse()
-            .ok()
-            .filter(|i| *i < files.len())
-            .into_iter()
-            .collect();
-    }
-    let Some(dir) = node.strip_prefix("dir:") else {
-        return Vec::new();
-    };
-    let prefix: Vec<&str> = dir.split('/').collect();
-    files
-        .iter()
-        .enumerate()
-        .filter(|(_, file)| {
-            let parts = parts(file);
-            parts.len() > prefix.len() && parts[..prefix.len()] == prefix[..]
-        })
-        .map(|(i, _)| i)
-        .collect()
-}
-
-/// Checkbox state of a set of files: all in, none in, or a mix.
-fn inclusion(files: &[TorrentFile], indices: &[usize]) -> CheckboxState {
-    let included = indices.iter().filter(|&&i| files[i].included).count();
-    match included {
-        0 => CheckboxState::Unchecked,
-        n if n == indices.len() => CheckboxState::Checked,
-        _ => CheckboxState::Indeterminate,
-    }
-}
-
-/// The priority a checkbox state stands for.
-fn priority_label(state: CheckboxState) -> &'static str {
-    match state {
-        CheckboxState::Checked => "Normal",
-        CheckboxState::Unchecked => "Do not download",
-        CheckboxState::Indeterminate => "Mixed",
-    }
-}
-
-/// The whole selection after setting `changed` to `included`.
-fn new_selection(files: &[TorrentFile], changed: &[usize], included: bool) -> Vec<usize> {
-    files
-        .iter()
-        .enumerate()
-        .filter(|(i, file)| {
-            if changed.contains(i) {
-                included
-            } else {
-                file.included
-            }
-        })
-        .map(|(i, _)| i)
-        .collect()
-}
-
-/// Folder and file nodes, folders first and sorted by name, files in torrent order.
-fn file_tree(files: &[TorrentFile], collapsed: &HashSet<SharedString>) -> Vec<TreeItem> {
-    let all: Vec<usize> = (0..files.len()).collect();
-    level(files, &all, &[], collapsed)
-}
-
-fn level(
-    files: &[TorrentFile],
-    indices: &[usize],
-    prefix: &[&str],
-    collapsed: &HashSet<SharedString>,
-) -> Vec<TreeItem> {
-    let mut dirs: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-    let mut leaves = Vec::new();
-    for &i in indices {
-        let parts = parts(&files[i]);
-        match parts.get(prefix.len()) {
-            Some(name) if parts.len() > prefix.len() + 1 => dirs.entry(name).or_default().push(i),
-            _ => leaves.push(i),
-        }
-    }
-    let mut items = Vec::new();
-    for (name, under) in dirs {
-        let mut path = prefix.to_vec();
-        path.push(name);
-        let id = dir_id(&path.join("/"));
-        let size: u64 = under.iter().map(|&i| files[i].length).sum();
-        let badge = format!(
-            "{}  {}",
-            format::bytes(size),
-            priority_label(inclusion(files, &under))
-        );
-        let mut item = TreeItem::new(id.clone(), name.to_owned())
-            .badge(badge)
-            .expanded(!collapsed.contains(&id));
-        item.children = level(files, &under, &path, collapsed);
-        items.push(item);
-    }
-    for i in leaves {
-        let file = &files[i];
-        let name = parts(file)
-            .last()
-            .map_or(file.name.as_str(), |n| n)
-            .to_owned();
-        let badge = format!(
-            "{}  {}",
-            format::bytes(file.length),
-            priority_label(inclusion(files, &[i]))
-        );
-        items.push(TreeItem::new(file_id(i), name).badge(badge));
-    }
-    items
-}
-
-/// The file tree, then the selected node's checkbox and priority buttons.
-/// Double-clicking a node flips it as the checkbox would.
-fn files(
-    snapshot: &DetailSnapshot,
-    pane: &DetailPane,
-    cx: &mut Context<DetailPane>,
-) -> impl IntoElement {
+/// One checkbox per file. Checking a box posts the new selection via `toggle_file`.
+fn files(snapshot: &DetailSnapshot, cx: &mut Context<DetailPane>) -> impl IntoElement {
     let me = cx.entity();
-    let list = snapshot.torrent.files.as_deref().unwrap_or_default();
-    let mut tree = Tree::new()
-        .items(file_tree(list, &pane.collapsed))
-        .on_select({
+    let rows = snapshot
+        .torrent
+        .files
+        .iter()
+        .flatten()
+        .enumerate()
+        .map(|(index, file)| {
             let me = me.clone();
-            move |node, _, _, cx| me.update(cx, |pane, cx| pane.select_node(node, cx))
-        })
-        .on_toggle({
-            let me = me.clone();
-            move |node, expanded, _, _, cx| {
-                me.update(cx, |pane, cx| pane.set_expanded(node, expanded, cx));
-            }
-        })
-        .on_activate({
-            let me = me.clone();
-            move |node, _, _, cx| me.update(cx, |pane, cx| pane.toggle_node(&node, cx))
-        });
-    if let Some(node) = &pane.selected_node {
-        tree = tree.selected(node.clone());
-    }
-    let mut column = div().flex().flex_col().gap_2().child(tree);
-    let selected = pane
-        .selected_node
-        .as_ref()
-        .map(|node| (node.clone(), indices_under(list, node)))
-        .filter(|(_, indices)| !indices.is_empty());
-    if let Some((node, indices)) = selected {
-        let state = inclusion(list, &indices);
-        let priority_button = |id: &'static str, label: &'static str, include: bool| {
-            let me = me.clone();
-            let indices = indices.clone();
-            Button::new(id).label(label).on_click(
-                move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-                    me.update(cx, |pane, cx| pane.set_included(&indices, include, cx));
-                },
-            )
-        };
-        let toggle = {
-            let me = me.clone();
-            Checkbox::new("torrent-file-node")
-                .state(state)
-                .on_click(move |_, _, _, cx| me.update(cx, |pane, cx| pane.toggle_node(&node, cx)))
-        };
-        column = column.child(
+            let checkbox = Checkbox::new(("torrent-file", index))
+                .checked(file.included)
+                .on_click(move |_, _, _, cx| {
+                    me.update(cx, |pane, cx| pane.toggle_file(index, cx));
+                });
             div()
                 .flex()
-                .items_center()
                 .gap_2()
-                .child(toggle)
-                .child(Label::new(format!("Priority: {}", priority_label(state))))
-                .child(priority_button("torrent-file-normal", "Normal", true))
-                .child(priority_button(
-                    "torrent-file-skip",
-                    "Do not download",
-                    false,
-                )),
-        );
-    }
-    column
+                .child(checkbox)
+                .child(Label::new(format!(
+                    "{}  {}",
+                    file.name,
+                    format::bytes(file.length)
+                )))
+        });
+    div().flex().flex_col().gap_1().children(rows)
 }
 
 /// The piece bar's numbers: how many pieces are held out of the total.
@@ -747,97 +470,5 @@ mod tests {
         pane.read_with(cx, |p, _| {
             assert!(p.error().is_none(), "post must not fail")
         });
-    }
-
-    fn file(path: &str, included: bool) -> TorrentFile {
-        TorrentFile {
-            name: path.to_owned(),
-            components: path.split('/').map(str::to_owned).collect(),
-            length: 10,
-            included,
-        }
-    }
-
-    fn sample() -> Vec<TorrentFile> {
-        vec![
-            file("show/s1/e1.mkv", true),
-            file("show/s1/e2.mkv", false),
-            file("show/notes.txt", true),
-            file("readme.txt", true),
-        ]
-    }
-
-    #[test]
-    fn tree_nests_folders_before_files() {
-        let tree = file_tree(&sample(), &HashSet::new());
-        let ids: Vec<&str> = tree.iter().map(|item| item.id.as_ref()).collect();
-        assert_eq!(ids, ["dir:show", "file:3"]);
-        let show = &tree[0];
-        let ids: Vec<&str> = show.children.iter().map(|item| item.id.as_ref()).collect();
-        assert_eq!(ids, ["dir:show/s1", "file:2"]);
-        assert_eq!(show.children[0].children.len(), 2);
-        assert!(show.badge.as_deref().unwrap().ends_with("Mixed"));
-        assert!(
-            show.children[0].children[1]
-                .badge
-                .as_deref()
-                .unwrap()
-                .ends_with("Do not download")
-        );
-    }
-
-    #[test]
-    fn collapsed_folders_stay_collapsed() {
-        let collapsed: HashSet<SharedString> = [dir_id("show")].into_iter().collect();
-        let tree = file_tree(&sample(), &collapsed);
-        assert!(!tree[0].expanded);
-        assert!(tree[0].children[0].expanded);
-    }
-
-    #[test]
-    fn folder_covers_every_file_below_it() {
-        let files = sample();
-        assert_eq!(indices_under(&files, "dir:show"), [0, 1, 2]);
-        assert_eq!(indices_under(&files, "dir:show/s1"), [0, 1]);
-        assert_eq!(indices_under(&files, "file:3"), [3]);
-        assert!(indices_under(&files, "file:9").is_empty());
-        assert_eq!(inclusion(&files, &[0, 1]), CheckboxState::Indeterminate);
-        assert_eq!(inclusion(&files, &[0, 2]), CheckboxState::Checked);
-        assert_eq!(inclusion(&files, &[1]), CheckboxState::Unchecked);
-    }
-
-    #[test]
-    fn new_selection_sets_only_the_changed_files() {
-        let files = sample();
-        assert_eq!(new_selection(&files, &[0, 1], true), [0, 1, 2, 3]);
-        assert_eq!(new_selection(&files, &[0, 1, 2], false), [3]);
-    }
-
-    #[gpui::test]
-    fn skipping_a_folder_posts_the_whole_selection(cx: &mut TestAppContext) {
-        let (runtime, server) = daemon(cx);
-        // Both fixture files sit at the root; skipping both leaves nothing selected.
-        runtime.block_on(
-            Mock::given(method("POST"))
-                .and(path("/torrents/7/update_only_files"))
-                .and(body_string(r#"{"only_files":[]}"#))
-                .respond_with(ResponseTemplate::new(200))
-                .expect(1)
-                .mount(&server),
-        );
-        let pane = cx.new(DetailPane::new);
-        pane.update(cx, |pane, cx| pane.select_torrent(7, cx));
-        drive(cx, |cx| pane.read_with(cx, |p, _| p.snapshot().is_some()));
-        pane.update(cx, |pane, cx| pane.set_included(&[0, 1, 0], false, cx));
-        let count_posts = |runtime: &Runtime, server: &MockServer| {
-            runtime
-                .block_on(server.received_requests())
-                .unwrap()
-                .iter()
-                .filter(|r| r.url.path() == "/torrents/7/update_only_files")
-                .count()
-        };
-        drive(cx, |_| count_posts(&runtime, &server) == 1);
-        pane.read_with(cx, |p, _| assert!(p.error().is_none()));
     }
 }
