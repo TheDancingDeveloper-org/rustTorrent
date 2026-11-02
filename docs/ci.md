@@ -135,6 +135,11 @@ secrets. It runs:
   surfaces before a release;
 - on manual dispatch.
 
+If a nightly or manually dispatched dry run fails, the workflow opens the
+`[CI] Release dry run is failing` tracking issue, or comments with the latest
+failed run when that issue is already open. Pull-request failures remain on the
+pull request and do not create tracking issues.
+
 It derives the tag from the `crates/rtbit/Cargo.toml` version (the release
 version `scripts/check-repo-hygiene.sh` enforces everywhere), builds the Linux
 and Windows binaries, the `.deb`, the `.rpm`, the service-files tarball, the
