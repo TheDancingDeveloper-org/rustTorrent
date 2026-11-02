@@ -38,6 +38,8 @@ const FIXTURE_TORRENT: &[u8] = include_bytes!("qbit_replay/fixture.torrent");
 
 const FIXTURES: &[(&str, &str)] = &[
     ("sonarr", include_str!("qbit_replay/sonarr.json")),
+    ("radarr", include_str!("qbit_replay/radarr.json")),
+    ("lidarr", include_str!("qbit_replay/lidarr.json")),
     (
         "qbittorrent_api",
         include_str!("qbit_replay/qbittorrent_api.json"),
@@ -380,8 +382,20 @@ async fn replay_sonarr() {
 }
 
 #[tokio::test]
-async fn replay_qbittorrent_api() {
+async fn replay_radarr() {
     let (name, raw) = FIXTURES[1];
+    replay(&parse(name, raw)).await;
+}
+
+#[tokio::test]
+async fn replay_lidarr() {
+    let (name, raw) = FIXTURES[2];
+    replay(&parse(name, raw)).await;
+}
+
+#[tokio::test]
+async fn replay_qbittorrent_api() {
+    let (name, raw) = FIXTURES[3];
     replay(&parse(name, raw)).await;
 }
 
