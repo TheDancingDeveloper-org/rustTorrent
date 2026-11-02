@@ -73,9 +73,15 @@ pub fn assert_public_addresses(addresses: &[IpAddr]) -> Result<(), FeedUrlError>
     Ok(())
 }
 
-/// Keep at most [`MAX_FEED_BYTES`] of a feed body.
-pub fn cap_feed_body(body: &[u8]) -> Vec<u8> {
-    body.iter().take(MAX_FEED_BYTES).copied().collect()
+/// Reject a feed body that exceeds [`MAX_FEED_BYTES`].
+///
+/// Truncating XML can turn a valid feed into malformed input and hide the
+/// fact that the remote response exceeded our safety limit.
+pub fn cap_feed_body(body: &[u8]) -> anyhow::Result<Vec<u8>> {
+    if body.len() > MAX_FEED_BYTES {
+        anyhow::bail!("RSS feed body exceeds the {MAX_FEED_BYTES} byte cap")
+    }
+    Ok(body.to_vec())
 }
 
 #[cfg(test)]
@@ -134,6 +140,8 @@ mod tests {
             "http://240.0.0.1/feed.xml",
             "http://255.255.255.255/feed.xml",
             "http://[64:ff9b::1.2.3.4]/feed.xml",
+            "http://[64:ff9b:1::1]/feed.xml",
+            "http://[2001::1]/feed.xml",
             "http://[::192.0.2.1]/feed.xml",
             "http://[2002:c000:201::]/feed.xml",
         ] {
@@ -151,7 +159,7 @@ mod tests {
     #[test]
     fn caps_a_feed_body_at_the_limit() {
         let big = vec![b'a'; MAX_FEED_BYTES + 100];
-        assert_eq!(cap_feed_body(&big).len(), MAX_FEED_BYTES);
-        assert_eq!(cap_feed_body(b"<rss/>"), b"<rss/>");
+        assert!(cap_feed_body(&big).is_err());
+        assert_eq!(cap_feed_body(b"<rss/>").unwrap(), b"<rss/>");
     }
 }
