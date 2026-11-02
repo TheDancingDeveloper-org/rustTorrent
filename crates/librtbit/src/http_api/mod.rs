@@ -89,7 +89,7 @@ struct ApiDoc;
 /// An HTTP server for the API.
 pub struct HttpApi {
     api: Api,
-    opts: HttpApiOptions,
+    pub(crate) opts: HttpApiOptions,
     login_limiter: auth::LoginLimiter,
 }
 
@@ -115,6 +115,7 @@ pub struct HttpApiOptions {
     pub rss_db: Option<Arc<parking_lot::Mutex<RssDatabase>>>,
     /// RSS feed history limit (max items to keep). None = unlimited, default 500.
     pub rss_history_limit: Option<usize>,
+    pub shutdown_token: Option<tokio_util::sync::CancellationToken>,
 }
 
 /// Constant-time byte comparison to prevent timing attacks on auth credentials.
