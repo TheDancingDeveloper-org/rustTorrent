@@ -35,6 +35,21 @@ const TABS: [(&str, &str); 5] = [
     ("pieces", "Pieces"),
 ];
 
+const NO_TORRENT_SELECTED: &str = "No torrent selected.";
+const METADATA_RESOLVING: &str = "Torrent metadata is still resolving.";
+const NO_CONNECTED_PEERS: &str = "No connected peers.";
+const NO_TRACKERS: &str = "No trackers (DHT-only).";
+
+/// The named empty state associated with each detail tab.
+fn empty_state_message(tab: &str) -> &'static str {
+    match tab {
+        "files" | "pieces" => METADATA_RESOLVING,
+        "peers" => NO_CONNECTED_PEERS,
+        "trackers" => NO_TRACKERS,
+        _ => NO_TORRENT_SELECTED,
+    }
+}
+
 /// The detail pane for one selected torrent.
 pub struct DetailPane {
     torrent_id: Option<u64>,
@@ -276,14 +291,20 @@ impl DetailPane {
             let text = if self.torrent_id.is_some() {
                 "Loading…"
             } else {
-                "Select a torrent to see its details."
+                NO_TORRENT_SELECTED
             };
             return Label::new(text).into_any_element();
         };
         match self.active_tab(cx) {
+            "files" if snapshot.torrent.files.is_none() => {
+                Label::new(empty_state_message("files")).into_any_element()
+            }
             "files" => files(snapshot, self, cx).into_any_element(),
             "peers" => peers_table(snapshot).into_any_element(),
             "trackers" => trackers_table(snapshot).into_any_element(),
+            "pieces" if snapshot.pieces.have.is_empty() => {
+                Label::new(empty_state_message("pieces")).into_any_element()
+            }
             "pieces" => pieces_summary(snapshot).into_any_element(),
             _ => general(snapshot).into_any_element(),
         }
@@ -541,7 +562,7 @@ fn peers_table(snapshot: &DetailSnapshot) -> impl IntoElement {
             DataColumn::new("up", "Uploaded").width(110.0),
         ])
         .rows(rows)
-        .empty_message("No live peers")
+        .empty_message(empty_state_message("peers"))
         .max_body_height(240.0)
 }
 
@@ -565,7 +586,7 @@ fn trackers_table(snapshot: &DetailSnapshot) -> impl IntoElement {
             DataColumn::new("leechers", "Leechers").width(80.0),
         ])
         .rows(rows)
-        .empty_message("No trackers")
+        .empty_message(empty_state_message("trackers"))
         .max_body_height(240.0)
 }
 
@@ -675,6 +696,21 @@ mod tests {
     fn tabs_match_the_old_client_after_general() {
         let labels: Vec<&str> = TABS.iter().map(|(_, label)| *label).collect();
         assert_eq!(labels, ["General", "Files", "Peers", "Trackers", "Pieces"]);
+    }
+
+    #[test]
+    fn every_detail_tab_has_the_expected_named_empty_state() {
+        assert_eq!(empty_state_message("general"), "No torrent selected.");
+        assert_eq!(
+            empty_state_message("files"),
+            "Torrent metadata is still resolving."
+        );
+        assert_eq!(empty_state_message("peers"), "No connected peers.");
+        assert_eq!(empty_state_message("trackers"), "No trackers (DHT-only).");
+        assert_eq!(
+            empty_state_message("pieces"),
+            "Torrent metadata is still resolving."
+        );
     }
 
     #[gpui::test]
