@@ -35,6 +35,29 @@ pub fn state_label(state: Option<TorrentState>) -> String {
     state.map_or_else(|| "—".to_owned(), |state| state.label().to_owned())
 }
 
+/// Prefix of the daemon's error for a stopped torrent whose payload is
+/// missing or short; the rest names the first missing path.
+pub const MISSING_FILES_ERROR: &str = "payload is missing or incomplete";
+
+/// Whether the daemon flagged this torrent's payload as missing.
+#[must_use]
+pub fn is_missing_files(stats: Option<&rtbit_client::TorrentStats>) -> bool {
+    stats
+        .and_then(|stats| stats.error.as_deref())
+        .is_some_and(|error| error.starts_with(MISSING_FILES_ERROR))
+}
+
+/// The state word for a row: "Files missing" when the payload is missing,
+/// otherwise [`state_label`].
+#[must_use]
+pub fn row_state_label(stats: Option<&rtbit_client::TorrentStats>) -> String {
+    if is_missing_files(stats) {
+        "Files missing".to_owned()
+    } else {
+        state_label(stats.and_then(|stats| stats.state))
+    }
+}
+
 /// `progress / total`, or just the size when the total is unknown.
 #[must_use]
 pub fn progress(done: u64, total: u64) -> String {
@@ -62,5 +85,12 @@ mod tests {
         );
         assert_eq!(state_label(Some(TorrentState::Live)), "live");
         assert_eq!(state_label(None), "—");
+        let missing = rtbit_client::TorrentStats {
+            state: Some(TorrentState::Paused),
+            error: Some("payload is missing or incomplete on read-only storage: a/b.bin".into()),
+            ..Default::default()
+        };
+        assert_eq!(row_state_label(Some(&missing)), "Files missing");
+        assert_eq!(row_state_label(None), "—");
     }
 }

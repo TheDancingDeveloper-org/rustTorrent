@@ -55,6 +55,9 @@ export const APIContext = createContext<RtbitAPI>({
   recheck: () => {
     throw new Error("Function not implemented.");
   },
+  setLocation: () => {
+    throw new Error("Function not implemented.");
+  },
   addTrackers: () => {
     throw new Error("Function not implemented.");
   },

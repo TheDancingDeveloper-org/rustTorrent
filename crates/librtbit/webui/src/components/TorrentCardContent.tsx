@@ -9,6 +9,9 @@ import { Speed } from "./Speed";
 import { formatBytes } from "../helper/formatBytes";
 import { getCompletionETA } from "../helper/getCompletionETA";
 import { StatusIcon } from "./StatusIcon";
+import { Button } from "./buttons/Button";
+import { API } from "../http-api";
+import { isMissingFilesError } from "../helper/missingFiles.js";
 
 export const TorrentCardContent: React.FC<{
   torrent: TorrentListItem;
@@ -18,6 +21,7 @@ export const TorrentCardContent: React.FC<{
   const statsResponse = torrent.stats ?? null;
   const state = statsResponse?.state ?? "";
   const error = statsResponse?.error ?? null;
+  const missingFiles = isMissingFilesError(error);
   const totalBytes = statsResponse?.total_bytes ?? 1;
   const progressBytes = statsResponse?.progress_bytes ?? 0;
   const finished = statsResponse?.finished || false;
@@ -82,9 +86,28 @@ export const TorrentCardContent: React.FC<{
             </div>
           </div>
           {error ? (
-            <p className="text-error">
-              <strong>Error:</strong> {error}
-            </p>
+            <div className="text-error">
+              <p>
+                <strong>{missingFiles ? "Files missing:" : "Error:"}</strong>{" "}
+                {error}
+              </p>
+              {missingFiles && (
+                <div className="flex gap-2 mt-1">
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      const location = window.prompt("Set location to:");
+                      if (location) void API.setLocation(id, location);
+                    }}
+                  >
+                    Set location…
+                  </Button>
+                  <Button size="sm" onClick={() => void API.recheck(id)}>
+                    Force recheck
+                  </Button>
+                </div>
+              )}
+            </div>
           ) : (
             <>
               <div>
