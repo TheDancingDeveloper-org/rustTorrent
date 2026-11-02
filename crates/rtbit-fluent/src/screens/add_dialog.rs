@@ -137,6 +137,18 @@ impl AddDialog {
         );
     }
 
+    /// Fill the magnet field, for a magnet taken from the clipboard.
+    pub(crate) fn prefill_magnet(&self, magnet: &str, cx: &mut Context<Self>) {
+        self.magnet
+            .update(cx, |field, cx| field.set_value(magnet.to_owned(), cx));
+    }
+
+    /// The text in the magnet field.
+    #[cfg(test)]
+    pub(crate) fn magnet_text(&self, cx: &gpui::App) -> String {
+        self.magnet.read(cx).text().to_owned()
+    }
+
     /// Stand in for the native picker: set the chosen `.torrent` file, for tests.
     #[cfg(test)]
     pub(crate) fn set_file_for_test(&mut self, name: &str, bytes: &[u8]) {
