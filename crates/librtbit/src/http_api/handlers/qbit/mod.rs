@@ -577,6 +577,7 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
         .route("/webapiVersion", get(h_app_webapi_version))
         .route("/buildInfo", get(h_app_build_info))
         .route("/defaultSavePath", get(h_app_default_save_path))
+        .route("/getFreeSpaceAtPath", get(h_app_get_free_space_at_path))
         .route("/preferences", get(h_app_preferences))
         .route("/setPreferences", post(h_app_set_preferences));
 
