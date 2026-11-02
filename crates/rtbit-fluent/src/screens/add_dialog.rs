@@ -19,7 +19,7 @@ use rtbit_ui_core::{AddRequest, AddSource};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AddDialogEvent {
     /// The input passed the checks. The owner sends the request and closes the dialog.
-    Submit(AddRequest),
+    Submit(Vec<AddRequest>),
     /// The user cancelled. Nothing is sent.
     Cancel,
 }
@@ -31,7 +31,7 @@ pub struct AddDialog {
     category: Entity<TextInput>,
     start_paused: bool,
     /// Name and bytes of the `.torrent` file the user picked.
-    file: Option<(String, Vec<u8>)>,
+    files: Vec<(String, Vec<u8>)>,
     error: Option<String>,
     /// Set once a request has been emitted, so a second submit sends nothing.
     submitted: bool,
@@ -49,7 +49,7 @@ impl AddDialog {
             save_path: cx.new(|_| TextInput::new().placeholder("Save path")),
             category: cx.new(|_| TextInput::new().placeholder("Category (optional)")),
             start_paused: false,
-            file: None,
+            files: Vec::new(),
             error: None,
             submitted: false,
             autofocused: false,
@@ -71,18 +71,35 @@ impl AddDialog {
         let magnet = self.magnet.read(cx).text().to_owned();
         let save_path = self.save_path.read(cx).text().to_owned();
         let category = self.category.read(cx).text().to_owned();
-        let file = self
-            .file
-            .as_ref()
-            .map(|(name, bytes)| (name.as_str(), bytes.as_slice()));
-        match validate_add(&magnet, file, &save_path, &category, self.start_paused) {
-            Ok(request) => {
+        let files = if magnet.trim().is_empty() {
+            self.files
+                .iter()
+                .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
+                .collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
+        let requests = if magnet.trim().is_empty() {
+            files
+                .into_iter()
+                .map(|file| validate_add("", Some(file), &save_path, &category, self.start_paused))
+                .collect::<Result<Vec<_>, _>>()
+        } else {
+            validate_add(&magnet, None, &save_path, &category, self.start_paused)
+                .map(|request| vec![request])
+        };
+        match requests {
+            Ok(requests) if !requests.is_empty() => {
                 self.submitted = true;
                 self.error = None;
-                cx.emit(AddDialogEvent::Submit(request));
+                cx.emit(AddDialogEvent::Submit(requests));
             }
             Err(message) => {
                 self.error = Some(message);
+                cx.notify();
+            }
+            Ok(_) => {
+                self.error = Some("enter a magnet link or choose a .torrent file".to_owned());
                 cx.notify();
             }
         }
@@ -96,6 +113,23 @@ impl AddDialog {
     /// The daemon refused the request: show why and allow a retry.
     pub(crate) fn refused(&mut self, message: String, cx: &mut Context<Self>) {
         self.submitted = false;
+        self.error = Some(message);
+        cx.notify();
+    }
+
+    pub(crate) fn set_file(&mut self, name: String, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        self.files = vec![(name, bytes)];
+        self.error = None;
+        cx.notify();
+    }
+
+    pub(crate) fn set_files(&mut self, files: Vec<(String, Vec<u8>)>, cx: &mut Context<Self>) {
+        self.files = files;
+        self.error = None;
+        cx.notify();
+    }
+
+    pub(crate) fn set_error(&mut self, message: String, cx: &mut Context<Self>) {
         self.error = Some(message);
         cx.notify();
     }
@@ -128,8 +162,7 @@ impl AddDialog {
                 let _ = view.update(cx, |dialog, cx| {
                     match read {
                         Ok(bytes) => {
-                            dialog.file = Some((name, bytes));
-                            dialog.error = None;
+                            dialog.set_file(name, bytes, cx);
                         }
                         Err(err) => dialog.error = Some(format!("could not read {name}: {err}")),
                     }
@@ -159,7 +192,7 @@ impl AddDialog {
     /// Stand in for the native picker: set the chosen `.torrent` file, for tests.
     #[cfg(test)]
     pub(crate) fn set_file_for_test(&mut self, name: &str, bytes: &[u8]) {
-        self.file = Some((name.to_owned(), bytes.to_vec()));
+        self.files = vec![(name.to_owned(), bytes.to_vec())];
     }
 
     /// Type a magnet and a save path, for tests outside this module.
@@ -194,9 +227,16 @@ impl Render for AddDialog {
         }
         let colors = cx.theme().colors.clone();
         let file_label = self
-            .file
-            .as_ref()
-            .map_or_else(|| "No file chosen".to_owned(), |(name, _)| name.clone());
+            .files
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let file_label = if file_label.is_empty() {
+            "No file chosen".to_owned()
+        } else {
+            file_label
+        };
         let pick_me = cx.entity();
         let paused_me = cx.entity();
         let cancel_me = cx.entity();
