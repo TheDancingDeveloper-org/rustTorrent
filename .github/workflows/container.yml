@@ -5,6 +5,8 @@ on:
     branches: [main, dev]
     tags: ['v*']
   workflow_dispatch:
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
@@ -16,6 +18,7 @@ concurrency:
 
 jobs:
   publish:
+    if: github.event_name != 'merge_group'
     # Privileged publication capacity is selected only for this repository and
     # this workflow deliberately has no pull_request trigger.
     runs-on: [self-hosted, linux, docker, publish]
@@ -80,3 +83,61 @@ jobs:
             -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
             "https://ghcr.io/v2/thedancingdeveloper-org/rusttorrent/manifests/$tag" > manifest.json
           jq -e '.schemaVersion == 2' manifest.json >/dev/null
+
+  smoke:
+    if: github.event_name == 'merge_group'
+    runs-on: [self-hosted, linux, docker, publish]
+    permissions:
+      contents: read
+    env:
+      IMAGE: rusttorrent-container-smoke:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Build the daemon image
+        run: docker build --tag "$IMAGE" --file Dockerfile .
+      - name: Start and probe the daemon
+        shell: bash
+        run: |
+          set -euo pipefail
+          volume="rusttorrent-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          container="rusttorrent-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker rm --force "$container" >/dev/null 2>&1 || true
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+            docker image rm "$IMAGE" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker volume create "$volume" >/dev/null
+          docker run --detach --name "$container" --volume "$volume:/home/rtbit/db" \
+            --publish 3030:3030 "$IMAGE" >/dev/null
+
+          deadline=$((SECONDS + 30))
+          setup_token=''
+          while (( SECONDS < deadline )); do
+            if ! setup_token=$(docker exec "$container" cat /home/rtbit/db/session/setup-token 2>/dev/null); then
+              setup_token=''
+            fi
+            if [[ -n "$setup_token" ]] && curl --fail --silent --show-error \
+              --output /dev/null http://127.0.0.1:3030/healthz; then
+              break
+            fi
+            sleep 1
+          done
+          [[ -n "$setup_token" ]]
+          (( SECONDS < deadline ))
+
+          curl --fail --silent --show-error \
+            --header 'Content-Type: application/json' \
+            --data "{\"username\":\"smoke\",\"password\":\"smoke-password\",\"setup_token\":\"$setup_token\"}" \
+            http://127.0.0.1:3030/api/v2/auth/setup >/dev/null
+          version=$(curl --fail --silent --show-error \
+            --user smoke:smoke-password http://127.0.0.1:3030/api/v2/app/webapiVersion)
+          [[ "$version" == '2.11.3' ]]
+          curl --fail --silent --show-error \
+            http://127.0.0.1:3030/healthz >/dev/null
+
+          docker stop --time 30 "$container" >/dev/null
+          [[ "$(docker inspect --format '{{.State.ExitCode}}' "$container")" == 0 ]]
+          docker run --rm --volume "$volume:/data" --entrypoint sh "$IMAGE" \
+            -c 'test -s /data/session/session.json'
