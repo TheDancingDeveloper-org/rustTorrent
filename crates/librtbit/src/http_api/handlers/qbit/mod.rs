@@ -22,6 +22,7 @@ use axum::{
 };
 use bytes::Bytes;
 use http::{HeaderMap, Method, StatusCode, header::RETRY_AFTER, header::SET_COOKIE};
+use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
@@ -578,8 +579,11 @@ pub(crate) fn make_qbit_router(api_state: ApiState) -> Router {
         .route("/buildInfo", get(h_app_build_info))
         .route("/defaultSavePath", get(h_app_default_save_path))
         .route("/getFreeSpaceAtPath", get(h_app_get_free_space_at_path))
+        .route("/networkInterfaceList", get(h_app_network_interface_list))
+        .route("/networkInterfaceAddressList", get(h_app_network_interface_address_list))
         .route("/preferences", get(h_app_preferences))
-        .route("/setPreferences", post(h_app_set_preferences));
+        .route("/setPreferences", post(h_app_set_preferences))
+        .route("/shutdown", post(h_app_shutdown));
 
     // Torrent endpoints
     let torrents_router = Router::new()

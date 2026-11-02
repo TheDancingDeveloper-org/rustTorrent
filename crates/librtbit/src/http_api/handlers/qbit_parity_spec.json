@@ -58,12 +58,14 @@
     {
       "endpoint": "app/networkInterfaceAddressList",
       "method": "GET",
-      "status": "missing"
+      "status": "full",
+      "response": { "content": "json", "schema": ["string"] }
     },
     {
       "endpoint": "app/networkInterfaceList",
       "method": "GET",
-      "status": "missing"
+      "status": "full",
+      "response": { "content": "json", "schema": [{ "name": "string", "value": "string" }] }
     },
     {
       "endpoint": "app/preferences",
@@ -138,7 +140,9 @@
     {
       "endpoint": "app/shutdown",
       "method": "POST",
-      "status": "missing"
+      "status": "full",
+      "response": { "content": "text" },
+      "notes": "Requires authentication and initiates graceful session shutdown."
     },
     {
       "endpoint": "app/version",

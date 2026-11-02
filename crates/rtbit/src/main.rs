@@ -1054,6 +1054,7 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
         token_store,
         credential_store: Some(credential_store),
         api_keys,
+        shutdown_token: Some(cancel.clone()),
 
         // We need to install prometheus recorder early before we registered any metrics.
         #[cfg(feature = "prometheus")]

@@ -8752,6 +8752,7 @@ dependencies = [
  "memmap2",
  "metrics-exporter-prometheus",
  "mime_guess",
+ "network-interface",
  "nix 0.31.3",
  "notify",
  "parking_lot",
