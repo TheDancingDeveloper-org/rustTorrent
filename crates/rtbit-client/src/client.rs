@@ -155,6 +155,20 @@ impl Client {
             .await
     }
 
+    /// `GET /torrents/categories`, sorted by name.
+    pub async fn list_categories(&mut self) -> Result<Vec<crate::types::Category>, Error> {
+        let map: std::collections::HashMap<String, crate::types::Category> =
+            self.authed_get("torrents/categories").await?;
+        let mut all: Vec<_> = map.into_values().collect();
+        all.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(all)
+    }
+
+    /// `POST /torrents/categories`. Creates the category or replaces its save path and limits.
+    pub async fn save_category(&mut self, body: &crate::types::CategoryBody) -> Result<(), Error> {
+        self.authed_post_json("torrents/categories", body).await
+    }
+
     /// `POST /torrents/{id}/set_category`. `None` clears the category.
     pub async fn set_torrent_category(
         &mut self,

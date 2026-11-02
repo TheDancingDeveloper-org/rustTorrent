@@ -310,6 +310,17 @@ export interface AddTorrentOptions {
 export interface CategoryInfo {
   name: string;
   save_path?: string;
+  // Blank/absent = use the global limit. Durations arrive as {secs, nanos}.
+  ratio_limit?: number | null;
+  seeding_time_limit?: number | { secs: number; nanos?: number } | null;
+  inactive_seeding_time_limit?:
+    number | { secs: number; nanos?: number } | null;
+}
+
+export interface CategoryLimitRequest {
+  ratio_limit?: number;
+  seeding_time_limit?: number; // seconds
+  inactive_seeding_time_limit?: number; // seconds
 }
 
 export type Value = string | number | boolean;
@@ -589,7 +600,11 @@ export interface RtbitAPI {
 
   // Category management
   getCategories: () => Promise<Record<string, CategoryInfo>>;
-  createCategory: (name: string, savePath?: string) => Promise<void>;
+  createCategory: (
+    name: string,
+    savePath?: string,
+    limits?: CategoryLimitRequest,
+  ) => Promise<void>;
   deleteCategory: (name: string) => Promise<void>;
   setTorrentCategory: (
     torrentId: number,
