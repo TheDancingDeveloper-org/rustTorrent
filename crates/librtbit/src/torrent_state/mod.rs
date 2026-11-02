@@ -110,6 +110,7 @@ pub(crate) struct ManagedTorrentLocked {
     pub(crate) paused: bool,
     pub(crate) state: ManagedTorrentState,
     pub(crate) only_files: Option<Vec<usize>>,
+    pub(crate) file_priority_levels: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -531,6 +532,10 @@ impl ManagedTorrent {
         self.locked.read().only_files.clone()
     }
 
+    pub fn file_priority_levels(&self) -> Vec<u8> {
+        self.locked.read().file_priority_levels.clone()
+    }
+
     /// Current per-torrent speed limits (the runtime override). `None` bps means
     /// unlimited in that direction.
     pub fn rate_limits(&self) -> LimitsConfig {
@@ -780,6 +785,7 @@ impl ManagedTorrent {
                         t.shared.clone(),
                         metadata.clone(),
                         g.only_files.clone(),
+                        g.file_priority_levels.clone(),
                         t.shared
                             .storage_factory
                             .create_and_init(t.shared(), &metadata)?,
@@ -914,6 +920,7 @@ impl ManagedTorrent {
             self.shared.clone(),
             metadata,
             locked.only_files.clone(),
+            locked.file_priority_levels.clone(),
             files,
             true,
         )));
@@ -960,9 +967,13 @@ impl ManagedTorrent {
                 // and only while it is still the current initializer.
                 self.shared.cancel_and_reset_token();
                 let files = init.files.take();
-                g.state = match files
-                    .and_then(|f| self.new_deferred_initializing(g.only_files.clone(), f))
-                {
+                g.state = match files.and_then(|f| {
+                    self.new_deferred_initializing(
+                        g.only_files.clone(),
+                        g.file_priority_levels.clone(),
+                        f,
+                    )
+                }) {
                     Ok(init) => ManagedTorrentState::Initializing(init),
                     Err(e) => ManagedTorrentState::Error(
                         e.context("error keeping storage after stopping the check"),
@@ -985,14 +996,21 @@ impl ManagedTorrent {
     fn new_deferred_initializing(
         &self,
         only_files: Option<Vec<usize>>,
+        file_priority_levels: Vec<u8>,
         files: crate::type_aliases::FileStorage,
     ) -> anyhow::Result<Arc<TorrentStateInitializing>> {
         let metadata = self
             .metadata
             .load_full()
             .context("torrent metadata was not loaded")?;
-        let init =
-            TorrentStateInitializing::new(self.shared.clone(), metadata, only_files, files, false);
+        let init = TorrentStateInitializing::new(
+            self.shared.clone(),
+            metadata,
+            only_files,
+            file_priority_levels,
+            files,
+            false,
+        );
         init.deferred.store(true, Ordering::Relaxed);
         Ok(Arc::new(init))
     }
@@ -1168,6 +1186,38 @@ impl ManagedTorrent {
         };
 
         g.only_files = Some(only_files.iter().copied().collect());
+        Ok(())
+    }
+
+    pub(crate) fn update_file_priority(
+        &self,
+        file_index: usize,
+        priority: u8,
+    ) -> anyhow::Result<()> {
+        let mut g = self.locked.write();
+        if file_index >= g.file_priority_levels.len() {
+            anyhow::bail!("file index out of range");
+        }
+        g.file_priority_levels[file_index] = priority;
+        let levels = g.file_priority_levels.clone();
+        let selected = g
+            .file_priority_levels
+            .iter()
+            .enumerate()
+            .filter_map(|(id, level)| (*level != 0).then_some(id))
+            .collect::<HashSet<_>>();
+        match &mut g.state {
+            ManagedTorrentState::Paused(p) => {
+                p.file_priority_levels = levels;
+                p.update_only_files(&selected)?;
+            }
+            ManagedTorrentState::Live(l) => l.update_file_priority(file_index, priority)?,
+            ManagedTorrentState::Initializing(_) => {
+                anyhow::bail!("can't update initializing torrent")
+            }
+            ManagedTorrentState::Error(_) | ManagedTorrentState::None => {}
+        }
+        g.only_files = Some(selected.into_iter().collect());
         Ok(())
     }
 }

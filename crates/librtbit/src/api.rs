@@ -463,6 +463,20 @@ impl Api {
             .await
     }
 
+    pub async fn api_torrent_file_set_priority(
+        &self,
+        idx: TorrentIdOrHash,
+        file_index: usize,
+        priority: u8,
+    ) -> Result<EmptyJsonResponse> {
+        if !matches!(priority, 0 | 1 | 6 | 7) {
+            return Err(anyhow::anyhow!("invalid file priority").into());
+        }
+        let handle = self.mgr_handle(idx)?;
+        handle.update_file_priority(file_index, priority)?;
+        Ok(Default::default())
+    }
+
     pub fn api_set_rust_log(&self, new_value: String) -> Result<EmptyJsonResponse> {
         let tx = self
             .rust_log_reload_tx
