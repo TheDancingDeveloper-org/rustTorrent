@@ -288,6 +288,14 @@ impl RssScreen {
             cx.notify();
         }
     }
+
+    /// Set the download priority in the open draft.
+    pub fn set_priority(&mut self, priority: i32, cx: &mut Context<Self>) {
+        if let Some(draft) = self.editor.as_mut() {
+            draft.priority = priority;
+            cx.notify();
+        }
+    }
 }
 
 /// A boolean field of the rule draft that the editor shows as a checkbox.
@@ -734,6 +742,23 @@ impl RssScreen {
                         this.toggle_flag(DraftFlag::TrackEpisodes, cx);
                     });
                 });
+            let mut priorities = div().flex().flex_row().gap_2();
+            for (priority, label) in [(0, "Low"), (1, "Normal"), (2, "High")] {
+                let priority_me = me.clone();
+                priorities = priorities.child(
+                    Button::new(("rss-rule-priority", priority as usize))
+                        .label(label)
+                        .appearance(if draft.priority == priority {
+                            ButtonAppearance::Accent
+                        } else {
+                            ButtonAppearance::Neutral
+                        })
+                        .disabled(self.rule_busy)
+                        .on_click(move |_, _, cx| {
+                            priority_me.update(cx, |this, cx| this.set_priority(priority, cx));
+                        }),
+                );
+            }
             section = section
                 .child(Label::new(title))
                 .child(Label::new("Name"))
@@ -743,10 +768,8 @@ impl RssScreen {
                 .child(feeds)
                 .child(Label::new("Category"))
                 .child(self.category_input.clone())
-                .child(Label::new(format!(
-                    "Priority: {}",
-                    priority_label(draft.priority)
-                )))
+                .child(Label::new("Priority"))
+                .child(priorities)
                 .child(
                     div()
                         .flex()
@@ -818,7 +841,7 @@ impl RssScreen {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{body_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const FIXTURES: &str = concat!(
@@ -1038,11 +1061,13 @@ mod tests {
     fn validate_rule_trims_and_drops_an_empty_category() {
         let mut draft = draft_with(" Show ", " Show.*1080p ", &["Show"]);
         draft.category = "  ".to_owned();
+        draft.priority = 2;
         let body = validate_rule(&draft).expect("valid");
         assert_eq!(body.name, "Show");
         assert_eq!(body.match_regex, "Show.*1080p");
         assert_eq!(body.feed_names, vec!["Show".to_owned()]);
         assert_eq!(body.category, None);
+        assert_eq!(body.priority, 2);
         assert!(body.enabled && body.track_episodes);
     }
 
@@ -1094,7 +1119,17 @@ mod tests {
         runtime.block_on(async {
             Mock::given(method("POST"))
                 .and(path("/rss/rules"))
+                .and(body_json(serde_json::json!({
+                    "name": "Two",
+                    "feed_names": ["Show"],
+                    "category": null,
+                    "priority": 0,
+                    "match_regex": "Two.*",
+                    "enabled": true,
+                    "track_episodes": true
+                })))
                 .respond_with(ResponseTemplate::new(200))
+                .expect(1)
                 .mount(&server)
                 .await;
         });
@@ -1106,6 +1141,7 @@ mod tests {
                 .regex_input
                 .update(cx, |f, cx| f.set_value("Two.*", cx));
             screen.editor.as_mut().unwrap().feeds = vec!["Show".to_owned()];
+            screen.set_priority(0, cx);
             screen.save_rule(cx);
         });
         drive(cx, |cx| {
@@ -1114,6 +1150,42 @@ mod tests {
         screen.read_with(cx, |screen, _| {
             assert!(screen.error().is_none(), "save should succeed");
         });
+        runtime.block_on(server.verify());
+    }
+
+    #[gpui::test]
+    fn edit_initializes_and_updates_the_selected_priority(cx: &mut TestAppContext) {
+        let (runtime, server) = daemon(cx, ITEMS);
+        runtime.block_on(async {
+            Mock::given(method("PUT"))
+                .and(path("/rss/rules/r-1"))
+                .and(body_json(serde_json::json!({
+                    "name": "Show 1080p",
+                    "feed_names": ["Show"],
+                    "category": "tv",
+                    "priority": 0,
+                    "match_regex": "Show.*1080p",
+                    "enabled": true,
+                    "track_episodes": true
+                })))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(1)
+                .mount(&server)
+                .await;
+        });
+        let screen = loaded(cx);
+        screen.update(cx, |screen, cx| {
+            screen.open_edit_rule("r-1", cx);
+            assert_eq!(screen.editor().map(|draft| draft.priority), Some(2));
+            screen.set_priority(0, cx);
+            screen.save_rule(cx);
+        });
+        drive(cx, |cx| {
+            screen.read_with(cx, |screen, _| {
+                screen.editor().is_none() && !screen.rule_busy
+            })
+        });
+        runtime.block_on(server.verify());
     }
 
     #[gpui::test]
@@ -1184,12 +1256,14 @@ mod tests {
             screen.name_input.update(cx, |f, cx| f.set_value("Bad", cx));
             screen.regex_input.update(cx, |f, cx| f.set_value("(", cx));
             screen.editor.as_mut().unwrap().feeds = vec!["Show".to_owned()];
+            screen.set_priority(2, cx);
             screen.save_rule(cx);
         });
         drive(cx, |cx| screen.read_with(cx, |s, _| !s.rule_busy));
         screen.read_with(cx, |screen, _| {
             assert!(screen.editor().is_some(), "editor must stay open");
             assert!(screen.error().is_some(), "refusal must show an error");
+            assert_eq!(screen.editor().map(|draft| draft.priority), Some(2));
         });
     }
 
