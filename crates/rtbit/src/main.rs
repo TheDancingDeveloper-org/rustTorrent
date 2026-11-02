@@ -379,6 +379,11 @@ struct Opts {
     #[arg(long, env = "RTBIT_ALLOWLIST_URL")]
     allowlist_url: Option<String>,
 
+    /// Hosts or IPs that server-side URL fetches (torrent URL adds, RSS, blocklists) may reach
+    /// even when they resolve to a private, loopback or link-local address. Comma-separated.
+    #[arg(long, env = "RTBIT_FETCH_ALLOWLIST", value_delimiter = ',')]
+    fetch_allowlist: Vec<String>,
+
     /// The filename with tracker URLs to always use for each torrent. Newline-delimited.
     #[arg(long, env = "RTBIT_TRACKERS_FILENAME")]
     trackers_filename: Option<String>,
@@ -1015,6 +1020,7 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
         },
         blocklist_url: opts.blocklist_url.take(),
         allowlist_url: opts.allowlist_url.take(),
+        fetch_allowlist: std::mem::take(&mut opts.fetch_allowlist),
         disable_local_service_discovery: opts.disable_local_peer_discovery,
         disable_trackers: opts.disable_trackers,
         trackers,

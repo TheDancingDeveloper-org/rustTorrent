@@ -70,6 +70,7 @@ mod piece_tracker;
 mod read_buf;
 #[cfg(feature = "rss")]
 pub mod rss;
+mod safe_fetch;
 mod session;
 mod session_persistence;
 pub use session_persistence::TorrentRateLimits;
