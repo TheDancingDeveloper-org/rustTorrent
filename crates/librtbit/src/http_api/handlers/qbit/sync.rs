@@ -67,7 +67,20 @@ pub(super) async fn h_sync_maindata(
                 .save_path
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            (name.clone(), QbitCategory { name, save_path })
+            (
+                name.clone(),
+                QbitCategory {
+                    name,
+                    save_path,
+                    ratio_limit: category.ratio_limit.unwrap_or(-1.0),
+                    seeding_time_limit: category
+                        .seeding_time_limit
+                        .map_or(-1, |d| (d.as_secs() / 60) as i64),
+                    inactive_seeding_time_limit: category
+                        .inactive_seeding_time_limit
+                        .map_or(-1, |d| (d.as_secs() / 60) as i64),
+                },
+            )
         })
         .collect();
 
