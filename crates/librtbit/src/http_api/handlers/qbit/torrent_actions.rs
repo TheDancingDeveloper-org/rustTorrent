@@ -935,10 +935,9 @@ pub(super) async fn h_torrents_file_prio(
         Ok(idx) => idx,
         Err(_) => return (StatusCode::NOT_FOUND, "Not found"),
     };
-    let handle = match api.mgr_handle(idx) {
-        Ok(h) => h,
-        Err(_) => return (StatusCode::NOT_FOUND, "Not found"),
-    };
+    if api.mgr_handle(idx).is_err() {
+        return (StatusCode::NOT_FOUND, "Not found");
+    }
     let num_files = match api.api_torrent_details(idx) {
         Ok(details) => details.files.map(|f| f.len()).unwrap_or(0),
         Err(_) => return (StatusCode::NOT_FOUND, "Not found"),
