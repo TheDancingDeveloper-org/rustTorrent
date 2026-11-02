@@ -14,6 +14,7 @@ use crate::screens::main_screen::MainEvent;
 use crate::screens::rss::RssScreen;
 use crate::screens::settings::SettingsScreen;
 use crate::widgets::status_bar::StatusBar;
+use crate::window_state::WindowState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DropKind {
@@ -58,6 +59,10 @@ pub struct Shell {
     lost_retry_secs: Option<u64>,
     _connect_events: Subscription,
     _main_events: Subscription,
+    /// Screen to open on after the next successful sign-in, from the last session.
+    restore_screen: Option<Screen>,
+    /// Where the current screen is remembered; `None` keeps nothing (tests).
+    state_path: Option<std::path::PathBuf>,
 }
 
 impl Shell {
@@ -95,6 +100,30 @@ impl Shell {
             lost_retry_secs: None,
             _connect_events: connect_events,
             _main_events: main_events,
+            restore_screen: None,
+            state_path: None,
+        }
+    }
+
+    /// Remember the screen in `path`, and open on `restore` after the first sign-in.
+    pub fn remember_screen(&mut self, path: Option<std::path::PathBuf>, restore: Option<Screen>) {
+        self.state_path = path;
+        self.restore_screen = restore;
+    }
+
+    /// Show a screen reached by navigation or restore, loading what it needs.
+    fn show(&mut self, screen: Screen, cx: &mut Context<Self>) {
+        self.screen = screen;
+        if screen == Screen::Rss {
+            self.rss.update(cx, |rss, cx| rss.load(cx));
+        }
+        if screen == Screen::Settings {
+            self.settings.update(cx, |settings, cx| settings.load(cx));
+        }
+        if let Some(path) = &self.state_path {
+            let mut state = WindowState::load(path);
+            state.screen = Some(screen);
+            let _ = state.save(path);
         }
     }
 
@@ -131,7 +160,8 @@ impl Shell {
         match event {
             ConnectEvent::Connecting => self.set_connection(Connection::Connecting, cx),
             ConnectEvent::Connected => {
-                self.screen = Screen::Main;
+                let screen = self.restore_screen.take().unwrap_or(Screen::Main);
+                self.show(screen, cx);
                 self.set_connection(Connection::Connected, cx);
                 self.status.update(cx, |bar, cx| bar.load_settings(cx));
             }
@@ -157,13 +187,7 @@ impl Shell {
     /// Switch screens by sidebar id. Unknown ids are ignored.
     pub fn select_screen(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Some((_, _, screen)) = NAV.iter().find(|(nav_id, _, _)| *nav_id == id) {
-            self.screen = *screen;
-            if self.screen == Screen::Rss {
-                self.rss.update(cx, |rss, cx| rss.load(cx));
-            }
-            if self.screen == Screen::Settings {
-                self.settings.update(cx, |settings, cx| settings.load(cx));
-            }
+            self.show(*screen, cx);
             cx.notify();
         }
     }
