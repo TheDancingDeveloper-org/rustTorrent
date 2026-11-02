@@ -5,6 +5,7 @@ import {
   AltSpeedStatus,
   BrowseResponse,
   CategoryInfo,
+  CategoryLimitRequest,
   DhtStats,
   ErrorDetails,
   AdvancedConfig,
@@ -528,11 +529,15 @@ export const API: RtbitAPI & { getVersion: () => Promise<string> } = {
   getCategories: (): Promise<Record<string, CategoryInfo>> => {
     return makeRequest("GET", "/torrents/categories");
   },
-  createCategory: (name: string, savePath?: string): Promise<void> => {
+  createCategory: (
+    name: string,
+    savePath?: string,
+    limits?: CategoryLimitRequest,
+  ): Promise<void> => {
     return makeRequest(
       "POST",
       "/torrents/categories",
-      { name, save_path: savePath },
+      { name, save_path: savePath, ...limits },
       true,
     );
   },
@@ -565,12 +570,7 @@ export const API: RtbitAPI & { getVersion: () => Promise<string> } = {
     return postTagForm("/api/v2/torrents/deleteTags", [], tags);
   },
   renameTag: (from: string, to: string): Promise<void> => {
-    return postTagForm(
-      "/api/v2/torrents/renameTag",
-      [],
-      [],
-      { from, to },
-    );
+    return postTagForm("/api/v2/torrents/renameTag", [], [], { from, to });
   },
   addTorrentTags: (ids: number[], tags: string[]): Promise<void> => {
     return postTagForm("/api/v2/torrents/addTags", ids, tags);

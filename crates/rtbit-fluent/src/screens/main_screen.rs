@@ -29,6 +29,7 @@ use rtbit_ui_core::{AddRequest, AddSource, RowAction, Snapshot, StatusFilter, fo
 use crate::bridge::{Bridge, LOST_AFTER_FAILURES, PollHealth, Poller, fetch_snapshot};
 use crate::screens::add_dialog::{AddDialog, AddDialogEvent};
 use crate::screens::bulk_edit_dialog::{BulkEditDialog, BulkEditDialogEvent, BulkEditRequest};
+use crate::screens::category_dialog::{CategoryDialog, CategoryDialogEvent};
 use crate::screens::detail::DetailPane;
 use crate::screens::torrent_edit_dialog::{
     TorrentEditDialog, TorrentEditDialogEvent, TorrentEditKind,
@@ -206,6 +207,8 @@ pub struct MainScreen {
     _add_send: Option<Task<()>>,
     bulk_edit: Option<Entity<BulkEditDialog>>,
     _bulk_edit_events: Option<Subscription>,
+    category_dialog: Option<Entity<CategoryDialog>>,
+    _category_events: Option<Subscription>,
     torrent_edit: Option<Entity<TorrentEditDialog>>,
     _torrent_edit_events: Option<Subscription>,
     toasts: Entity<ToastHost>,
@@ -276,6 +279,8 @@ impl MainScreen {
             _add_events: None,
             _add_send: None,
             bulk_edit: None,
+            category_dialog: None,
+            _category_events: None,
             _bulk_edit_events: None,
             torrent_edit: None,
             _torrent_edit_events: None,
@@ -823,6 +828,11 @@ impl MainScreen {
                 MenuCommand::BulkEdit,
             ))
             .item(item(
+                "Category share limits…",
+                targets.first().is_some_and(|t| t.category.is_some()),
+                MenuCommand::CategoryLimits,
+            ))
+            .item(item(
                 "Set location…",
                 available.edit,
                 MenuCommand::SetLocation,
@@ -846,6 +856,7 @@ impl MainScreen {
         self.menu = None;
         match command {
             MenuCommand::BulkEdit => self.open_bulk_edit(cx),
+            MenuCommand::CategoryLimits => self.open_category_dialog(cx),
             MenuCommand::SetLocation => self.open_torrent_edit(TorrentEditKind::Location, cx),
             MenuCommand::Rename => self.open_torrent_edit(TorrentEditKind::Name, cx),
             MenuCommand::Delete => self.request(RowAction::Delete, cx),
@@ -940,6 +951,86 @@ impl MainScreen {
                     screen.refresh(cx);
                 }
                 Err(error) => dialog.update(cx, |dialog, cx| dialog.set_error(error, cx)),
+            });
+        }));
+    }
+
+    /// Load the first target's category from the daemon, then open its share-limit editor.
+    fn open_category_dialog(&mut self, cx: &mut Context<Self>) {
+        let Some(name) = self.targets().first().and_then(|t| t.category.clone()) else {
+            self.action_error = Some("Select a torrent that has a category first.".to_owned());
+            cx.notify();
+            return;
+        };
+        let Some(bridge) = cx.try_global::<Bridge>() else {
+            self.action_error = Some("Not connected to a daemon.".to_owned());
+            cx.notify();
+            return;
+        };
+        let rx =
+            bridge.call(move |client| async move { client.lock().await.list_categories().await });
+        self._action = Some(cx.spawn(async move |view, cx| {
+            let result = match rx.await {
+                Ok(result) => result,
+                Err(_) => Err(rtbit_client::Error::Unreachable(
+                    "request cancelled".to_owned(),
+                )),
+            };
+            let _ = view.update(cx, |screen, cx| match result {
+                Ok(categories) => {
+                    let current = categories.iter().find(|c| c.name == name).cloned();
+                    let dialog = cx.new(|cx| CategoryDialog::new(name, current.as_ref(), cx));
+                    let events = cx.subscribe(&dialog, |screen, dialog, event, cx| match event {
+                        CategoryDialogEvent::Cancel => {
+                            screen.category_dialog = None;
+                            screen._category_events = None;
+                            cx.notify();
+                        }
+                        CategoryDialogEvent::Submit(body) => {
+                            screen.send_category(dialog, body.clone(), cx)
+                        }
+                    });
+                    screen.category_dialog = Some(dialog);
+                    screen._category_events = Some(events);
+                    cx.notify();
+                }
+                Err(error) => {
+                    screen.action_error = Some(map_error(&error));
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
+    fn send_category(
+        &mut self,
+        dialog: Entity<CategoryDialog>,
+        body: rtbit_client::CategoryBody,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(bridge) = cx.try_global::<Bridge>() else {
+            dialog.update(cx, |d, cx| {
+                d.set_error("Not connected to a daemon.".to_owned(), cx)
+            });
+            return;
+        };
+        let rx = bridge
+            .call(move |client| async move { client.lock().await.save_category(&body).await });
+        self._action = Some(cx.spawn(async move |view, cx| {
+            let result = match rx.await {
+                Ok(result) => result,
+                Err(_) => Err(rtbit_client::Error::Unreachable(
+                    "request cancelled".to_owned(),
+                )),
+            };
+            let _ = view.update(cx, |screen, cx| match result {
+                Ok(()) => {
+                    screen.category_dialog = None;
+                    screen._category_events = None;
+                    screen.action_error = None;
+                    cx.notify();
+                }
+                Err(error) => dialog.update(cx, |d, cx| d.set_error(map_error(&error), cx)),
             });
         }));
     }
@@ -1606,6 +1697,9 @@ impl Render for MainScreen {
         if let Some(dialog) = &self.bulk_edit {
             root = root.child(dialog.clone());
         }
+        if let Some(dialog) = &self.category_dialog {
+            root = root.child(dialog.clone());
+        }
         if let Some(dialog) = &self.torrent_edit {
             root = root.child(dialog.clone());
         }
@@ -1670,6 +1764,7 @@ enum MenuCommand {
     Recheck,
     SetCategory(Option<String>),
     BulkEdit,
+    CategoryLimits,
     SetLocation,
     Rename,
     CopyMagnet,

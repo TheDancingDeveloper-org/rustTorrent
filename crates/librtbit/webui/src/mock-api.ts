@@ -7,6 +7,7 @@ import {
   AltSpeedSchedule,
   AltSpeedStatus,
   CategoryInfo,
+  CategoryLimitRequest,
   DhtStats,
   AdvancedConfig,
   ProxyConfig,
@@ -1020,9 +1021,17 @@ export const MockAPI: RtbitAPI & { getVersion: () => Promise<string> } = {
     return { ...mockCategories };
   },
 
-  createCategory: async (name: string, savePath?: string): Promise<void> => {
+  createCategory: async (
+    name: string,
+    savePath?: string,
+    limits?: CategoryLimitRequest,
+  ): Promise<void> => {
     await new Promise((r) => setTimeout(r, 50));
-    mockCategories[name] = { name, save_path: savePath };
+    mockCategories[name] = {
+      name,
+      save_path: savePath ?? mockCategories[name]?.save_path,
+      ...limits,
+    };
   },
 
   deleteCategory: async (name: string): Promise<void> => {

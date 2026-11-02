@@ -2,6 +2,7 @@
 
 pub mod add_dialog;
 pub mod bulk_edit_dialog;
+pub mod category_dialog;
 pub mod connect;
 pub mod detail;
 pub mod main_screen;
