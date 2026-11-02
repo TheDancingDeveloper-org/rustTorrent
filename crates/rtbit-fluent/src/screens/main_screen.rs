@@ -2,23 +2,25 @@
 //!
 //! Rows come from the bridge snapshot poll. Sorting happens here, not in
 //! `DataTable`: `DataTable` sorts by display text, which orders sizes and
-//! speeds wrongly. `DataTable` has no right-click hook, so the row context
-//! menu opens on a double click.
+//! speeds wrongly. `DataTable` has no right-click hook, so the screen catches the
+//! right click on the table and maps the pointer to a row from the table geometry.
 
+use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use fluent_core::{AsyncResource, ThemeProvider as _};
 use fluent_layout::{
-    ConfirmModal, ContextMenu, DataCell, DataColumn, DataRow, DataSortDirection, DataTable,
-    MessageIntent, ModalStack, Toast, ToastHost, ToastStack,
+    ConfirmModal, ContextMenu, ContextMenuItem, DataCell, DataColumn, DataRow, DataSortDirection,
+    DataTable, MessageIntent, ModalStack, Toast, ToastHost, ToastStack,
 };
 use fluent_primitives::{Label, LabelSize, TextInput, Tooltip};
 use gpui::{
-    App, AsyncApp, ClickEvent, Context, Entity, FocusHandle, Focusable as _, Hsla, IntoElement,
-    KeyBinding, KeyDownEvent, MouseButton, Pixels, Point, Render, SharedString, Subscription, Task,
-    WeakEntity, Window, actions, div, prelude::*, px,
+    App, AsyncApp, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable as _, Hsla,
+    IntoElement, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, Pixels, Point, Render,
+    SharedString, Subscription, Task, WeakEntity, Window, actions, canvas, div, prelude::*, px,
 };
 use rtbit_client::{Torrent, TorrentState};
 use rtbit_ui_core::{AddRequest, AddSource, RowAction, Snapshot, StatusFilter, format, map_error};
@@ -37,7 +39,8 @@ actions!(
         TogglePause,
         SelectAll,
         FocusFilter,
-        Refresh
+        Refresh,
+        OpenContextMenu
     ]
 );
 
@@ -141,7 +144,7 @@ fn toolbar_activate(
 const OUTSIDE_TEXT_INPUT: &str = "MainScreen && !TextInput";
 
 /// One line listing the shortcuts, shown under the table.
-pub const SHORTCUT_HELP: &str = "Ctrl+O add · Ctrl+V paste magnet · Space pause/resume · Delete remove · Ctrl+A select all · Ctrl+F filter · F5 refresh";
+pub const SHORTCUT_HELP: &str = "Ctrl+O add · Ctrl+V paste magnet · Space pause/resume · Delete remove · Ctrl+A select all · Ctrl+F filter · F5 refresh · Shift+F10 menu";
 
 /// Bind the main-screen shortcuts. Call once at startup.
 pub fn bind_keys(cx: &mut App) {
@@ -153,6 +156,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-a", SelectAll, Some(OUTSIDE_TEXT_INPUT)),
         KeyBinding::new("ctrl-f", FocusFilter, Some(KEY_CONTEXT)),
         KeyBinding::new("f5", Refresh, Some(KEY_CONTEXT)),
+        KeyBinding::new("shift-f10", OpenContextMenu, Some(OUTSIDE_TEXT_INPUT)),
+        KeyBinding::new("menu", OpenContextMenu, Some(OUTSIDE_TEXT_INPUT)),
     ]);
 }
 
@@ -179,6 +184,8 @@ pub struct MainScreen {
     delete_prompt: bool,
     sort: Option<(String, DataSortDirection)>,
     menu: Option<Entity<ContextMenu>>,
+    /// Where the table was last painted, so a pointer position maps to a row.
+    table_geometry: Rc<Cell<TableGeometry>>,
     action_error: Option<String>,
     applied_generation: u64,
     /// Add-torrent dialog, while it is open.
@@ -219,6 +226,7 @@ impl MainScreen {
             delete_prompt: false,
             sort: None,
             menu: None,
+            table_geometry: Rc::default(),
             action_error: None,
             applied_generation: 0,
             add: None,
@@ -425,7 +433,7 @@ impl MainScreen {
 
     /// Pause what is running and resume what is paused, for each target.
     fn toggle_pause(&mut self, cx: &mut Context<Self>) {
-        let jobs: Vec<(u64, RowAction)> = self
+        let jobs: Vec<(u64, Job)> = self
             .targets()
             .into_iter()
             .filter_map(|torrent| {
@@ -436,7 +444,7 @@ impl MainScreen {
                 } else {
                     RowAction::Pause
                 };
-                torrent.id.map(|id| (id, action))
+                torrent.id.map(|id| (id, Job::Row(action)))
             })
             .collect();
         self.run_jobs(jobs, cx);
@@ -598,25 +606,121 @@ impl MainScreen {
         }
     }
 
-    fn open_menu(&mut self, row: &str, position: Point<Pixels>, cx: &mut Context<Self>) {
-        self.select_row(row, cx);
-        let screen = cx.entity();
-        let (resume, pause, delete) = (screen.clone(), screen.clone(), screen);
-        let menu = cx.new(|_| {
-            ContextMenu::build(position)
-                .action("Resume", move |_, _, app| {
-                    dispatch(&resume, app, RowAction::Start);
-                })
-                .action("Pause", move |_, _, app| {
-                    dispatch(&pause, app, RowAction::Pause);
-                })
-                .separator()
-                .action("Delete…", move |_, _, app| {
-                    dispatch(&delete, app, RowAction::Delete);
-                })
+    /// Right click at `position`: act on the row under the pointer. A row outside the marked
+    /// set becomes the selection first; a row inside it keeps the whole marked set.
+    fn open_menu_at_pointer(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(row) = self.row_at(position).map(row_id) else {
+            return;
+        };
+        if !self.marked.contains(&row) {
+            self.select_row(&row, cx);
+        }
+        self.open_menu(position, cx);
+    }
+
+    /// Shift+F10 or the Menu key: open the menu beside the selected row.
+    fn open_menu_for_selection(&mut self, cx: &mut Context<Self>) {
+        let geometry = self.table_geometry.get();
+        let index = self.selected.as_deref().and_then(|selected| {
+            self.visible_rows()
+                .iter()
+                .position(|torrent| row_id(torrent) == selected)
         });
-        self.menu = Some(menu);
+        let Some(index) = index else {
+            self.action_error = Some("Select a torrent first.".to_owned());
+            cx.notify();
+            return;
+        };
+        let position = geometry.row_origin(index);
+        self.open_menu(position, cx);
+    }
+
+    /// Table row under a pointer position, from the painted geometry.
+    fn row_at(&self, position: Point<Pixels>) -> Option<&Torrent> {
+        let index = self.table_geometry.get().row_index(position)?;
+        self.visible_rows().into_iter().nth(index)
+    }
+
+    /// Build the menu for the current targets. Items that cannot apply are disabled.
+    fn open_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let targets = self.targets();
+        let available = MenuAvailability::of(&targets);
+        let categories = category_names(self.snapshot.value().map(|s| &s.torrents.torrents[..]));
+        let screen = cx.entity();
+        let item = |label: &str, enabled: bool, command: MenuCommand| {
+            let screen = screen.clone();
+            ContextMenuItem::action(label.to_owned(), move |_, _, app| {
+                run_menu_command(&screen, app, command.clone());
+            })
+            .disabled(!enabled)
+        };
+        let mut category_items = vec![item(
+            "No category",
+            available.category,
+            MenuCommand::SetCategory(None),
+        )];
+        category_items.extend(categories.into_iter().map(|name| {
+            item(
+                &name.clone(),
+                available.category,
+                MenuCommand::SetCategory(Some(name)),
+            )
+        }));
+        let menu = ContextMenu::build(position)
+            .item(item("Start", available.start, MenuCommand::Start))
+            .item(item("Stop", available.stop, MenuCommand::Stop))
+            .item(item(
+                "Force recheck",
+                available.recheck,
+                MenuCommand::Recheck,
+            ))
+            .separator()
+            .item(
+                ContextMenuItem::submenu("Set category", category_items)
+                    .disabled(!available.category),
+            )
+            .separator()
+            .item(item(
+                "Copy magnet link",
+                available.copy,
+                MenuCommand::CopyMagnet,
+            ))
+            .item(item("Copy name", available.copy, MenuCommand::CopyName))
+            .separator()
+            .item(item("Delete…", available.delete, MenuCommand::Delete));
+        self.menu = Some(cx.new(|_| menu));
         cx.notify();
+    }
+
+    /// Run a context-menu command on the whole selection.
+    fn run_menu_command(&mut self, command: MenuCommand, cx: &mut Context<Self>) {
+        self.menu = None;
+        match command {
+            MenuCommand::Delete => self.request(RowAction::Delete, cx),
+            MenuCommand::CopyMagnet | MenuCommand::CopyName => {
+                let text = copy_text(&self.targets(), &command);
+                match text {
+                    Some(text) => {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        self.action_error = None;
+                        ToastStack::push(
+                            Toast::new("copied", "Copied to clipboard.")
+                                .intent(MessageIntent::Success),
+                            cx,
+                        );
+                    }
+                    None => self.action_error = Some("Select a torrent first.".to_owned()),
+                }
+                cx.notify();
+            }
+            command => {
+                if self.refuse_if_lost(cx) {
+                    return;
+                }
+                let jobs = menu_jobs(&self.targets(), &command);
+                self.run_jobs(jobs, cx);
+            }
+        }
     }
 
     /// Run a toolbar or menu command. Delete asks first.
@@ -658,13 +762,13 @@ impl MainScreen {
         let jobs = self
             .targets()
             .into_iter()
-            .filter_map(|torrent| torrent.id.map(|id| (id, action)))
+            .filter_map(|torrent| torrent.id.map(|id| (id, Job::Row(action))))
             .collect();
         self.run_jobs(jobs, cx);
     }
 
     /// Send row commands to the daemon in order, then refresh the table.
-    fn run_jobs(&mut self, jobs: Vec<(u64, RowAction)>, cx: &mut Context<Self>) {
+    fn run_jobs(&mut self, jobs: Vec<(u64, Job)>, cx: &mut Context<Self>) {
         self.menu = None;
         self.delete_prompt = false;
         if jobs.is_empty() {
@@ -677,14 +781,20 @@ impl MainScreen {
             cx.notify();
             return;
         }
-        let deleting = jobs.iter().any(|(_, action)| *action == RowAction::Delete);
+        let deleting = jobs
+            .iter()
+            .any(|(_, job)| *job == Job::Row(RowAction::Delete));
         let rx = cx.global::<Bridge>().call(move |client| async move {
             let mut client = client.lock().await;
-            for (id, action) in jobs {
-                let sent = match action {
-                    RowAction::Start => client.start_torrent(id).await,
-                    RowAction::Pause => client.pause_torrent(id).await,
-                    RowAction::Delete => client.delete_torrent(id).await,
+            for (id, job) in jobs {
+                let sent = match job {
+                    Job::Row(RowAction::Start) => client.start_torrent(id).await,
+                    Job::Row(RowAction::Pause) => client.pause_torrent(id).await,
+                    Job::Row(RowAction::Delete) => client.delete_torrent(id).await,
+                    Job::Recheck => client.recheck_torrent(id).await,
+                    Job::Category(category) => {
+                        client.set_torrent_category(id, category.as_deref()).await
+                    }
                 };
                 sent?;
             }
@@ -785,13 +895,9 @@ impl MainScreen {
                 let id = id.to_string();
                 select_me.update(app, |screen, cx| screen.select_row(&id, cx));
             })
-            .on_row_click(move |id: SharedString, event: &ClickEvent, _, app| {
-                if event.click_count() < 2 {
-                    return;
-                }
+            .on_row_click(move |id: SharedString, _, _, app| {
                 let id = id.to_string();
-                let position = event.position();
-                click_me.update(app, |screen, cx| screen.open_menu(&id, position, cx));
+                click_me.update(app, |screen, cx| screen.select_row(&id, cx));
             })
             .on_sort(move |column: SharedString, direction, _, _, app| {
                 let column = column.to_string();
@@ -821,6 +927,12 @@ impl Render for MainScreen {
         let me = cx.entity();
         let add_me = me.clone();
         let colors = cx.theme().colors.clone();
+        let components = &cx.theme().components;
+        let (header_height, row_height) = (
+            px(components.content_tab_strip_height),
+            px(components.menu_item_height),
+        );
+        let geometry = self.table_geometry.clone();
         let toolbar = div()
             .id("torrent-toolbar")
             .flex()
@@ -922,6 +1034,11 @@ impl Render for MainScreen {
                 }
             }))
             .on_action(cx.listener(|screen, _: &Refresh, _, cx| screen.refresh(cx)))
+            .on_action(cx.listener(|screen, _: &OpenContextMenu, _, cx| {
+                if screen.add.is_none() {
+                    screen.open_menu_for_selection(cx);
+                }
+            }))
             .flex()
             .flex_col()
             .flex_1()
@@ -935,12 +1052,35 @@ impl Render for MainScreen {
         root = root.child(
             div()
                 .tab_index(0)
+                .relative()
                 .key_context("TorrentTable")
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(|screen, event: &MouseDownEvent, _, cx| {
+                        if screen.add.is_none() {
+                            screen.open_menu_at_pointer(event.position, cx);
+                        }
+                    }),
+                )
                 .capture_key_down(cx.listener(|screen, event: &KeyDownEvent, _, cx| {
                     if screen.handle_table_key(event, cx) {
                         cx.stop_propagation();
                     }
                 }))
+                .child(
+                    canvas(
+                        move |bounds, _, _| {
+                            geometry.set(TableGeometry {
+                                bounds,
+                                header_height,
+                                row_height,
+                            });
+                        },
+                        |_, (), _, _| {},
+                    )
+                    .absolute()
+                    .size_full(),
+                )
                 .child(self.table(&me)),
         );
         root = root.child(Label::new(SHORTCUT_HELP).size(LabelSize::Caption));
@@ -964,6 +1104,174 @@ enum SelectionMovement {
     Next,
     First,
     Last,
+}
+
+/// Where the table was painted and how tall its header and rows are. `DataTable` exposes no
+/// per-row hit testing, so the right click maps the pointer to a row from these.
+#[derive(Clone, Copy, Default)]
+struct TableGeometry {
+    bounds: Bounds<Pixels>,
+    header_height: Pixels,
+    row_height: Pixels,
+}
+
+impl TableGeometry {
+    /// One pixel each for the table border, the header rule and every row rule.
+    const RULE: Pixels = px(1.0);
+
+    fn first_row_top(&self) -> Pixels {
+        self.bounds.origin.y + Self::RULE + self.header_height + Self::RULE
+    }
+
+    fn row_stride(&self) -> Pixels {
+        self.row_height + Self::RULE
+    }
+
+    /// Index of the row under `position`, if the pointer is over the table body.
+    fn row_index(&self, position: Point<Pixels>) -> Option<usize> {
+        let stride = f32::from(self.row_stride());
+        if stride <= 0.0 || !self.bounds.contains(&position) {
+            return None;
+        }
+        let offset = f32::from(position.y - self.first_row_top());
+        (offset >= 0.0).then(|| (offset / stride) as usize)
+    }
+
+    /// Where a menu opened from the keyboard for row `index` goes.
+    fn row_origin(&self, index: usize) -> Point<Pixels> {
+        Point {
+            x: self.bounds.origin.x + px(24.0),
+            y: self.first_row_top() + self.row_stride() * index as f32 + self.row_height,
+        }
+    }
+}
+
+/// A command from the row context menu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum MenuCommand {
+    Start,
+    Stop,
+    Recheck,
+    SetCategory(Option<String>),
+    CopyMagnet,
+    CopyName,
+    Delete,
+}
+
+/// One daemon call for one torrent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Job {
+    Row(RowAction),
+    Recheck,
+    Category(Option<String>),
+}
+
+/// Which context-menu items apply to the current targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MenuAvailability {
+    start: bool,
+    stop: bool,
+    recheck: bool,
+    category: bool,
+    copy: bool,
+    delete: bool,
+}
+
+impl MenuAvailability {
+    fn of(targets: &[&Torrent]) -> Self {
+        let state = |torrent: &&Torrent| torrent.stats.as_ref().and_then(|stats| stats.state);
+        let has_id = |torrent: &&Torrent| torrent.id.is_some();
+        let any = |test: &dyn Fn(&&Torrent) -> bool| targets.iter().any(test);
+        Self {
+            start: any(&|t| has_id(t) && !is_running(state(t))),
+            stop: any(&|t| has_id(t) && is_stoppable(state(t))),
+            recheck: any(&|t| has_id(t) && state(t) != Some(TorrentState::Initializing)),
+            category: any(&has_id),
+            copy: !targets.is_empty(),
+            delete: any(&has_id),
+        }
+    }
+}
+
+/// Live or still starting: there is nothing for Start to do.
+fn is_running(state: Option<TorrentState>) -> bool {
+    matches!(state, Some(TorrentState::Live | TorrentState::Initializing))
+}
+
+/// Running, starting or of unknown state: Stop has something to do.
+fn is_stoppable(state: Option<TorrentState>) -> bool {
+    matches!(
+        state,
+        None | Some(TorrentState::Live | TorrentState::Initializing)
+    )
+}
+
+/// The daemon calls a menu command makes, one per target it applies to.
+fn menu_jobs(targets: &[&Torrent], command: &MenuCommand) -> Vec<(u64, Job)> {
+    targets
+        .iter()
+        .filter_map(|torrent| {
+            let id = torrent.id?;
+            let state = torrent.stats.as_ref().and_then(|stats| stats.state);
+            let job = match command {
+                MenuCommand::Start if !is_running(state) => Job::Row(RowAction::Start),
+                MenuCommand::Stop if is_stoppable(state) => Job::Row(RowAction::Pause),
+                MenuCommand::Recheck if state != Some(TorrentState::Initializing) => Job::Recheck,
+                MenuCommand::SetCategory(category) => Job::Category(category.clone()),
+                _ => return None,
+            };
+            Some((id, job))
+        })
+        .collect()
+}
+
+/// Clipboard text for Copy magnet link and Copy name: one line per target.
+fn copy_text(targets: &[&Torrent], command: &MenuCommand) -> Option<String> {
+    if targets.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = targets
+        .iter()
+        .map(|torrent| match command {
+            MenuCommand::CopyMagnet => magnet_link(torrent),
+            _ => torrent_name(torrent),
+        })
+        .collect();
+    Some(lines.join("\n"))
+}
+
+/// `magnet:?xt=urn:btih:<hash>&dn=<name>`, with the name percent-encoded.
+fn magnet_link(torrent: &Torrent) -> String {
+    let mut link = format!("magnet:?xt=urn:btih:{}", torrent.info_hash);
+    if let Some(name) = torrent.name.as_deref().filter(|name| !name.is_empty()) {
+        link.push_str("&dn=");
+        for byte in name.bytes() {
+            if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+                link.push(char::from(byte));
+            } else {
+                link.push_str(&format!("%{byte:02X}"));
+            }
+        }
+    }
+    link
+}
+
+/// Sorted, distinct, non-empty category names in use.
+fn category_names(torrents: Option<&[Torrent]>) -> Vec<String> {
+    let mut names: Vec<String> = torrents
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|torrent| torrent.category.clone())
+        .filter(|name| !name.is_empty())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Hand a context-menu command to the screen entity.
+fn run_menu_command(me: &Entity<MainScreen>, app: &mut App, command: MenuCommand) {
+    me.update(app, |screen, cx| screen.run_menu_command(command, cx));
 }
 
 /// Shown in the table when the daemon has no torrents.
@@ -1778,5 +2086,250 @@ mod tests {
         vcx.simulate_keystrokes("f5");
         screen.read_with(vcx, |s, _| assert!(s._load.is_some()));
         drive_window(vcx, |_| gets(&runtime, &server) > before);
+    }
+
+    fn with_state(id: u64, state: TorrentState) -> Torrent {
+        let mut torrent = row(&format!("t{id}"), 1);
+        torrent.id = Some(id);
+        torrent.stats.as_mut().unwrap().state = Some(state);
+        torrent
+    }
+
+    #[test]
+    fn menu_items_follow_the_state_of_the_targets() {
+        let live = with_state(1, TorrentState::Live);
+        let paused = with_state(2, TorrentState::Paused);
+        let starting = with_state(3, TorrentState::Initializing);
+
+        let running = MenuAvailability::of(&[&live]);
+        assert!(!running.start, "Start is greyed while running");
+        assert!(running.stop && running.recheck && running.delete && running.copy);
+
+        let stopped = MenuAvailability::of(&[&paused]);
+        assert!(stopped.start && !stopped.stop);
+
+        let mixed = MenuAvailability::of(&[&live, &paused]);
+        assert!(mixed.start && mixed.stop, "a mixed selection allows both");
+
+        assert!(!MenuAvailability::of(&[&starting]).recheck);
+
+        let none = MenuAvailability::of(&[]);
+        assert!(!(none.start || none.stop || none.recheck || none.category || none.copy));
+        assert!(!none.delete);
+    }
+
+    #[test]
+    fn menu_jobs_cover_only_the_targets_a_command_applies_to() {
+        let live = with_state(1, TorrentState::Live);
+        let paused = with_state(2, TorrentState::Paused);
+        let targets = [&live, &paused];
+        assert_eq!(
+            menu_jobs(&targets, &MenuCommand::Start),
+            vec![(2, Job::Row(RowAction::Start))]
+        );
+        assert_eq!(
+            menu_jobs(&targets, &MenuCommand::Stop),
+            vec![(1, Job::Row(RowAction::Pause))]
+        );
+        assert_eq!(
+            menu_jobs(&targets, &MenuCommand::Recheck),
+            vec![(1, Job::Recheck), (2, Job::Recheck)]
+        );
+        assert_eq!(
+            menu_jobs(&targets, &MenuCommand::SetCategory(Some("tv".to_owned()))),
+            vec![
+                (1, Job::Category(Some("tv".to_owned()))),
+                (2, Job::Category(Some("tv".to_owned())))
+            ]
+        );
+        assert!(menu_jobs(&targets, &MenuCommand::CopyName).is_empty());
+    }
+
+    #[test]
+    fn copy_text_builds_magnets_and_names_per_target() {
+        let mut one = row("My Show.S01", 1);
+        one.info_hash = "abc123".to_owned();
+        let two = row("plain", 1);
+        assert_eq!(
+            copy_text(&[&one], &MenuCommand::CopyMagnet).unwrap(),
+            "magnet:?xt=urn:btih:abc123&dn=My%20Show.S01"
+        );
+        assert_eq!(
+            copy_text(&[&one, &two], &MenuCommand::CopyName).unwrap(),
+            "My Show.S01\nplain"
+        );
+        assert_eq!(copy_text(&[], &MenuCommand::CopyName), None);
+    }
+
+    #[test]
+    fn pointer_maps_to_table_rows() {
+        let geometry = TableGeometry {
+            bounds: Bounds {
+                origin: gpui::point(px(10.0), px(100.0)),
+                size: gpui::size(px(400.0), px(300.0)),
+            },
+            header_height: px(30.0),
+            row_height: px(20.0),
+        };
+        // Body starts below the table border, header and header rule.
+        let at = |y: f32| geometry.row_index(gpui::point(px(50.0), px(y)));
+        assert_eq!(at(110.0), None, "header");
+        assert_eq!(at(132.0), Some(0));
+        assert_eq!(at(132.0 + 21.0), Some(1));
+        assert_eq!(geometry.row_index(gpui::point(px(5.0), px(150.0))), None);
+    }
+
+    #[gpui::test]
+    fn right_click_selects_the_row_and_opens_the_menu(cx: &mut TestAppContext) {
+        let (screen, vcx, _runtime, _server) = shortcut_screen(cx);
+        vcx.run_until_parked();
+        let (position, id) = screen.read_with(vcx, |s, _| {
+            let geometry = s.table_geometry.get();
+            (geometry.row_origin(0), row_id(s.visible_rows()[0]))
+        });
+        // `row_origin` sits a row below the row's top; step back into the row.
+        let inside = gpui::point(position.x, position.y - px(10.0));
+        vcx.simulate_event(MouseDownEvent {
+            button: MouseButton::Right,
+            position: inside,
+            modifiers: gpui::Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        });
+        screen.read_with(vcx, |s, _| {
+            assert_eq!(s.selected.as_deref(), Some(id.as_str()));
+            assert!(s.menu.is_some(), "right click must open the menu");
+        });
+    }
+
+    #[gpui::test]
+    fn shift_f10_opens_the_menu_for_the_selection(cx: &mut TestAppContext) {
+        let (screen, vcx, _runtime, _server) = shortcut_screen(cx);
+        vcx.simulate_keystrokes("shift-f10");
+        screen.read_with(vcx, |s, _| {
+            assert!(s.menu.is_none());
+            assert_eq!(s.action_error.as_deref(), Some("Select a torrent first."));
+        });
+        screen.update(vcx, |s, cx| s.select_row("3", cx));
+        vcx.simulate_keystrokes("shift-f10");
+        screen.read_with(vcx, |s, _| assert!(s.menu.is_some()));
+    }
+
+    /// Mount the context-menu routes and select the fixture row.
+    fn menu_screen(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<MainScreen>,
+        &mut gpui::VisualTestContext,
+        tokio::runtime::Runtime,
+        MockServer,
+    ) {
+        let (screen, vcx, runtime, server) = shortcut_screen(cx);
+        for route in ["/torrents/3/recheck", "/torrents/3/set_category"] {
+            runtime.block_on(
+                Mock::given(method("POST"))
+                    .and(path(route))
+                    .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+                    .mount(&server),
+            );
+        }
+        vcx.update(|_, cx| ToastStack::init(cx));
+        set_state(&screen, vcx, TorrentState::Live);
+        screen.update(vcx, |s, cx| s.select_row("3", cx));
+        (screen, vcx, runtime, server)
+    }
+
+    fn set_state(
+        screen: &Entity<MainScreen>,
+        vcx: &mut gpui::VisualTestContext,
+        state: TorrentState,
+    ) {
+        screen.update(vcx, |s, _| {
+            let mut snapshot = s.snapshot.value().unwrap().clone();
+            snapshot.torrents.torrents[0]
+                .stats
+                .get_or_insert_with(Default::default)
+                .state = Some(state);
+            s.snapshot = AsyncResource::ready(snapshot);
+        });
+    }
+
+    fn run_menu(
+        screen: &Entity<MainScreen>,
+        vcx: &mut gpui::VisualTestContext,
+        command: MenuCommand,
+    ) {
+        screen.update(vcx, |s, cx| s.run_menu_command(command, cx));
+    }
+
+    #[gpui::test]
+    fn menu_stop_pauses_the_selection(cx: &mut TestAppContext) {
+        let (screen, vcx, runtime, server) = menu_screen(cx);
+        run_menu(&screen, vcx, MenuCommand::Stop);
+        drive_window(vcx, |cx| screen.read_with(cx, |s, _| s._action.is_some()));
+        assert_eq!(posts_to(&runtime, &server, "/torrents/3/pause"), 1);
+    }
+
+    #[gpui::test]
+    fn menu_start_is_a_no_op_while_running(cx: &mut TestAppContext) {
+        let (screen, vcx, runtime, server) = menu_screen(cx);
+        run_menu(&screen, vcx, MenuCommand::Start);
+        assert_eq!(posts_to(&runtime, &server, "/torrents/3/start"), 0);
+    }
+
+    #[gpui::test]
+    fn menu_start_resumes_a_paused_selection(cx: &mut TestAppContext) {
+        let (screen, vcx, runtime, server) = menu_screen(cx);
+        set_state(&screen, vcx, TorrentState::Paused);
+        run_menu(&screen, vcx, MenuCommand::Start);
+        drive_window(vcx, |cx| screen.read_with(cx, |s, _| s._action.is_some()));
+        assert_eq!(posts_to(&runtime, &server, "/torrents/3/start"), 1);
+    }
+
+    #[gpui::test]
+    fn menu_recheck_posts_to_the_daemon(cx: &mut TestAppContext) {
+        let (screen, vcx, runtime, server) = menu_screen(cx);
+        run_menu(&screen, vcx, MenuCommand::Recheck);
+        drive_window(vcx, |cx| screen.read_with(cx, |s, _| s._action.is_some()));
+        assert_eq!(posts_to(&runtime, &server, "/torrents/3/recheck"), 1);
+    }
+
+    #[gpui::test]
+    fn menu_set_category_sends_the_category(cx: &mut TestAppContext) {
+        let (screen, vcx, runtime, server) = menu_screen(cx);
+        run_menu(
+            &screen,
+            vcx,
+            MenuCommand::SetCategory(Some("movies".to_owned())),
+        );
+        drive_window(vcx, |cx| screen.read_with(cx, |s, _| s._action.is_some()));
+        assert_eq!(posts_to(&runtime, &server, "/torrents/3/set_category"), 1);
+        let body: serde_json::Value = runtime
+            .block_on(server.received_requests())
+            .unwrap()
+            .iter()
+            .find(|req| req.url.path() == "/torrents/3/set_category")
+            .map(|req| serde_json::from_slice(&req.body).unwrap())
+            .unwrap();
+        assert_eq!(body, serde_json::json!({ "category": "movies" }));
+    }
+
+    #[gpui::test]
+    fn menu_copy_commands_fill_the_clipboard(cx: &mut TestAppContext) {
+        let (screen, vcx, _runtime, _server) = menu_screen(cx);
+        run_menu(&screen, vcx, MenuCommand::CopyName);
+        let copied = vcx.read_from_clipboard().and_then(|item| item.text());
+        assert_eq!(copied.as_deref(), Some("example"));
+        run_menu(&screen, vcx, MenuCommand::CopyMagnet);
+        let copied = vcx.read_from_clipboard().and_then(|item| item.text());
+        assert!(copied.unwrap().starts_with("magnet:?xt=urn:btih:"));
+    }
+
+    #[gpui::test]
+    fn menu_delete_asks_before_removing(cx: &mut TestAppContext) {
+        let (screen, vcx, runtime, server) = menu_screen(cx);
+        run_menu(&screen, vcx, MenuCommand::Delete);
+        screen.read_with(vcx, |s, _| assert!(s.delete_prompt));
+        assert_eq!(posts_to(&runtime, &server, "/torrents/3/delete"), 0);
     }
 }
