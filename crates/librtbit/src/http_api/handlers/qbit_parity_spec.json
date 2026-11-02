@@ -9,7 +9,7 @@
       "endpoint": "app/buildInfo",
       "method": "GET",
       "status": "partial",
-      "notes": "Placeholder values for qt/libtorrent/boost/openssl.",
+      "notes": "Keeps qt/libtorrent keys for schema compatibility, reports the rtbit crate version in boost, the configured OpenSSL/rustls flavour in openssl, and the target pointer width in bitness.",
       "response": {
         "content": "json",
         "schema": {
@@ -144,7 +144,7 @@
       "endpoint": "app/version",
       "method": "GET",
       "status": "partial",
-      "notes": "Returns a fixed 5.x-line version string (v5.0.0) matching the advertised WebAPI version; not a real qBittorrent build.",
+      "notes": "Returns a fixed 5.x-line version string (v5.0.0) matching the advertised WebAPI version because *arr clients gate compatibility features on this value; it intentionally does not report the rtbit crate version.",
       "response": {
         "content": "text"
       }
