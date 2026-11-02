@@ -81,13 +81,23 @@ pub(super) async fn h_app_get_free_space_at_path(
     }
 }
 
-pub(super) async fn h_app_build_info() -> impl IntoResponse {
+const fn tls_flavour() -> &'static str {
+    if cfg!(feature = "rust-tls") {
+        "rustls"
+    } else if cfg!(feature = "default-tls") {
+        "OpenSSL (native-tls)"
+    } else {
+        "none"
+    }
+}
+
+pub(super) async fn h_app_build_info() -> axum::Json<QbitBuildInfo> {
     axum::Json(QbitBuildInfo {
         qt: "N/A",
         libtorrent: "N/A",
-        boost: "N/A",
-        openssl: "N/A",
-        bitness: 64,
+        boost: concat!("rtbit ", env!("CARGO_PKG_VERSION")),
+        openssl: tls_flavour(),
+        bitness: usize::BITS,
     })
 }
 

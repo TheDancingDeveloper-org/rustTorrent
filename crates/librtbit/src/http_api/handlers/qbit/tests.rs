@@ -17,11 +17,11 @@ use crate::{
 use super::{
     AddTaskForm, CreatorParams, CreatorStatus, CreatorTask, QbitSessions, QbitState,
     QbitTorrentCreator, RequiredTaskIdQuery, SyncSnapshots, creator_params, creator_task_status,
-    h_app_preferences, h_app_set_preferences, h_app_version, h_torrentcreator_add_task,
-    h_torrentcreator_delete_task, h_torrentcreator_torrent_file, h_torrents_add_tags,
-    h_torrents_create_tags, h_torrents_delete_tags, h_torrents_info, h_torrents_recheck,
-    h_torrents_remove_tags, h_torrents_rename_tag, h_torrents_set_tags, matches_category,
-    origin_allowed, qbit_file_name,
+    h_app_build_info, h_app_preferences, h_app_set_preferences, h_app_version,
+    h_torrentcreator_add_task, h_torrentcreator_delete_task, h_torrentcreator_torrent_file,
+    h_torrents_add_tags, h_torrents_create_tags, h_torrents_delete_tags, h_torrents_info,
+    h_torrents_recheck, h_torrents_remove_tags, h_torrents_rename_tag, h_torrents_set_tags,
+    matches_category, origin_allowed, qbit_file_name,
 };
 
 async fn qbit_state() -> (Arc<QbitState>, Arc<Session>, tempfile::TempDir) {
@@ -139,6 +139,22 @@ async fn set_preferences_rejects_invalid_announce_port_and_malformed_form() {
 #[tokio::test]
 async fn app_version_is_on_the_5x_line() {
     assert!(h_app_version().await.starts_with("v5."));
+}
+
+#[tokio::test]
+async fn build_info_reports_compatible_schema_and_real_bitness() {
+    let build_info = serde_json::to_value(h_app_build_info().await.0).unwrap();
+    let object = build_info.as_object().unwrap();
+
+    assert_eq!(object.len(), 5);
+    for key in ["qt", "libtorrent", "boost", "openssl"] {
+        assert!(build_info[key].is_string(), "{key} must be a string");
+    }
+    assert_eq!(build_info["bitness"], usize::BITS);
+    assert_eq!(
+        build_info["boost"],
+        concat!("rtbit ", env!("CARGO_PKG_VERSION"))
+    );
 }
 
 #[tokio::test]
