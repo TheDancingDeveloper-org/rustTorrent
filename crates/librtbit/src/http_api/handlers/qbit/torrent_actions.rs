@@ -2,6 +2,113 @@
 
 use super::*;
 
+const METADATA_RESOLUTION_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Serialize)]
+struct QbitMetadataFile {
+    name: String,
+    size: u64,
+}
+
+#[derive(Serialize)]
+struct QbitMetadataResponse {
+    name: String,
+    size: u64,
+    files: Vec<QbitMetadataFile>,
+    hash: String,
+}
+
+#[derive(Deserialize, Default)]
+struct FetchMetadataForm {
+    #[serde(default)]
+    magnet: String,
+    #[serde(default)]
+    url: String,
+}
+
+fn metadata_response(details: crate::api::TorrentDetailsResponse) -> QbitMetadataResponse {
+    let files = details
+        .files
+        .unwrap_or_default()
+        .into_iter()
+        .map(|file| QbitMetadataFile {
+            name: file.name,
+            size: file.length,
+        })
+        .collect::<Vec<_>>();
+    let size = files.iter().map(|file| file.size).sum();
+    QbitMetadataResponse {
+        name: details.name.unwrap_or_default(),
+        size,
+        files,
+        hash: details.info_hash,
+    }
+}
+
+async fn list_only_metadata(
+    state: &QbitState,
+    source: AddTorrent<'static>,
+) -> Result<QbitMetadataResponse, (StatusCode, &'static str)> {
+    let mut opts = AddTorrentOptions {
+        list_only: true,
+        ..Default::default()
+    };
+    let response = tokio::time::timeout(
+        METADATA_RESOLUTION_TIMEOUT,
+        state
+            .api_state
+            .api
+            .api_add_torrent(source, Some(std::mem::take(&mut opts))),
+    )
+    .await
+    .map_err(|_| (StatusCode::ACCEPTED, "metadata is still resolving"))?
+    .map_err(|_| (StatusCode::BAD_REQUEST, "unable to resolve metadata"))?;
+    Ok(metadata_response(response.details))
+}
+
+pub(super) async fn h_torrents_parse_metadata(
+    State(state): State<Arc<QbitState>>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let mut torrent = None;
+    while let Ok(Some(field)) = multipart.next_field().await {
+        if matches!(field.name(), Some("file" | "torrent" | "torrents")) {
+            torrent = field.bytes().await.ok();
+            break;
+        }
+    }
+    let Some(torrent) = torrent.filter(|bytes| !bytes.is_empty()) else {
+        return qbit_error(StatusCode::BAD_REQUEST, "torrent file is required");
+    };
+    match list_only_metadata(&state, AddTorrent::TorrentFileBytes(torrent)).await {
+        Ok(metadata) => axum::Json(metadata).into_response(),
+        Err((status, message)) => qbit_error(status, message),
+    }
+}
+
+pub(super) async fn h_torrents_fetch_metadata(
+    State(state): State<Arc<QbitState>>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let form: FetchMetadataForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
+    let source = if !form.magnet.trim().is_empty() {
+        form.magnet.trim().to_owned()
+    } else {
+        let url = form.url.trim().to_owned();
+        if let Err(error) = crate::rss::fetch::check_feed_url(&url) {
+            return qbit_error(StatusCode::BAD_REQUEST, error.to_string());
+        }
+        url
+    };
+    if source.is_empty() {
+        return qbit_error(StatusCode::BAD_REQUEST, "magnet or url is required");
+    }
+    match list_only_metadata(&state, AddTorrent::Url(source.into())).await {
+        Ok(metadata) => axum::Json(metadata).into_response(),
+        Err((status, message)) => qbit_error(status, message),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Torrent actions (add, pause, resume, delete)
 // ---------------------------------------------------------------------------
