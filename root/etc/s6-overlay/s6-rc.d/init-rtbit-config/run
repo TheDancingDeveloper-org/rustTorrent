@@ -3,9 +3,14 @@
 # Ensure directories exist
 mkdir -p \
     /home/rtbit/db \
+    /home/rtbit/db/com.rtbit.session \
     /home/rtbit/cache \
     /home/rtbit/downloads \
     /home/rtbit/completed
+
+# Keep the legacy container-facing session path available while the daemon
+# stores its state in the current application-data directory.
+ln -sfn com.rtbit.session /home/rtbit/db/session
 
 # Set ownership (lsiown handles edge cases on various filesystems)
 lsiown abc:abc /home/rtbit
