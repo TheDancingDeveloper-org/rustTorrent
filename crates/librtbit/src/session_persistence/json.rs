@@ -160,6 +160,7 @@ impl JsonSessionPersistenceStore {
         let (policy, share_limits, uploaded_bytes, part_files) = runtime_fields(torrent);
         let (output_folder, output_folder_root) = super::location_fields(torrent);
         let st = SerializedTorrent {
+            web_seed_urls: torrent.shared().web_seed_urls.read().clone(),
             trackers: torrent
                 .shared()
                 .trackers

@@ -868,6 +868,7 @@ pub(super) async fn h_torrents_webseeds(
     let seeds: Vec<QbitWebSeed> = handle
         .shared()
         .web_seed_urls
+        .read()
         .iter()
         .map(|url| QbitWebSeed { url: url.clone() })
         .collect();
