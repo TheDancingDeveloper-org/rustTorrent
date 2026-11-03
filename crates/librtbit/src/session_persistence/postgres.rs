@@ -24,6 +24,7 @@ struct TorrentsTableRecord {
     info_hash: Vec<u8>,
     torrent_bytes: Vec<u8>,
     trackers: Vec<String>,
+    web_seed_urls: Option<Vec<String>>,
     output_folder: String,
     output_folder_root: Option<String>,
     only_files: Option<Vec<i32>>,
@@ -76,7 +77,7 @@ impl TorrentsTableRecord {
                 info_hash: Id20::from_bytes(&self.info_hash).ok()?,
                 torrent_bytes: self.torrent_bytes.into(),
                 trackers: self.trackers.into_iter().collect(),
-                web_seed_urls: Vec::new(),
+                web_seed_urls: self.web_seed_urls,
                 output_folder: PathBuf::from(self.output_folder),
                 output_folder_root: self.output_folder_root.map(PathBuf::from),
                 only_files: self
@@ -172,6 +173,7 @@ impl PostgresSessionStorage {
             "ALTER TABLE torrents ADD COLUMN IF NOT EXISTS uploaded_bytes BIGINT NOT NULL DEFAULT 0"
         );
         exec!("ALTER TABLE torrents ADD COLUMN IF NOT EXISTS part_files BOOLEAN");
+        exec!("ALTER TABLE torrents ADD COLUMN IF NOT EXISTS web_seed_urls TEXT[]");
 
         Ok(Self { pool })
     }
@@ -201,6 +203,7 @@ impl SessionPersistenceStore for PostgresSessionStorage {
             .iter()
             .map(|tracker| tracker.to_string())
             .collect::<Vec<_>>();
+        let web_seed_urls = Some(torrent.shared().web_seed_urls.read().clone());
         let (
             share_max_ratio,
             share_max_seeding_secs,
@@ -208,14 +211,15 @@ impl SessionPersistenceStore for PostgresSessionStorage {
             uploaded_bytes,
             part_files,
         ) = runtime_columns(torrent)?;
-        let q = "INSERT INTO torrents (id, info_hash, torrent_bytes, trackers, output_folder, output_folder_root, only_files, is_paused, share_max_ratio, share_max_seeding_secs, share_max_inactive_secs, uploaded_bytes, part_files)
-        VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        let q = "INSERT INTO torrents (id, info_hash, torrent_bytes, trackers, web_seed_urls, output_folder, output_folder_root, only_files, is_paused, share_max_ratio, share_max_seeding_secs, share_max_inactive_secs, uploaded_bytes, part_files)
+        VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         ON CONFLICT(id) DO NOTHING";
         sqlx::query(q)
             .bind::<i32>(id.try_into()?)
             .bind(&torrent.info_hash().0[..])
             .bind(torrent_bytes.as_ref())
             .bind(trackers)
+            .bind(web_seed_urls)
             .bind(
                 torrent
                     .shared()
@@ -283,6 +287,7 @@ impl SessionPersistenceStore for PostgresSessionStorage {
             .iter()
             .map(|tracker| tracker.to_string())
             .collect::<Vec<_>>();
+        let web_seed_urls = Some(torrent.shared().web_seed_urls.read().clone());
         let (policy, _, _, _) = runtime_fields(torrent);
         let (output_folder, output_folder_root) = super::location_fields(torrent);
         let (
@@ -293,9 +298,10 @@ impl SessionPersistenceStore for PostgresSessionStorage {
             part_files,
         ) = runtime_columns(torrent)?;
         sqlx::query(
-            "UPDATE torrents SET trackers = $1, only_files = $2, is_paused = $3, queued = $4, held_for_disk = $5, share_paused = $6, share_max_ratio = $7, share_max_seeding_secs = $8, share_max_inactive_secs = $9, uploaded_bytes = $10, part_files = $11, output_folder = $12, output_folder_root = $13, file_renames = $14 WHERE id = $15",
+            "UPDATE torrents SET trackers = $1, web_seed_urls = $2, only_files = $3, is_paused = $4, queued = $5, held_for_disk = $6, share_paused = $7, share_max_ratio = $8, share_max_seeding_secs = $9, share_max_inactive_secs = $10, uploaded_bytes = $11, part_files = $12, output_folder = $13, output_folder_root = $14, file_renames = $15 WHERE id = $16",
         )
         .bind(trackers)
+        .bind(web_seed_urls)
         .bind(torrent.only_files().map(|v| {
             v.into_iter()
                 .filter_map(|f| f.try_into().ok())
@@ -497,6 +503,35 @@ impl BitVFactory for PostgresSessionStorage {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn postgres_record_round_trips_empty_web_seed_override() {
+        let record = TorrentsTableRecord {
+            id: 1,
+            info_hash: vec![0; 20],
+            torrent_bytes: Vec::new(),
+            trackers: Vec::new(),
+            web_seed_urls: Some(Vec::new()),
+            output_folder: "/tmp".to_owned(),
+            output_folder_root: None,
+            only_files: None,
+            is_paused: false,
+            queued: false,
+            held_for_disk: false,
+            share_paused: false,
+            share_max_ratio: None,
+            share_max_seeding_secs: None,
+            share_max_inactive_secs: None,
+            uploaded_bytes: 0,
+            part_files: None,
+            file_renames: None,
+        };
+
+        let (_, serialized) = record.into_serialized_torrent().unwrap();
+        assert_eq!(serialized.restored_state().web_seed_urls, Some(Vec::new()));
+    }
+
     /// Each query in `store` and `update_metadata` binds exactly one value per
     /// placeholder. Postgres rejects a mismatch at runtime, and CI has no
     /// Postgres, so check the source.
