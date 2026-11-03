@@ -224,6 +224,9 @@ pub struct SerializedTorrent {
     #[serde(skip)]
     torrent_bytes: Bytes,
     trackers: HashSet<String>,
+    /// BEP 19 web seed URLs, including runtime qbit API changes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    web_seed_urls: Vec<String>,
     output_folder: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     output_folder_root: Option<PathBuf>,
@@ -335,6 +338,7 @@ impl SerializedTorrent {
             comment: self.comment.clone(),
             auto_management: self.auto_management,
             super_seeding: self.super_seeding,
+            web_seed_urls: self.web_seed_urls.clone(),
         }
     }
 
@@ -417,10 +421,14 @@ pub(crate) struct RestoredState {
     comment: Option<String>,
     auto_management: bool,
     super_seeding: bool,
+    web_seed_urls: Vec<String>,
 }
 
 impl RestoredState {
     pub(crate) fn apply(self, shared: &ManagedTorrentShared) {
+        if !self.web_seed_urls.is_empty() {
+            *shared.web_seed_urls.write() = self.web_seed_urls;
+        }
         self.policy.store(shared);
         *shared.share_limits.write() = self.share_limits;
         shared

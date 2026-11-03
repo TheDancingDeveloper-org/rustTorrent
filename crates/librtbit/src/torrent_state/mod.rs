@@ -298,7 +298,7 @@ pub struct ManagedTorrentShared {
     pub(crate) magnet_name: Option<String>,
 
     /// BEP 19: WebSeed URLs parsed from the torrent's url-list field.
-    pub web_seed_urls: Vec<String>,
+    pub web_seed_urls: RwLock<Vec<String>>,
 
     /// Category assigned to this torrent.
     pub category: RwLock<Option<String>>,
