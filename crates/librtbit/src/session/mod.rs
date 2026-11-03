@@ -1459,7 +1459,7 @@ impl Session {
                 connector: self.connector.clone(),
                 session: Arc::downgrade(self),
                 magnet_name: name,
-                web_seed_urls,
+                web_seed_urls: web_seed_urls.into(),
                 category: RwLock::new(opts.category.clone()),
                 tags: RwLock::new(crate::tag::normalize_tags(&opts.tags)),
                 ratelimit_override: RwLock::new(opts.ratelimits),
@@ -1776,6 +1776,83 @@ impl Session {
             .then(|| self.make_peer_rx_managed_torrent(handle, true))
             .flatten();
         handle.start(peer_rx, !resume_after_check)?;
+        self.try_update_persistence_metadata(handle).await;
+        Ok(())
+    }
+
+    pub async fn add_web_seeds(
+        &self,
+        handle: &ManagedTorrentHandle,
+        urls: Vec<String>,
+    ) -> anyhow::Result<()> {
+        let parsed = urls
+            .into_iter()
+            .map(|url| {
+                url::Url::parse(&url)
+                    .with_context(|| format!("invalid web seed URL {url:?}"))
+                    .and_then(|parsed| {
+                        if matches!(parsed.scheme(), "http" | "https") {
+                            Ok(url)
+                        } else {
+                            bail!("unsupported web seed URL scheme {:?}", parsed.scheme())
+                        }
+                    })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        {
+            let mut seeds = handle.shared().web_seed_urls.write();
+            for url in parsed {
+                if !seeds.contains(&url) {
+                    seeds.push(url);
+                }
+            }
+        }
+        self.try_update_persistence_metadata(handle).await;
+        Ok(())
+    }
+
+    pub async fn remove_web_seeds(
+        &self,
+        handle: &ManagedTorrentHandle,
+        urls: &[String],
+    ) -> anyhow::Result<usize> {
+        let removed = {
+            let mut seeds = handle.shared().web_seed_urls.write();
+            let before = seeds.len();
+            seeds.retain(|url| !urls.iter().any(|candidate| candidate == url));
+            before - seeds.len()
+        };
+        if removed > 0 {
+            self.try_update_persistence_metadata(handle).await;
+        }
+        Ok(removed)
+    }
+
+    pub async fn edit_web_seed(
+        &self,
+        handle: &ManagedTorrentHandle,
+        orig: &str,
+        new: &str,
+    ) -> anyhow::Result<()> {
+        url::Url::parse(new)
+            .with_context(|| format!("invalid web seed URL {new:?}"))
+            .and_then(|parsed| {
+                if matches!(parsed.scheme(), "http" | "https") {
+                    Ok(())
+                } else {
+                    bail!("unsupported web seed URL scheme {:?}", parsed.scheme())
+                }
+            })?;
+        {
+            let mut seeds = handle.shared().web_seed_urls.write();
+            let Some(index) = seeds.iter().position(|url| url == orig) else {
+                bail!("web seed {orig:?} is not configured")
+            };
+            if seeds.iter().any(|url| url == new) {
+                bail!("web seed {new:?} is already configured")
+            }
+            seeds[index] = new.to_owned();
+        }
         self.try_update_persistence_metadata(handle).await;
         Ok(())
     }

@@ -561,6 +561,112 @@ async fn queue_and_force_start_routes_succeed() {
 }
 
 #[tokio::test]
+async fn web_seed_routes_round_trip_and_reject_invalid_urls() {
+    let (state, session, output) = qbit_state().await;
+    let payload = output.path().join("web-seed-payload.bin");
+    std::fs::write(&payload, vec![0x72; 32 * 1024]).unwrap();
+    let torrent = create_torrent(
+        &payload,
+        CreateTorrentOptions {
+            piece_length: Some(16_384),
+            ..Default::default()
+        },
+        &BlockingSpawner::new(1),
+    )
+    .await
+    .unwrap()
+    .as_bytes()
+    .unwrap()
+    .to_vec();
+    let handle = session
+        .add_torrent(
+            AddTorrent::from_bytes(torrent),
+            Some(AddTorrentOptions {
+                paused: true,
+                overwrite: true,
+                output_folder: Some(output.path().join("dl").to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap()
+        .into_handle()
+        .unwrap();
+    handle.wait_until_initialized().await.unwrap();
+    let hash = handle.info_hash().as_string();
+    let router = super::make_qbit_router(state.api_state.clone());
+    let post = |action: &str, body: String| {
+        http::Request::builder()
+            .method("POST")
+            .uri(format!("/torrents/{action}"))
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(axum::body::Body::from(body))
+            .unwrap()
+    };
+    let list = || {
+        let router = router.clone();
+        let hash = hash.clone();
+        async move {
+            let response = router
+                .oneshot(
+                    http::Request::builder()
+                        .uri(format!("/torrents/webseeds?hash={hash}"))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            serde_json::from_slice::<Vec<serde_json::Value>>(&body).unwrap()
+        }
+    };
+
+    let response = router
+        .clone()
+        .oneshot(post(
+            "addWebSeeds",
+            format!("hash={hash}&urls=https%3A%2F%2Fseed.example%2Fa"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(list().await[0]["url"], "https://seed.example/a");
+
+    let response = router
+        .clone()
+        .oneshot(post(
+            "editWebSeed",
+            format!(
+                "hash={hash}&origUrl=https%3A%2F%2Fseed.example%2Fa&newUrl=https%3A%2F%2Fseed.example%2Fb"
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(list().await[0]["url"], "https://seed.example/b");
+
+    let response = router
+        .clone()
+        .oneshot(post(
+            "removeWebSeeds",
+            format!("hash={hash}&urls=https%3A%2F%2Fseed.example%2Fb"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(list().await.is_empty());
+
+    let response = router
+        .oneshot(post("addWebSeeds", format!("hash={hash}&urls=not-a-url")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn recheck_endpoint_accepts_qbit_hash_form() {
     let (state, session, output) = qbit_state().await;
     std::fs::write(output.path().join("payload.bin"), vec![0x71; 32 * 1024]).unwrap();

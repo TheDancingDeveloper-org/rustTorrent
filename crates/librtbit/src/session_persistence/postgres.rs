@@ -76,6 +76,7 @@ impl TorrentsTableRecord {
                 info_hash: Id20::from_bytes(&self.info_hash).ok()?,
                 torrent_bytes: self.torrent_bytes.into(),
                 trackers: self.trackers.into_iter().collect(),
+                web_seed_urls: Vec::new(),
                 output_folder: PathBuf::from(self.output_folder),
                 output_folder_root: self.output_folder_root.map(PathBuf::from),
                 only_files: self

@@ -398,6 +398,45 @@ impl Api {
         Ok(Default::default())
     }
 
+    pub async fn api_torrent_action_add_web_seeds(
+        &self,
+        idx: TorrentIdOrHash,
+        urls: Vec<String>,
+    ) -> Result<EmptyJsonResponse> {
+        let handle = self.mgr_handle(idx)?;
+        self.session
+            .add_web_seeds(&handle, urls)
+            .await
+            .with_status(StatusCode::BAD_REQUEST)?;
+        Ok(Default::default())
+    }
+    pub async fn api_torrent_action_remove_web_seeds(
+        &self,
+        idx: TorrentIdOrHash,
+        urls: Vec<String>,
+    ) -> Result<RemoveTrackersResponse> {
+        let handle = self.mgr_handle(idx)?;
+        let removed = self
+            .session
+            .remove_web_seeds(&handle, &urls)
+            .await
+            .with_status(StatusCode::BAD_REQUEST)?;
+        Ok(RemoveTrackersResponse { removed })
+    }
+    pub async fn api_torrent_action_edit_web_seed(
+        &self,
+        idx: TorrentIdOrHash,
+        orig: String,
+        new: String,
+    ) -> Result<EmptyJsonResponse> {
+        let handle = self.mgr_handle(idx)?;
+        self.session
+            .edit_web_seed(&handle, &orig, &new)
+            .await
+            .with_status(StatusCode::BAD_REQUEST)?;
+        Ok(Default::default())
+    }
+
     pub async fn api_torrent_action_add_trackers(
         &self,
         idx: TorrentIdOrHash,

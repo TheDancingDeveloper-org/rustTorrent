@@ -645,7 +645,10 @@
     {
       "endpoint": "torrents/addWebSeeds",
       "method": "POST",
-      "status": "missing"
+      "status": "full",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/bottomPrio",
@@ -759,7 +762,10 @@
     {
       "endpoint": "torrents/editWebSeed",
       "method": "POST",
-      "status": "missing"
+      "status": "full",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/export",
@@ -1063,7 +1069,10 @@
     {
       "endpoint": "torrents/removeWebSeeds",
       "method": "POST",
-      "status": "missing"
+      "status": "full",
+      "response": {
+        "content": "text"
+      }
     },
     {
       "endpoint": "torrents/rename",

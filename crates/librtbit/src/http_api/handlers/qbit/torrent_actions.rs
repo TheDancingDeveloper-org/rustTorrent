@@ -813,6 +813,108 @@ pub(super) async fn h_torrents_set_super_seeding(
 }
 
 #[derive(Deserialize, Default)]
+pub(super) struct AddWebSeedsForm {
+    #[serde(default)]
+    pub(super) hash: String,
+    #[serde(default)]
+    pub(super) urls: String,
+}
+#[derive(Deserialize, Default)]
+pub(super) struct RemoveWebSeedsForm {
+    #[serde(default)]
+    pub(super) hash: String,
+    #[serde(default)]
+    pub(super) urls: String,
+}
+#[derive(Deserialize, Default)]
+pub(super) struct EditWebSeedForm {
+    #[serde(default)]
+    pub(super) hash: String,
+    #[serde(default, alias = "origUrl")]
+    pub(super) orig_url: String,
+    #[serde(default, alias = "newUrl")]
+    pub(super) new_url: String,
+}
+
+pub(super) async fn h_torrents_add_web_seeds(
+    State(state): State<Arc<QbitState>>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let form: AddWebSeedsForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
+    if form.hash.is_empty() {
+        return qbit_error(StatusCode::BAD_REQUEST, "hash is required");
+    }
+    let Ok(idx) = TorrentIdOrHash::parse(&form.hash) else {
+        return qbit_error(StatusCode::NOT_FOUND, "Not found");
+    };
+    let urls = form
+        .urls
+        .lines()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(str::to_owned)
+        .collect();
+    match state
+        .api_state
+        .api
+        .api_torrent_action_add_web_seeds(idx, urls)
+        .await
+    {
+        Ok(_) => (StatusCode::OK, "Ok.").into_response(),
+        Err(_error) => qbit_error(StatusCode::BAD_REQUEST, "invalid web seed URL"),
+    }
+}
+pub(super) async fn h_torrents_remove_web_seeds(
+    State(state): State<Arc<QbitState>>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let form: RemoveWebSeedsForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
+    if form.hash.is_empty() {
+        return qbit_error(StatusCode::BAD_REQUEST, "hash is required");
+    }
+    let Ok(idx) = TorrentIdOrHash::parse(&form.hash) else {
+        return qbit_error(StatusCode::NOT_FOUND, "Not found");
+    };
+    let urls = form
+        .urls
+        .split('|')
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(str::to_owned)
+        .collect();
+    match state
+        .api_state
+        .api
+        .api_torrent_action_remove_web_seeds(idx, urls)
+        .await
+    {
+        Ok(_) => (StatusCode::OK, "Ok.").into_response(),
+        Err(_) => qbit_error(StatusCode::BAD_REQUEST, "invalid web seed URL"),
+    }
+}
+pub(super) async fn h_torrents_edit_web_seed(
+    State(state): State<Arc<QbitState>>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let form: EditWebSeedForm = serde_urlencoded::from_bytes(&body).unwrap_or_default();
+    if form.hash.is_empty() {
+        return qbit_error(StatusCode::BAD_REQUEST, "hash is required");
+    }
+    let Ok(idx) = TorrentIdOrHash::parse(&form.hash) else {
+        return qbit_error(StatusCode::NOT_FOUND, "Not found");
+    };
+    match state
+        .api_state
+        .api
+        .api_torrent_action_edit_web_seed(idx, form.orig_url, form.new_url)
+        .await
+    {
+        Ok(_) => (StatusCode::OK, "Ok.").into_response(),
+        Err(_) => qbit_error(StatusCode::BAD_REQUEST, "invalid web seed URL"),
+    }
+}
+
+#[derive(Deserialize, Default)]
 pub(super) struct AddTrackersForm {
     #[serde(default)]
     pub(super) hash: String,
