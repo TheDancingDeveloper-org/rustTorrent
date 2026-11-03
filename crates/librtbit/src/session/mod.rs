@@ -1648,6 +1648,16 @@ impl Session {
         for torrent in &torrents {
             self.try_update_persistence_metadata(torrent).await;
         }
+        // A fresh session has no torrent metadata to trigger a persistence
+        // flush. Still write the session database during graceful shutdown so
+        // an empty, healthy state is durable and observable.
+        if torrents.is_empty()
+            && let Some(persistence) = self.persistence.as_ref()
+            && let Ok(settings) = persistence.load_session_settings().await
+            && let Err(error) = persistence.store_session_settings(&settings).await
+        {
+            warn!(?error, "error flushing empty session database");
+        }
     }
 
     /// Save every torrent's state on a timer, so upload totals reach disk even if
