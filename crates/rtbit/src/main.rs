@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::HashSet,
     io,
@@ -788,9 +789,11 @@ fn main() -> anyhow::Result<()> {
         .build()?;
 
     let token = tokio_util::sync::CancellationToken::new();
+    let shutdown_complete = Arc::new(AtomicBool::new(false));
     #[cfg(not(target_os = "windows"))]
     {
         let token = token.clone();
+        let shutdown_complete = shutdown_complete.clone();
         let shutdown_timeout = opts.shutdown_timeout;
         use signal_hook::{consts::SIGINT, consts::SIGTERM, iterator::Signals};
         let mut signals = Signals::new([SIGINT, SIGTERM])?;
@@ -808,19 +811,23 @@ fn main() -> anyhow::Result<()> {
                 token.cancel();
                 cancel_triggered = true;
 
+                let shutdown_complete = shutdown_complete.clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(shutdown_timeout);
-                    warn!(
-                        "could not shut down within {:?}, killing myself",
-                        shutdown_timeout
-                    );
-                    std::process::exit(1)
+                    if !shutdown_complete.load(Ordering::Acquire) {
+                        warn!(
+                            "could not shut down within {:?}, killing myself",
+                            shutdown_timeout
+                        );
+                        std::process::exit(1)
+                    }
                 });
             }
         });
     }
 
     let result = rt.block_on(async_main(opts, token.clone()));
+    shutdown_complete.store(true, Ordering::Release);
     match result.as_ref() {
         Err(e) if librtbit_core::spawn_utils::is_cancelled(e) => {
             info!("rtbit shut down: cancelled");
@@ -831,6 +838,11 @@ fn main() -> anyhow::Result<()> {
     rt.shutdown_timeout(Duration::from_secs(1));
     match result {
         Ok(_) => std::process::exit(0),
+        // SIGTERM/SIGINT is the normal container shutdown path.  The signal
+        // cancels the HTTP server, which is reported as an internal
+        // cancellation error, but it must still produce a successful process
+        // exit after the session has flushed its state.
+        Err(e) if librtbit_core::spawn_utils::is_cancelled(&e) => std::process::exit(0),
         Err(_) => std::process::exit(1),
     }
 }
