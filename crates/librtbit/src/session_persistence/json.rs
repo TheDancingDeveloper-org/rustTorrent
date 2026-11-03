@@ -160,7 +160,7 @@ impl JsonSessionPersistenceStore {
         let (policy, share_limits, uploaded_bytes, part_files) = runtime_fields(torrent);
         let (output_folder, output_folder_root) = super::location_fields(torrent);
         let st = SerializedTorrent {
-            web_seed_urls: torrent.shared().web_seed_urls.read().clone(),
+            web_seed_urls: Some(torrent.shared().web_seed_urls.read().clone()),
             trackers: torrent
                 .shared()
                 .trackers
@@ -711,6 +711,26 @@ mod tests {
         assert_eq!(reserialized["tags"], serde_json::json!(["hd", "tv"]));
         let (_, opts) = st.into_add_torrent().unwrap();
         assert_eq!(opts.tags, vec!["hd", "tv"]);
+    }
+
+    #[test]
+    fn serialized_torrent_empty_web_seed_override_survives_restart() {
+        let legacy = serde_json::json!({
+            "info_hash": "0000000000000000000000000000000000000000",
+            "trackers": [],
+            "output_folder": "/tmp",
+            "only_files": null,
+            "is_paused": false,
+        });
+        let legacy_state: SerializedTorrent = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(legacy_state.restored_state().web_seed_urls.is_none());
+
+        let mut removed_all = legacy;
+        removed_all["web_seed_urls"] = serde_json::json!([]);
+        let saved: SerializedTorrent = serde_json::from_value(removed_all).unwrap();
+        let restarted: SerializedTorrent =
+            serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap();
+        assert_eq!(restarted.restored_state().web_seed_urls, Some(Vec::new()));
     }
 
     #[test]
