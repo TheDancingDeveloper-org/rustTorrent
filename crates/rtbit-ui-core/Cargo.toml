@@ -1,6 +1,6 @@
 [package]
 name = "rtbit-ui-core"
-version = "0.2.0-beta.4"
+version = "0.2.0-beta.5"
 authors = ["AusAgentSmith <admin@rusttorrent.dev>"]
 edition = "2024"
 description = "Toolkit-neutral core of the native rustTorrent client."

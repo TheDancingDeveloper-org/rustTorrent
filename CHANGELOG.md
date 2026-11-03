@@ -9,6 +9,31 @@ upgrade notes in each release describe what to back up and check.
 
 ## [Unreleased]
 
+## [0.2.0-beta.5] - 2026-11-03
+
+### Added
+
+- qbit web-seed endpoints, tracker tier and downloaded-count reporting, app
+  network and shutdown endpoints, torrent metadata controls, and in-flight
+  piece-state reporting.
+- Per-file priorities, per-category share limits, torrent location and rename
+  controls, missing-payload diagnosis, and richer rtbit-fluent torrent and
+  filter management.
+
+### Changed
+
+- Rechecks now report progress, enforce concurrent and throughput limits, and
+  persist the related advanced settings. Session recovery and legacy session
+  directory migration are more robust.
+- External URL fetches are hardened, shutdown persistence is smoke-tested, and
+  release artifacts receive fluent-client smoke coverage.
+
+### Fixed
+
+- Tracker and DHT retry backoff, low-disk protection, crash-safe state writes,
+  and graceful shutdown behavior are now enforced across the daemon and UI.
+
+
 ### Changed
 
 - The desktop client is now the gpui-based `rtbit-fluent`. Releases ship
@@ -347,7 +372,8 @@ persistent session directory before upgrading.
 - The Docker build and web UI were consolidated so the shipped interface is
   built from the reviewed source tree.
 
-[Unreleased]: https://github.com/TheDancingDeveloper-org/rustTorrent/compare/v0.2.0-beta.4...HEAD
+[0.2.0-beta.5]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.2.0-beta.5
+[Unreleased]: https://github.com/TheDancingDeveloper-org/rustTorrent/compare/v0.2.0-beta.5...HEAD
 [0.2.0-beta.4]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.2.0-beta.4
 [0.2.0-beta.3]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.2.0-beta.3
 [0.2.0-beta.1]: https://github.com/TheDancingDeveloper-org/rustTorrent/releases/tag/v0.2.0-beta.1
