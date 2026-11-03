@@ -115,7 +115,7 @@ jobs:
           deadline=$((SECONDS + 30))
           setup_token=''
           while (( SECONDS < deadline )); do
-            if ! setup_token=$(docker exec "$container" cat /home/rtbit/db/session/setup-token 2>/dev/null); then
+            if ! setup_token=$(docker exec "$container" cat /home/rtbit/db/com.rtbit.session/setup-token 2>/dev/null); then
               setup_token=''
             fi
             if [[ -n "$setup_token" ]] && curl --fail --silent --show-error \
@@ -140,4 +140,4 @@ jobs:
           docker stop --time 30 "$container" >/dev/null
           [[ "$(docker inspect --format '{{.State.ExitCode}}' "$container")" == 0 ]]
           docker run --rm --volume "$volume:/data" --entrypoint sh "$IMAGE" \
-            -c 'test -s /data/session/session.json'
+            -c 'test -s /data/com.rtbit.session/session.json'

@@ -32,8 +32,7 @@ LABEL org.opencontainers.image.description="A modern BitTorrent client written i
 COPY --from=builder /bin/rtbit /bin/rtbit
 COPY root/ /
 
-RUN mkdir -p /home/rtbit/db /home/rtbit/cache /home/rtbit/downloads /home/rtbit/completed \
-    && ln -s com.rtbit.session /home/rtbit/db/session
+RUN mkdir -p /home/rtbit/db /home/rtbit/cache /home/rtbit/downloads /home/rtbit/completed
 
 WORKDIR /home/rtbit
 

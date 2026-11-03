@@ -8919,6 +8919,7 @@ dependencies = [
  "swarmforge-buffers",
  "swarmforge-clone-to-owned",
  "swarmforge-sha1-wrapper",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
