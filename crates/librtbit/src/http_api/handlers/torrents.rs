@@ -69,11 +69,11 @@ pub async fn h_torrents_post(
             .is_some()
     };
     let add = match is_url {
-        Some(true) => AddTorrent::Url(
-            String::from_utf8(data)
-                .context("invalid utf-8 for passed URL")?
-                .into(),
-        ),
+        Some(true) => {
+            let url = String::from_utf8(data).context("invalid utf-8 for passed URL")?;
+            crate::safe_fetch::check_remote_add_url(&url)?;
+            AddTorrent::Url(url.into())
+        }
         Some(false) => AddTorrent::TorrentFileBytes(data.into()),
 
         // Guess the format.
@@ -82,11 +82,9 @@ pub async fn h_torrents_post(
             .any(|s| data.starts_with(s.as_bytes()))
             || maybe_magnet(&data) =>
         {
-            AddTorrent::Url(
-                String::from_utf8(data)
-                    .context("invalid utf-8 for passed URL")?
-                    .into(),
-            )
+            let url = String::from_utf8(data).context("invalid utf-8 for passed URL")?;
+            crate::safe_fetch::check_remote_add_url(&url)?;
+            AddTorrent::Url(url.into())
         }
         _ => AddTorrent::TorrentFileBytes(data.into()),
     };

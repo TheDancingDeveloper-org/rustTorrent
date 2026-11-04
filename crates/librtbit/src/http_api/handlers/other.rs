@@ -23,6 +23,7 @@ pub async fn h_resolve_magnet(
     inp_headers: HeaderMap,
     url: String,
 ) -> Result<impl IntoResponse> {
+    crate::safe_fetch::check_remote_add_url(&url)?;
     let added = tokio::time::timeout(
         timeout,
         state.api.session().add_torrent(
