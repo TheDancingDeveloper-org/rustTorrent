@@ -23,7 +23,7 @@ use crate::ApiError;
 pub mod auth;
 #[cfg(test)]
 mod auth_middleware_tests;
-mod handlers;
+pub(crate) mod handlers;
 mod timeout;
 #[cfg(feature = "webui")]
 mod webui;
