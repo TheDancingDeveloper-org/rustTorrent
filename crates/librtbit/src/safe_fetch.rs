@@ -60,6 +60,7 @@ impl Default for FetchLimits {
 /// feed-supplied link) must not choose. Only magnets, bare info hashes and
 /// `http`/`https` URLs pass; `file://` is a local-file read and stays limited
 /// to operator-side entry points (CLI arguments).
+#[cfg(feature = "rss")]
 pub fn check_remote_add_url(url: &str) -> anyhow::Result<()> {
     let url = url.trim();
     let lower = url.to_ascii_lowercase();
@@ -342,6 +343,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "rss")]
     #[test]
     fn remote_add_url_rejects_local_schemes() {
         for u in [
