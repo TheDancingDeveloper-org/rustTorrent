@@ -13,6 +13,8 @@ mod qbit_parity;
 #[cfg(test)]
 mod qbit_replay;
 mod qbit_sync;
+#[cfg(test)]
+pub(crate) mod remote_add_guard_tests;
 pub(crate) mod rss;
 pub(crate) mod speed;
 pub(crate) mod streaming;

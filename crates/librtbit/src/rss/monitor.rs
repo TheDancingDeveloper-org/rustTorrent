@@ -395,6 +395,32 @@ mod tests {
         assert_eq!(body, b"<rss version=\"2.0\"></rss>");
     }
 
+    #[tokio::test]
+    async fn monitor_refuses_a_feed_supplied_file_url() {
+        use crate::http_api::handlers::remote_add_guard_tests::{
+            REFUSAL, session_in, valid_torrent_file_url,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let file_url = valid_torrent_file_url(dir.path()).await;
+        let session = session_in(dir.path()).await;
+        let api = Api::new(
+            session.clone(),
+            None,
+            #[cfg(feature = "tracing-subscriber-utils")]
+            None,
+        );
+        let db = Arc::new(Mutex::new(
+            RssDatabase::open(&dir.path().join("rss.db")).unwrap(),
+        ));
+        let monitor = RssMonitor::new(db, api, None);
+
+        let error = monitor.add_torrent(&file_url, None).await.unwrap_err();
+
+        assert!(error.to_string().contains(REFUSAL), "{error:#}");
+        assert_eq!(session.with_torrents(|t| t.count()), 0);
+    }
+
     #[test]
     fn a_redirect_target_on_loopback_is_the_same_refusal_as_the_first_hop() {
         // Every hop runs check_feed_url before it is resolved or connected.

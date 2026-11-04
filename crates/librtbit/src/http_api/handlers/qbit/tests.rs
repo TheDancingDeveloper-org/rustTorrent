@@ -151,14 +151,50 @@ async fn fetch_metadata_rejects_private_url_before_fetching() {
 
 #[tokio::test]
 async fn fetch_metadata_rejects_file_url_in_magnet_field() {
-    let (state, _session, _output) = qbit_state().await;
-    let response = h_torrents_fetch_metadata(
+    use crate::http_api::handlers::remote_add_guard_tests::{REFUSAL, valid_torrent_file_url};
+
+    let (state, session, output) = qbit_state().await;
+    // A readable, valid torrent: only the scheme guard can refuse this.
+    let file_url = valid_torrent_file_url(output.path()).await;
+    let body = serde_urlencoded::to_string([("magnet", file_url.as_str())]).unwrap();
+    let response = h_torrents_fetch_metadata(axum::extract::State(state), Bytes::from(body))
+        .await
+        .into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(String::from_utf8_lossy(&body).contains(REFUSAL), "{body:?}");
+    assert_eq!(session.with_torrents(|torrents| torrents.count()), 0);
+}
+
+#[tokio::test]
+async fn torrents_add_refuses_file_url() {
+    use crate::http_api::handlers::remote_add_guard_tests::valid_torrent_file_url;
+
+    let (state, session, output) = qbit_state().await;
+    let file_url = valid_torrent_file_url(output.path()).await;
+    let boundary = "urlsBoundary";
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"urls\"\r\n\r\n{file_url}\r\n--{boundary}--\r\n"
+    );
+    let request = axum::extract::Request::builder()
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    let response = super::h_torrents_add(
         axum::extract::State(state),
-        Bytes::from_static(b"magnet=file%3A%2F%2F%2Fetc%2Fpasswd"),
+        axum::extract::Multipart::from_request(request, &())
+            .await
+            .unwrap(),
     )
     .await
     .into_response();
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(session.with_torrents(|torrents| torrents.count()), 0);
 }
 
 #[tokio::test]
