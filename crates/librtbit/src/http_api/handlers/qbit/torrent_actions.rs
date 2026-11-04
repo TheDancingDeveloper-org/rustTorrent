@@ -103,6 +103,9 @@ pub(super) async fn h_torrents_fetch_metadata(
     if source.is_empty() {
         return qbit_error(StatusCode::BAD_REQUEST, "magnet or url is required");
     }
+    if let Err(error) = crate::safe_fetch::check_remote_add_url(&source) {
+        return qbit_error(StatusCode::BAD_REQUEST, error.to_string());
+    }
     match list_only_metadata(&state, AddTorrent::Url(source.into())).await {
         Ok(metadata) => axum::Json(metadata).into_response(),
         Err((status, message)) => qbit_error(status, message),
@@ -229,6 +232,11 @@ pub(super) async fn h_torrents_add(
     for url in urls {
         let mut opts = base_opts();
         content_layout.apply(&mut opts, &save_root, None);
+        if let Err(e) = crate::safe_fetch::check_remote_add_url(&url) {
+            warn!("qbit compat: refused torrent URL: {e:#}");
+            had_error = true;
+            continue;
+        }
         if let Err(e) = api
             .api_add_torrent(AddTorrent::Url(url.into()), Some(opts))
             .await
