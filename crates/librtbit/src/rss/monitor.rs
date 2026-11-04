@@ -334,6 +334,9 @@ impl RssMonitor {
     ) -> anyhow::Result<Option<usize>> {
         use std::borrow::Cow;
 
+        // Feed-supplied links are untrusted; refuse file:// and other local schemes.
+        crate::safe_fetch::check_remote_add_url(url)?;
+
         let opts = crate::session::AddTorrentOptions {
             overwrite: true,
             category: category.map(|s| s.to_string()),

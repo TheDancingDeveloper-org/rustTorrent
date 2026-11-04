@@ -155,6 +155,9 @@ pub async fn h_rss_item_download(
         .as_ref()
         .ok_or_else(|| ApiError::from(anyhow::anyhow!("No download URL for this item")))?;
 
+    // The link came from a feed, so it is untrusted: no file:// and the like.
+    crate::safe_fetch::check_remote_add_url(url).map_err(ApiError::from)?;
+
     // Add the torrent via the session
     use crate::session::{AddTorrent, AddTorrentOptions};
     use std::borrow::Cow;

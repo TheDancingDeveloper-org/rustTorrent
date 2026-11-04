@@ -56,6 +56,24 @@ impl Default for FetchLimits {
     }
 }
 
+/// Refuse add-torrent sources that a remote caller (HTTP API, RSS item,
+/// feed-supplied link) must not choose. Only magnets, bare info hashes and
+/// `http`/`https` URLs pass; `file://` is a local-file read and stays limited
+/// to operator-side entry points (CLI arguments).
+pub fn check_remote_add_url(url: &str) -> anyhow::Result<()> {
+    let url = url.trim();
+    let lower = url.to_ascii_lowercase();
+    let bare_hash = url.len() == 40 && url.bytes().all(|b| b.is_ascii_hexdigit());
+    if bare_hash
+        || lower.starts_with("magnet:")
+        || lower.starts_with("http://")
+        || lower.starts_with("https://")
+    {
+        return Ok(());
+    }
+    bail!("only magnet, http and https URLs can be added remotely")
+}
+
 /// True for loopback, private, link-local, documentation, broadcast and other
 /// addresses a feed must never be fetched from.
 pub fn is_forbidden_address(ip: IpAddr) -> bool {
@@ -279,6 +297,101 @@ mod tests {
         ] {
             assert!(refused(u).await.contains("private"), "{u}");
         }
+    }
+
+    #[tokio::test]
+    async fn refuses_unspecified_multicast_and_reserved() {
+        for u in [
+            "http://0.0.0.0/",
+            "http://0.1.2.3/",
+            "http://224.0.0.1/",
+            "http://255.255.255.255/",
+            "http://198.18.0.1/",
+            "http://240.0.0.1/",
+        ] {
+            assert!(refused(u).await.contains("private"), "{u}");
+        }
+    }
+
+    #[tokio::test]
+    async fn refuses_ipv6_equivalents() {
+        for u in [
+            "http://[::]/",
+            "http://[fc00::1]/",
+            "http://[fd12:3456::1]/",
+            "http://[ff02::1]/",
+            "http://[::ffff:127.0.0.1]/",
+            "http://[::ffff:169.254.169.254]/",
+            "http://[::ffff:10.0.0.1]/",
+            "http://[64:ff9b::a00:1]/",
+            "http://[2002:a00:1::]/",
+        ] {
+            assert!(refused(u).await.contains("private"), "{u}");
+        }
+    }
+
+    #[test]
+    fn public_addresses_are_allowed() {
+        for ip in [
+            "8.8.8.8",
+            "1.1.1.1",
+            "93.184.216.34",
+            "2606:4700:4700::1111",
+        ] {
+            assert!(!is_forbidden_address(ip.parse().unwrap()), "{ip}");
+        }
+    }
+
+    #[test]
+    fn remote_add_url_rejects_local_schemes() {
+        for u in [
+            "file:///etc/passwd",
+            "FILE:///x",
+            "ftp://example.com/a",
+            "/etc/passwd",
+            "",
+        ] {
+            assert!(check_remote_add_url(u).is_err(), "{u}");
+        }
+        for u in [
+            "http://example.com/a.torrent",
+            "HTTPS://example.com/a.torrent",
+            "magnet:?xt=urn:btih:cab507494d02ebb1178b38f2e9d7be299c86b862",
+            "cab507494d02ebb1178b38f2e9d7be299c86b862",
+        ] {
+            assert!(check_remote_add_url(u).is_ok(), "{u}");
+        }
+    }
+
+    #[tokio::test]
+    async fn redirect_to_loopback_hostname_is_refused() {
+        let _g = SERIAL.lock().await;
+        // Only the literal IP is allowlisted, so the hop to `localhost` is vetted and refused.
+        let port = serve(redirect("http://localhost:1/")).await;
+        set_allowlist(["127.0.0.1".to_string()]);
+        let err = fetch_bytes(
+            &format!("http://127.0.0.1:{port}/"),
+            &FetchLimits::default(),
+        )
+        .await
+        .unwrap_err();
+        set_allowlist([]);
+        assert!(format!("{err:#}").contains("private"), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn redirect_to_non_http_scheme_is_refused() {
+        let _g = SERIAL.lock().await;
+        let port = serve(redirect("file:///etc/passwd")).await;
+        set_allowlist(["127.0.0.1".to_string()]);
+        let err = fetch_bytes(
+            &format!("http://127.0.0.1:{port}/"),
+            &FetchLimits::default(),
+        )
+        .await
+        .unwrap_err();
+        set_allowlist([]);
+        assert!(format!("{err:#}").contains("http or https"), "{err:#}");
     }
 
     #[tokio::test]

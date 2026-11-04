@@ -150,6 +150,18 @@ async fn fetch_metadata_rejects_private_url_before_fetching() {
 }
 
 #[tokio::test]
+async fn fetch_metadata_rejects_file_url_in_magnet_field() {
+    let (state, _session, _output) = qbit_state().await;
+    let response = h_torrents_fetch_metadata(
+        axum::extract::State(state),
+        Bytes::from_static(b"magnet=file%3A%2F%2F%2Fetc%2Fpasswd"),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn set_preferences_updates_port_idempotently_without_rebinding_listener() {
     let (state, session, _output) = qbit_state().await;
     let listen_addr = session.listen_addr().unwrap();
