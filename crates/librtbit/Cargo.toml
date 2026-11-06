@@ -94,7 +94,7 @@ regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "query", "socks", "stream"] }
 urlencoding = "2"
 byteorder = "1"
-bincode = "2"
+bincode = "3"
 bitvec = "1"
 crc32fast = "1"
 parking_lot = "0.13"
