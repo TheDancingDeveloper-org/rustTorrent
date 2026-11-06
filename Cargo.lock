@@ -880,7 +880,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 [[package]]
 name = "bench_metrics"
 version = "0.1.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1504,7 +1504,7 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "gpui_util",
  "indexmap 2.14.2",
@@ -2173,7 +2173,7 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2731,37 +2731,40 @@ checksum = "8bf7cc16383c4b8d58b9905a8509f02926ce3058053c056376248d958c9df1e8"
 
 [[package]]
 name = "fluent-app"
-version = "2.3.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+version = "3.2.0"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "fluent-core",
  "fluent-layout",
+ "fluent-primitives",
  "gpui",
  "gpui_platform",
 ]
 
 [[package]]
 name = "fluent-core"
-version = "2.4.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+version = "3.2.0"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "gpui",
+ "gpui_platform",
 ]
 
 [[package]]
 name = "fluent-layout"
-version = "2.2.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+version = "3.2.0"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "fluent-core",
+ "fluent-primitives",
  "fluent-ribbon",
  "gpui",
 ]
 
 [[package]]
 name = "fluent-primitives"
-version = "2.4.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+version = "3.2.0"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "fluent-core",
  "gpui",
@@ -2770,8 +2773,8 @@ dependencies = [
 
 [[package]]
 name = "fluent-ribbon"
-version = "2.0.2"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+version = "3.2.0"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "fluent-core",
  "fluent-primitives",
@@ -3440,7 +3443,7 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3510,7 +3513,7 @@ dependencies = [
 [[package]]
 name = "gpui_linux"
 version = "0.1.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3554,7 +3557,7 @@ dependencies = [
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -3565,7 +3568,7 @@ dependencies = [
 [[package]]
 name = "gpui_platform"
 version = "0.1.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -3577,7 +3580,7 @@ dependencies = [
 [[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "schemars 1.2.3",
  "serde",
@@ -3587,7 +3590,7 @@ dependencies = [
 [[package]]
 name = "gpui_util"
 version = "0.1.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "anyhow",
  "log",
@@ -3597,7 +3600,7 @@ dependencies = [
 [[package]]
 name = "gpui_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -3623,7 +3626,7 @@ dependencies = [
 [[package]]
 name = "gpui_windows"
 version = "0.1.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -3945,7 +3948,7 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "anyhow",
  "bytes",
@@ -7254,7 +7257,7 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "derive_refineable",
 ]
@@ -7762,7 +7765,7 @@ dependencies = [
 [[package]]
 name = "scheduler"
 version = "0.1.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "async-task",
  "backtrace",
@@ -8752,7 +8755,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "heapless",
  "rayon",
@@ -12433,7 +12436,7 @@ dependencies = [
 [[package]]
 name = "ztracing"
 version = "0.1.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 dependencies = [
  "tracing",
  "ztracing_macro",
@@ -12442,7 +12445,7 @@ dependencies = [
 [[package]]
 name = "ztracing_macro"
 version = "0.1.0"
-source = "git+https://github.com/thedancingdeveloper/fluent-gpui?tag=v3.0.0%2Bzed.ba63a022c9a2#13c4afd9463a2d7d272e02b5bdb61dc31bbf7411"
+source = "git+https://github.com/thedancingdeveloper/fluent-gpui?rev=940b510d7f9416c9fbd1529dc900900be8eb737e#940b510d7f9416c9fbd1529dc900900be8eb737e"
 
 [[package]]
 name = "zune-core"
