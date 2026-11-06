@@ -11,16 +11,16 @@ publish = false
 workspace = true
 
 [dependencies]
-gpui = { git = "https://github.com/thedancingdeveloper/fluent-gpui", tag = "v3.0.0+zed.ba63a022c9a2" }
-fluent-app = { git = "https://github.com/thedancingdeveloper/fluent-gpui", tag = "v3.0.0+zed.ba63a022c9a2" }
-fluent-core = { git = "https://github.com/thedancingdeveloper/fluent-gpui", tag = "v3.0.0+zed.ba63a022c9a2" }
-fluent-layout = { git = "https://github.com/thedancingdeveloper/fluent-gpui", tag = "v3.0.0+zed.ba63a022c9a2" }
-fluent-primitives = { git = "https://github.com/thedancingdeveloper/fluent-gpui", tag = "v3.0.0+zed.ba63a022c9a2" }
+gpui = { git = "https://github.com/thedancingdeveloper/fluent-gpui", rev = "940b510d7f9416c9fbd1529dc900900be8eb737e" }
+fluent-app = { git = "https://github.com/thedancingdeveloper/fluent-gpui", rev = "940b510d7f9416c9fbd1529dc900900be8eb737e" }
+fluent-core = { git = "https://github.com/thedancingdeveloper/fluent-gpui", rev = "940b510d7f9416c9fbd1529dc900900be8eb737e" }
+fluent-layout = { git = "https://github.com/thedancingdeveloper/fluent-gpui", rev = "940b510d7f9416c9fbd1529dc900900be8eb737e" }
+fluent-primitives = { git = "https://github.com/thedancingdeveloper/fluent-gpui", rev = "940b510d7f9416c9fbd1529dc900900be8eb737e" }
 rtbit-client = { path = "../rtbit-client" }
 rtbit-ui-core = { path = "../rtbit-ui-core" }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [dev-dependencies]
-gpui = { git = "https://github.com/thedancingdeveloper/fluent-gpui", tag = "v3.0.0+zed.ba63a022c9a2", features = ["test-support"] }
+gpui = { git = "https://github.com/thedancingdeveloper/fluent-gpui", rev = "940b510d7f9416c9fbd1529dc900900be8eb737e", features = ["test-support"] }
 wiremock = "0.6"
