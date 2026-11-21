@@ -20,10 +20,7 @@ ignore = [
     # the pinned gpui/desktop dependency trees before removing these entries.
     { id = "RUSTSEC-2026-0385", reason = "Accepted 2026-11-02: ctutils is transitive through gpui and rustTorrent does not use its mask APIs directly." },
     { id = "RUSTSEC-2026-0293", reason = "Accepted 2026-11-02: ringbuf is transitive through gpui and rustTorrent does not call the affected APIs directly." },
-    { id = "RUSTSEC-2026-0367", reason = "Accepted 2026-11-02: zip is transitive and rustTorrent does not use ZipArchive extraction." },
     { id = "RUSTSEC-2026-0368", reason = "Accepted 2026-11-02: zip is transitive and rustTorrent does not use ZipArchive extraction." },
-    { id = "RUSTSEC-2026-0369", reason = "Accepted 2026-11-02: zip is transitive and rustTorrent does not use ZipArchive extraction." },
-    { id = "RUSTSEC-2026-0429", reason = "Accepted 2026-11-02: zip is transitive and rustTorrent does not use ZipArchive extraction." },
 ]
 
 [licenses]
